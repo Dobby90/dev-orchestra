@@ -81,4 +81,15 @@ E2E_BUNDLED=1 PLAYWRIGHT_BROWSERS_PATH=/private/tmp/devorchestra-pw-browsers npm
 
 현재 온라인 `npm audit`에는 개발 전용 타입 생성기의 minimatch 경로 Moderate 3건이 남아 있습니다. 배포 의존성 감사(`npm audit --omit=dev`)는 0건입니다. 생성기 입력은 저장소 코드에서 내보낸 로컬 OpenAPI로 제한하며 외부에서 받은 schema를 사용하지 않습니다. 상위 도구의 호환 패치가 나오면 갱신합니다.
 
-Phase 5에서는 CLI 회귀·화면 단위·개발 서버 및 정적 GUI E2E와 Node 없는 wheel 실행을 검증합니다. 실제 유료 Codex V2 재검증·Linux 배포·다중 브라우저·장시간 부하는 이번 단계에서 통과로 판정하지 않습니다. Phase 6 종합 검증은 사용자 승인 후 진행합니다.
+Phase 5에서는 CLI 회귀·화면 단위·개발 서버 및 정적 GUI E2E와 Node 없는 wheel 실행을 검증합니다. 실제 유료 Codex V2 재검증·Linux 배포·다중 브라우저·장시간 부하는 이번 단계에서 통과로 판정하지 않습니다. Phase 6에서 서비스 수명·장애 복구·보안·패키징과 실제 Codex의 Fix/V2 재검증까지 종합 검사했습니다. macOS·단일 사용자·신뢰하는 프로젝트를 검증 범위로 유지합니다.
+
+
+## Phase 6 통합·배포 검증
+
+브라우저 검사는 기존 GUI 흐름에 더해 CLI 시작→창 닫기→동일 세션 재접속→CLI 승인, GUI 생성→CLI 승인→화면/보고서 반영을 검사합니다. 개발 서버와 Python 정적 GUI 양쪽에서 실행합니다. API·Dispatcher/Worker 강제 종료·guardian/PID 안전성과 마이그레이션 롤백·백업 복원은 별도 네이티브 Python 통합 검사로 확인합니다.
+
+루트의 `scripts/verify_package.py`는 설치된 독립 환경에서 Node 없는 GUI·인증·정적 파일 해시·종료와 CLI 전용 설치를 확인합니다. `scripts/benchmark_logs.py`는 약 10 MiB의 한글·마스킹 로그를 제한된 페이지로 재생해 해시·커서·표본 RSS를 검사합니다. 장시간 soak나 브라우저 메모리 프로파일링을 대신하지 않습니다. 실제 모델을 사용하는 `scripts/e2e_gui.py`는 별도 명시적 승인/옵트인 검사이며 일반 테스트에서 호출하지 않습니다.
+
+현재 지원 판정과 미검증 환경은 루트 README 및 로컬 docs/의 Phase 6 보고서를 참고하세요. docs/는 사용자의 Git 제외 정책에 따라 원격 저장소에 포함하지 않습니다.
+
+최종 출고 판정은 **CONDITIONAL**입니다. 초기 개발/정적 GUI E2E는3개씩 통과했으나 최신 교차 E2E는2 PASS/1 FAIL(timeout)입니다. 원인 분리와 최종 전체 통과가 남아 있습니다. 테스트를 생략하거나 timeout을 늘려 통과로 처리하지 않았습니다.

@@ -9,6 +9,7 @@ import uvicorn
 
 from dev_orchestra.api.main import create_app
 from dev_orchestra.config import Config
+from dev_orchestra.execution.lifetime import watch_parent
 
 value = json.loads(Path(sys.argv[1]).read_text())
 sock = socket.socket(fileno=int(sys.argv[2]))
@@ -18,7 +19,7 @@ app = create_app(
     value["port"],
     static_directory=value.get("assets"),
 )
-uvicorn.Server(
+server = uvicorn.Server(
     uvicorn.Config(
         app,
         host="127.0.0.1",
@@ -27,4 +28,12 @@ uvicorn.Server(
         log_level="warning",
         timeout_graceful_shutdown=3,
     )
-).run(sockets=[sock])
+)
+
+
+def parent_stopped():
+    server.should_exit = True
+
+
+watch_parent(int(sys.argv[3]), parent_stopped)
+server.run(sockets=[sock])

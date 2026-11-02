@@ -12,7 +12,8 @@ import time
 from dev_orchestra.application.queue import QueueService
 from dev_orchestra.application.service import RunService
 from dev_orchestra.config import Config
-from dev_orchestra.infrastructure.files import write
+from dev_orchestra.execution.lifetime import parent_channel
+from dev_orchestra.infrastructure.files import private_append, write
 from dev_orchestra.infrastructure.locking import lock
 from dev_orchestra.infrastructure.process import redact
 from dev_orchestra.infrastructure.process_owner import identity
@@ -30,14 +31,20 @@ def run():
         nonlocal stopped
         stopped = True
 
+    signal.signal(signal.SIGTERM, stop)
+    signal.signal(signal.SIGINT, stop)
     children = []
     record = None
-    with lock(db.with_suffix(".web.lock")), socket.socket() as listener:
+    with (
+        lock(db.with_suffix(".web.lock")),
+        socket.socket() as listener,
+        parent_channel() as owner_fd,
+    ):
         listener.bind(("127.0.0.1", value["port"]))
         listener.listen(128)
         config_path = db.with_suffix(".web-config.json")
         write(config_path, value)
-        with db.with_suffix(".web.log").open("a") as output:
+        with private_append(db.with_suffix(".web.log")) as output:
             try:
                 api = subprocess.Popen(
                     [
@@ -46,8 +53,9 @@ def run():
                         "dev_orchestra.execution.web_server",
                         str(config_path),
                         str(listener.fileno()),
+                        str(owner_fd),
                     ],
-                    pass_fds=[listener.fileno()],
+                    pass_fds=[listener.fileno(), owner_fd],
                     stdin=subprocess.DEVNULL,
                     stdout=output,
                     stderr=subprocess.STDOUT,
@@ -56,6 +64,8 @@ def run():
                 children.append(api)
                 deadline = time.monotonic() + 10
                 while time.monotonic() < deadline:
+                    if stopped:
+                        raise RuntimeError("web startup interrupted")
                     if api.poll() is not None:
                         raise RuntimeError("API child failed")
                     connection = http.client.HTTPConnection("127.0.0.1", value["port"], timeout=0.3)
@@ -70,9 +80,18 @@ def run():
                 else:
                     raise RuntimeError("API startup timeout")
                 reused = QueueService(service.store).dispatcher_status()["alive"]
+                if stopped:
+                    raise RuntimeError("web startup interrupted")
                 if not reused:
                     dispatcher = subprocess.Popen(
-                        [sys.executable, "-m", "dev_orchestra.execution.dispatcher", str(db)],
+                        [
+                            sys.executable,
+                            "-m",
+                            "dev_orchestra.execution.dispatcher",
+                            str(db),
+                            str(owner_fd),
+                        ],
+                        pass_fds=[owner_fd],
                         stdin=subprocess.DEVNULL,
                         stdout=output,
                         stderr=subprocess.STDOUT,
@@ -84,6 +103,8 @@ def run():
                         time.monotonic() < deadline
                         and not QueueService(service.store).dispatcher_status()["alive"]
                     ):
+                        if stopped:
+                            raise RuntimeError("web startup interrupted")
                         if dispatcher.poll() is not None:
                             raise RuntimeError("Dispatcher child failed")
                         time.sleep(0.05)
@@ -95,8 +116,6 @@ def run():
                     "dispatcher_reused": reused,
                 }
                 write(marker, record)
-                signal.signal(signal.SIGTERM, stop)
-                signal.signal(signal.SIGINT, stop)
                 while not stopped:
                     if any(child.poll() is not None for child in children):
                         raise RuntimeError("owned web child stopped")

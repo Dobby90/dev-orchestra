@@ -89,7 +89,29 @@ class Git:
         )
 
     def commit(self, message):
-        self.call("add", "--all", "--", ".", *self.exclusions)
+        paths = self.call(
+            "ls-files",
+            "-z",
+            "--modified",
+            "--deleted",
+            "--others",
+            "--exclude-standard",
+            "--",
+            ".",
+            *self.exclusions,
+        )
+        if paths:
+            # Negative add pathspecs can match ignored output directories and fail.
+            # Enumerate permitted changes first; literal NUL-delimited input also
+            # preserves spaces, glob characters and large path lists.
+            selected = dict.fromkeys(path for path in paths.split("\0") if path)
+            self.call(
+                "add",
+                "--all",
+                "--pathspec-from-file=-",
+                "--pathspec-file-nul",
+                input="".join(":(literal)" + path + "\0" for path in selected),
+            )
         if self.call("diff", "--cached", "--name-only"):
             self.call("commit", "-m", message)
         return self.sha()

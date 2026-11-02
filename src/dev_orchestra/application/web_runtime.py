@@ -8,7 +8,7 @@ import uuid
 from pathlib import Path
 
 from dev_orchestra.domain.models import PipelineError
-from dev_orchestra.infrastructure.files import write
+from dev_orchestra.infrastructure.files import private_append, write
 from dev_orchestra.infrastructure.process_owner import alive
 
 
@@ -22,7 +22,7 @@ class WebRuntime:
             return {"alive": False}
         record = json.loads(self.path.read_text())
         return {
-            "alive": alive(record),
+            "alive": not record.get("finished") and alive(record),
             "pid": record["pid"],
             "create_time": record["create_time"],
             "port": record["port"],
@@ -43,7 +43,7 @@ class WebRuntime:
             raise PipelineError("web service is already running")
         token = uuid.uuid4().hex
         output = self.service.store.path.with_suffix(".web.log")
-        with output.open("a") as log:
+        with private_append(output) as log:
             child = subprocess.Popen(
                 [sys.executable, "-m", "dev_orchestra.execution.web", str(self.service.store.path)],
                 stdin=subprocess.PIPE,
@@ -51,39 +51,49 @@ class WebRuntime:
                 stderr=subprocess.STDOUT,
                 start_new_session=True,
             )
-        child.stdin.write(
-            json.dumps(
-                {
-                    "token": token,
-                    "config": self.service.config.model_dump(mode="json"),
-                    "roots": [str(Path(p).expanduser().resolve()) for p in roots],
-                    "port": port,
-                    "assets": str(Path(assets).resolve()) if assets else None,
-                }
-            ).encode()
-        )
-        child.stdin.close()
-        deadline = time.monotonic() + 15
-        while time.monotonic() < deadline:
-            state = self.status()
-            if (
-                state["alive"]
-                and self.path.exists()
-                and json.loads(self.path.read_text()).get("token") == token
-            ):
-                break
-            if child.poll() is not None:
-                raise PipelineError("web service failed to start; inspect the local .web.log")
-            time.sleep(0.05)
-        else:
-            raise PipelineError("web startup not confirmed; inspect web status")
-        if not detached:
-            try:
-                child.wait()
-            except KeyboardInterrupt:
-                self.stop()
-                child.wait()
-        return state
+        try:
+            child.stdin.write(
+                json.dumps(
+                    {
+                        "token": token,
+                        "config": self.service.config.model_dump(mode="json"),
+                        "roots": [str(Path(p).expanduser().resolve()) for p in roots],
+                        "port": port,
+                        "assets": str(Path(assets).resolve()) if assets else None,
+                    }
+                ).encode()
+            )
+            child.stdin.close()
+            deadline = time.monotonic() + 15
+            while time.monotonic() < deadline:
+                state = self.status()
+                if (
+                    state["alive"]
+                    and self.path.exists()
+                    and json.loads(self.path.read_text()).get("token") == token
+                ):
+                    break
+                if child.poll() is not None:
+                    raise PipelineError("web service failed to start; inspect the local .web.log")
+                time.sleep(0.05)
+            else:
+                raise PipelineError("web startup not confirmed; inspect web status")
+            if not detached:
+                try:
+                    child.wait()
+                except KeyboardInterrupt:
+                    self.stop()
+                    child.wait()
+            return state if detached else self.status()
+        except BaseException:
+            if child.poll() is None:
+                child.terminate()
+                try:
+                    child.wait(timeout=10)
+                except subprocess.TimeoutExpired:
+                    child.kill()
+                    child.wait()
+            raise
 
     def stop(self, cancel_active=False):
         if not self.status()["alive"]:

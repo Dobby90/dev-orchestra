@@ -223,4 +223,40 @@ devorchestra --config config.yaml defer RUN_ID --reason "추가 확인 후 승�
 UV_CACHE_DIR="$PWD/.uv-cache" .tools/uv build --offline
 ```
 
-상세 설치·검증 명령과 남은 검증 범위는 [웹 앱 안내](apps/web/README.md)에 있습니다. Phase 6 종합 검증은 별도 승인 후 진행합니다.
+상세 설치·검증 명령과 남은 검증 범위는 [웹 앱 안내](apps/web/README.md)에 있습니다. Phase 6 종합 검증을 수행했으며 현재 검증된 사용 범위는 macOS의 단일 사용자·신뢰하는 로컬 프로젝트입니다. Linux·다른 브라우저·장시간 부하 검증 범위는 아래에 구분합니다.
+
+
+## GUI MVP 최종 검증 — Phase 6
+
+현재 출고 판정은 **CONDITIONAL**입니다. Python164개·React23개·실제 Codex의 Fix/V2 재검증과 패키지 검사는 통과했으나, 최신 정적 GUI 교차 E2E에 원인 미확정 시간 초과가 남아 있습니다. 동일한 최종 E2E 전체 통과 전에는 GUI MVP 출고 완료로 간주하지 않습니다.
+
+공통 서비스·API·SQLite 큐·독립 Worker·SSE·React·CLI 통합에 대한 회귀와 브라우저 검사를 제공합니다. 웹 관리 프로세스가 강제 종료되면 비공개 파이프의 연결 종료로 자신이 시작한 API·Dispatcher가 종료됩니다. 실행 중 Run Worker와 재사용한 외부 Dispatcher는 유지합니다. 시작 중 종료·중복 시작·포트 충돌도 기존 프로세스를 임의로 종료하지 않습니다. 웹 로그와 비공개 설정 파일은 0600으로 저장합니다.
+
+Git 자동 커밋은 출력 경로를 제외한 변경 목록을 먼저 구한 뒤 리터럴 NUL 경로로 전달합니다. `.gitignore`에 등록된 `build/`·`.pytest_cache/`가 있어도 출력 파일을 강제 추가하지 않습니다. 모델이 변경한 모든 파일이 후보 커밋에 포함되고 차이가 없는지도 확인하며, 무시된 파일로 검증을 통과시키지 않습니다. Git은 `add --pathspec-from-file`을 지원하는 버전을 사용하세요.
+
+재현 가능한 검증 명령입니다. 일반 검사는 유료 모델을 호출하지 않습니다.
+
+```sh
+DEVORCHESTRA_TEST_SANDBOX=1 .venv/bin/python -m pytest -v
+.venv/bin/ruff check src tests scripts apps/web/e2e/backend.py
+npm run test:web
+npm run typecheck:web
+.venv/bin/python scripts/benchmark_logs.py
+.venv/bin/python scripts/build_web.py
+PLAYWRIGHT_BROWSERS_PATH=/private/tmp/devorchestra-pw-browsers npm run test:e2e --workspace apps/web
+E2E_BUNDLED=1 PLAYWRIGHT_BROWSERS_PATH=/private/tmp/devorchestra-pw-browsers npm run test:e2e --workspace apps/web
+```
+
+wheel을 설치한 독립 환경 두 개를 준비했다면 다음 검사기로 Node 없는 실행과 웹 의존성 없는 CLI를 확인할 수 있습니다. 웹 환경에는 `web` extra를 설치하고, CLI 환경에는 FastAPI·Uvicorn을 설치하지 않습니다.
+
+```sh
+.venv/bin/python scripts/verify_package.py --web-python /절대경로/web-env/bin/python --core-python /절대경로/core-env/bin/python
+```
+
+실제 모델 검사는 인증과 사용량을 확인한 뒤 별도로 실행합니다. 아래 명령은 임시 저장소에서 실제 HTTP·Dispatcher·Worker·Codex를 사용합니다. 검사기가 Developer 응답의 덧셈 한 줄을 뺄셈으로 바꾸는 결함 주입을 명시적으로 수행하고 원래 응답을 보존합니다. Test 실패→실제 Fix→Test/Reviewer V2 재검증→CLI 승인과 원본 저장소 보존을 확인하며 한 실행당 모델 호출은 최대 7회, 역할별 제한 시간은 180초입니다. 일반 테스트·CI에서 자동 실행하지 마세요.
+
+```sh
+.venv/bin/python scripts/e2e_gui.py --allow-model-calls --model 사용할_모델_ID
+```
+
+배포 의존성 감사는 0건이고, 개발 전용 타입 생성기의 Moderate 3건과 TestClient의 httpx 전환 경고는 남아 있습니다. 장시간 메모리/부하·Linux bwrap·Firefox/WebKit·OS 재부팅/디스크 고장 검증은 완료로 간주하지 않습니다. 악성 저장소에 대한 완전한 호스트 읽기 격리, 원격/다중 사용자 운용은 지원 범위에 포함하지 않습니다. 상세 결과는 로컬 [Phase 6 검증 기록](docs/gui-phase6-results.md)과 [GUI MVP 최종 판정](docs/gui-mvp-readiness-report.md)에 보존합니다.

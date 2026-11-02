@@ -113,7 +113,12 @@ class Dispatcher:
 
 def main():
     try:
-        Dispatcher(Store(Path(sys.argv[1]))).run()
+        dispatcher = Dispatcher(Store(Path(sys.argv[1])))
+        if len(sys.argv) > 2:
+            from dev_orchestra.execution.lifetime import watch_parent
+
+            watch_parent(int(sys.argv[2]), lambda: setattr(dispatcher, "stopped", True))
+        dispatcher.run()
     except OwnershipError:
         raise SystemExit(2)
 

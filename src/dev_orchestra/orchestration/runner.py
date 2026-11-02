@@ -249,8 +249,23 @@ class Runner:
                             raise PipelineError("review finding has invalid source location")
                         if not issue.evidence.strip():
                             raise PipelineError("review finding requires evidence")
-                apply_patch(worktree, result.patch, role, config.tests.write_paths)
+                patched_paths = apply_patch(worktree, result.patch, role, config.tests.write_paths)
                 out_sha = git.commit(f"자동 개발: {run_id} {role} 회차 {iteration} 단계 {step_id}")
+                if patched_paths:
+                    tracked = set(
+                        git.call("ls-files", "--cached", "-z", "--", *patched_paths).split("\0")
+                    )
+                    if not set(patched_paths) <= tracked:
+                        raise PipelineError("patch contains files absent from committed candidate")
+                    git.call(
+                        "diff",
+                        "--no-ext-diff",
+                        "--no-textconv",
+                        "--exit-code",
+                        out_sha,
+                        "--",
+                        *patched_paths,
+                    )
                 self.store.update(run_id, current_sha=out_sha)
                 payload = result.model_dump() | {"sha": out_sha, "revision": run.get("revision", 0)}
                 if role == "tester":

@@ -115,7 +115,10 @@ os.execv({real_git!r},[{real_git!r},*sys.argv[1:]])
                     return record
             return None
 
-        record = until(command_started)
+        # Preparing Git and three independent roles can exceed ten seconds under
+        # concurrent native/browser load. Wait for the actual injection boundary;
+        # post-kill termination deadlines and all ownership assertions stay strict.
+        record = until(command_started, timeout=30)
         processes.append(record)
         return svc, rid, worker, record, release
 

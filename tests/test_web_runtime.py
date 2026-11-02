@@ -120,3 +120,188 @@ def test_stale_process_marker_does_not_authorize_signal(service):
     assert runtime.stop() == {"alive": False}
     assert not svc.store.path.with_suffix(".web-stop.json").exists()
     assert os.getpid() > 0
+
+
+def test_supervisor_sigkill_stops_owned_services_and_preserves_worker(prepared, assets):
+    import psutil
+    from test_queue_stream import active_developer
+
+    svc, q, create, _, release = prepared
+    rid = create()
+    runtime = WebRuntime(svc)
+    with socket.socket() as sock:
+        sock.bind(("127.0.0.1", 0))
+        port = sock.getsockname()[1]
+    children = []
+    try:
+        state = runtime.start([], port, True, assets)
+        supervisor = psutil.Process(state["pid"])
+        assert supervisor.create_time() == state["create_time"]
+        children = [(p, p.create_time()) for p in supervisor.children()]
+        assert len(children) == 2
+        until(lambda: active_developer(svc, rid))
+        with svc.store.connection() as db:
+            job = dict(db.execute("SELECT * FROM jobs WHERE run_id=?", (rid,)).fetchone())
+        supervisor.kill()
+        until(lambda: not runtime.status()["alive"])
+        until(lambda: all(not alive({"pid": p.pid, "create_time": birth}) for p, birth in children))
+        assert alive({"pid": job["owner_pid"], "create_time": job["owner_create_time"]})
+        runtime.start([], port, True, assets)
+        release.touch()
+        until(lambda: svc.store.get(rid)["state"] == "waiting_approval")
+        until(lambda: q.job(job["id"])["state"] == "finished")
+        assert len([s for s in svc.store.steps(rid) if s["role"] == "developer"]) == 1
+    finally:
+        runtime.stop()
+        until(lambda: not runtime.status()["alive"])
+        # Only the children captured from our own temporary supervisor may be cleaned up.
+        for child, birth in children:
+            if alive({"pid": child.pid, "create_time": birth}):
+                child.terminate()
+                try:
+                    child.wait(timeout=8)
+                except psutil.TimeoutExpired:
+                    child.kill()
+
+
+def test_web_stop_reuses_but_does_not_stop_existing_dispatcher(prepared, assets):
+    svc, q, _, dispatch, _ = prepared
+    dispatcher = dispatch()
+    runtime = WebRuntime(svc)
+    with socket.socket() as sock:
+        sock.bind(("127.0.0.1", 0))
+        port = sock.getsockname()[1]
+    try:
+        assert runtime.start([], port, True, assets)["dispatcher_reused"]
+        runtime.stop()
+        until(lambda: not runtime.status()["alive"])
+        assert dispatcher.poll() is None and q.dispatcher_status()["pid"] == dispatcher.pid
+    finally:
+        runtime.stop()
+
+
+def test_web_explicit_cancel_active_cancels_running_and_queued(prepared, assets):
+    from test_queue_stream import active_developer
+
+    svc, q, create, _, _ = prepared
+    first, second = create(), create()
+    runtime = WebRuntime(svc)
+    with socket.socket() as sock:
+        sock.bind(("127.0.0.1", 0))
+        port = sock.getsockname()[1]
+    try:
+        runtime.start([], port, True, assets)
+        until(lambda: active_developer(svc, first))
+        runtime.stop(cancel_active=True)
+        until(lambda: not runtime.status()["alive"])
+        until(lambda: svc.status(first)["state"] == "cancelled")
+        until(lambda: svc.status(second)["state"] == "cancelled")
+        assert svc.store.steps(second) == []
+        assert not q.dispatcher_status()["alive"]
+        for rid in [first, second]:
+
+            def finished():
+                with svc.store.connection() as db:
+                    return not db.execute(
+                        "SELECT 1 FROM jobs WHERE run_id=? AND state IN ('queued','claimed','running')",
+                        (rid,),
+                    ).fetchone()
+
+            until(finished)
+        assert svc.queries.snapshot(first)["execution"]["cleanup"] == "confirmed"
+    finally:
+        runtime.stop(cancel_active=True)
+        until(lambda: not runtime.status()["alive"])
+
+
+def test_startup_sigterm_cleans_api_before_dispatcher(service, assets, tmp_path):
+    import subprocess
+    import sys
+
+    import psutil
+
+    svc, _, _ = service
+    upgrade(svc.store.path)
+    probe = tmp_path / "readiness-probe"
+    with socket.socket() as sock:
+        sock.bind(("127.0.0.1", 0))
+        port = sock.getsockname()[1]
+    code = f"""
+import time
+from pathlib import Path
+from dev_orchestra.execution import web
+original=web.http.client.HTTPConnection.getresponse
+def delayed(self):
+ Path({str(probe)!r}).touch()
+ time.sleep(2)
+ return original(self)
+web.http.client.HTTPConnection.getresponse=delayed
+web.run()
+"""
+    child = subprocess.Popen(
+        [sys.executable, "-c", code],
+        stdin=subprocess.PIPE,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    )
+    children = []
+    try:
+        child.stdin.write(
+            json.dumps(
+                {
+                    "token": "startup-test",
+                    "config": svc.config.model_dump(mode="json"),
+                    "roots": [],
+                    "port": port,
+                    "assets": str(assets),
+                }
+            ).encode()
+        )
+        child.stdin.close()
+        until(probe.exists)
+        children = [(p, p.create_time()) for p in psutil.Process(child.pid).children()]
+        assert len(children) == 1
+        child.terminate()
+        assert child.wait(timeout=10) == 1
+        until(lambda: all(not alive({"pid": p.pid, "create_time": birth}) for p, birth in children))
+        from dev_orchestra.application.queue import QueueService
+
+        assert not QueueService(svc.store).dispatcher_status()["alive"]
+        assert svc.store.path.with_suffix(".web.log").stat().st_mode & 0o777 == 0o600
+        assert svc.store.path.with_suffix(".web-config.json").stat().st_mode & 0o777 == 0o600
+    finally:
+        if child.poll() is None:
+            child.kill()
+            child.wait()
+        for p, birth in children:
+            if alive({"pid": p.pid, "create_time": birth}):
+                p.terminate()
+
+
+def test_caller_interrupt_during_start_does_not_leave_supervisor(service, assets, monkeypatch):
+    import subprocess
+
+    svc, _, _ = service
+    upgrade(svc.store.path)
+    runtime = WebRuntime(svc)
+    popen = subprocess.Popen
+    children = []
+    calls = 0
+
+    def launch(*args, **kwargs):
+        child = popen(*args, **kwargs)
+        children.append(child)
+        return child
+
+    def status():
+        nonlocal calls
+        calls += 1
+        if calls > 1:
+            raise KeyboardInterrupt()
+        return {"alive": False}
+
+    monkeypatch.setattr(subprocess, "Popen", launch)
+    monkeypatch.setattr(runtime, "status", status)
+    with pytest.raises(KeyboardInterrupt):
+        runtime.start([], 8000, True, assets)
+    assert len(children) == 1 and children[0].poll() is not None

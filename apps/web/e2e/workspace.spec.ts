@@ -318,3 +318,104 @@ test("개발 서버가 검사 산출물과 Python 소스를 제공하지 않는�
     process.env.E2E_BUNDLED ? 404 : 403,
   );
 });
+
+test("CLI 시작·브라우저 종료·재접속·CLI 승인과 GUI 생성 교차 동기화", async ({
+  page,
+  context,
+}) => {
+  const f = fixture();
+  const cli = join(dirname(f.python), "devorchestra");
+  const cliArgs = ["--config", f.config];
+  const repo = join(dirname(f.database), "cross-repository");
+  execFileSync("git", [
+    "clone",
+    "--local",
+    "--single-branch",
+    "--no-hardlinks",
+    f.repo,
+    repo,
+  ]);
+  execFileSync("git", ["-C", repo, "config", "user.name", "교차 검사"]);
+  execFileSync("git", ["-C", repo, "config", "user.email", "test@localhost"]);
+  rmSync(f.release, { force: true });
+  const spec = join(dirname(f.database), "cli-prd.md");
+  writeFileSync(spec, "기존 덧셈을 테스트하고 리뷰해 주세요.");
+  const output = execFileSync(
+    cli,
+    [...cliArgs, "run", "--repo", repo, "--spec", spec, "--detach"],
+    { encoding: "utf8" },
+  );
+  const rid = output.match(/run-[0-9a-f]{16}/)![0];
+  await page.goto(`/runs/${rid}`);
+  await page.getByLabel("일회용 로그인 코드").fill(bootstrap());
+  await page.getByRole("button", { name: "작업 공간 열기" }).click();
+  await page.goto(`/runs/${rid}`);
+  await expect(
+    page.getByText(
+      "CLI 작업 · 조회 전용입니다. 실행 제어는 CLI에서 진행해 주세요.",
+    ),
+  ).toBeVisible();
+  await expect(page.getByText("개발 중", { exact: true })).toBeVisible();
+  await expect(
+    page.getByRole("button", { name: "최종 승인", exact: true }),
+  ).toHaveCount(0);
+  await page.close();
+  expect(
+    JSON.parse(
+      execFileSync(cli, [...cliArgs, "status", rid], { encoding: "utf8" }),
+    ).state,
+  ).toBe("developing");
+  const reopened = await context.newPage();
+  await reopened.goto(`/runs/${rid}`);
+  await expect(reopened.getByText("개발 중", { exact: true })).toBeVisible();
+  writeFileSync(f.release, "");
+  await expect(reopened.getByText("승인 대기", { exact: true })).toBeVisible({
+    timeout: 45000,
+  });
+  execFileSync(cli, [...cliArgs, "approve", rid]);
+  await expect(
+    reopened.getByText("완료", { exact: true }).first(),
+  ).toBeVisible();
+  await reopened.goto("/projects");
+  await reopened
+    .getByRole("button", { name: "프로젝트 등록", exact: true })
+    .click();
+  await reopened.getByLabel("프로젝트 이름").fill("독립 교차 프로젝트");
+  await reopened.getByLabel("저장소 절대 경로").fill(repo);
+  await reopened
+    .getByLabel("테스트·리뷰 정책 (JSON)")
+    .fill(JSON.stringify(f.policy));
+  await reopened
+    .getByRole("button", { name: "프로젝트 등록", exact: true })
+    .last()
+    .click();
+  await expect(
+    reopened.getByRole("heading", { name: "독립 교차 프로젝트" }),
+  ).toBeVisible();
+  await reopened.getByRole("link", { name: /독립 교차 프로젝트/ }).click();
+  await reopened.getByRole("link", { name: "이 프로젝트에서 실행" }).click();
+  await reopened
+    .getByLabel("PRD", { exact: true })
+    .fill("기존 덧셈을 다시 검증해 주세요.");
+  await reopened.getByRole("button", { name: "실행 전 확인" }).click();
+  await reopened.getByRole("button", { name: "확인하고 작업 시작" }).click();
+  await expect(reopened).toHaveURL(/\/runs\/run-/);
+  await expect(reopened.getByText("승인 대기", { exact: true })).toBeVisible({
+    timeout: 45000,
+  });
+  const guiRid = new URL(reopened.url()).pathname.split("/").at(-1)!;
+  expect(guiRid).not.toBe(rid);
+  execFileSync(cli, [...cliArgs, "approve", guiRid]);
+  await expect(
+    reopened.getByText("완료", { exact: true }).first(),
+  ).toBeVisible();
+  await reopened.getByRole("tab", { name: "최종 보고서" }).click();
+  await expect(
+    reopened.getByText(/completed/, { exact: false }).first(),
+  ).toBeVisible();
+  expect(
+    execFileSync("git", ["-C", repo, "rev-parse", "HEAD"], {
+      encoding: "utf8",
+    }).trim(),
+  ).toBe(f.base_sha);
+});
