@@ -20,3 +20,4 @@ worktrees/
 *.db-shm
 *.db-wal
 node_modules/
+/docs/
