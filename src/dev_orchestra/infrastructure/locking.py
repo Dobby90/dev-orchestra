@@ -13,14 +13,14 @@ class OwnershipError(PipelineError):
 
 
 @contextmanager
-def lock(path: Path, wait=False, stop=lambda: None):
+def lock(path: Path, wait=False, stop=lambda: None, shared=False):
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("a+") as handle:
         while True:
             if stop():
                 raise StopRequested(stop())
             try:
-                fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                fcntl.flock(handle, (fcntl.LOCK_SH if shared else fcntl.LOCK_EX) | fcntl.LOCK_NB)
                 break
             except BlockingIOError as error:
                 if not wait:

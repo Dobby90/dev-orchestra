@@ -18,8 +18,19 @@ dependencies = [
 devorchestra = "dev_orchestra.cli:app"
 codex-pipeline = "dev_orchestra.cli:app"
 
+[project.optional-dependencies]
+web = [
+    "fastapi>=0.135,<1",
+    "python-multipart>=0.0.20",
+    "uvicorn>=0.34,<1",
+]
+
 [dependency-groups]
-dev = ["pytest>=8,<10", "ruff>=0.11,<1"]
+dev = [
+    "httpx>=0.28,<1",
+    "pytest>=8,<10",
+    "ruff>=0.11,<1",
+]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

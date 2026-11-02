@@ -1,12 +1,15 @@
 """SQLite checkpoints and short atomic state/event transactions."""
 
 import json
+import os
 import sqlite3
 from contextlib import contextmanager
+from contextvars import ContextVar
 from datetime import UTC, datetime
 from pathlib import Path
 
 from dev_orchestra.domain.models import PipelineError, State
+from dev_orchestra.infrastructure.locking import lock
 
 
 def now():
@@ -15,14 +18,22 @@ def now():
 
 class Store:
     def __init__(self, path: Path):
-        path.parent.mkdir(parents=True, exist_ok=True)
+        path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+        try:
+            fd = os.open(path, os.O_CREAT | os.O_EXCL | os.O_RDWR, 0o600)
+            os.close(fd)
+        except FileExistsError:
+            pass
         self.path = path
+        self._transaction = ContextVar("transaction", default=None)
         with self.connection() as db:
             exists = db.execute(
                 "SELECT name FROM sqlite_master WHERE type='table' AND name='schema_version'"
             ).fetchone()
             if exists:
                 versions = [r[0] for r in db.execute("SELECT version FROM schema_version")]
+                if versions == [3]:
+                    return
                 if versions not in ([1], [2]):
                     raise PipelineError("unsupported database schema version")
             db.executescript("""
@@ -50,14 +61,32 @@ class Store:
 
     @contextmanager
     def connection(self):
-        db = sqlite3.connect(self.path, timeout=10)
-        db.row_factory = sqlite3.Row
-        db.execute("PRAGMA foreign_keys=ON")
-        try:
-            with db:
+        existing = self._transaction.get()
+        if existing is not None:
+            yield existing
+            return
+        with lock(self.path.with_suffix(".maintenance.lock"), shared=True):
+            db = sqlite3.connect(self.path, timeout=10)
+            db.row_factory = sqlite3.Row
+            db.execute("PRAGMA foreign_keys=ON")
+            db.execute("PRAGMA synchronous=FULL")
+            try:
+                with db:
+                    yield db
+            finally:
+                db.close()
+
+    @contextmanager
+    def transaction(self):
+        if self._transaction.get() is not None:
+            raise PipelineError("nested unit of work is not allowed")
+        with self.connection() as db:
+            db.execute("BEGIN IMMEDIATE")
+            token = self._transaction.set(db)
+            try:
                 yield db
-        finally:
-            db.close()
+            finally:
+                self._transaction.reset(token)
 
     def create(self, data):
         with self.connection() as db:
@@ -87,7 +116,8 @@ class Store:
 
     def update(self, run_id, state=None, expected_version=None, **changes):
         with self.connection() as db:
-            db.execute("BEGIN IMMEDIATE")
+            if self._transaction.get() is None:
+                db.execute("BEGIN IMMEDIATE")
             row = db.execute("SELECT * FROM runs WHERE id=?", (run_id,)).fetchone()
             if not row:
                 raise PipelineError("unknown run")
@@ -144,6 +174,13 @@ class Store:
                 "UPDATE runs SET state=?,data=?,version=version+1 WHERE id=?",
                 (target, json.dumps(data), run_id),
             )
+            if (
+                target in {"cancelled", "paused"}
+                and db.execute("SELECT 1 FROM sqlite_master WHERE name='jobs'").fetchone()
+            ):
+                db.execute(
+                    "UPDATE jobs SET state='cancelled' WHERE run_id=? AND state='queued'", (run_id,)
+                )
             self._event(
                 db,
                 run_id,
@@ -155,13 +192,18 @@ class Store:
                 },
             )
 
-    def control(self, run_id, value):
+    def control(self, run_id, value, expected_version=None):
         if value not in {None, "pause", "cancel"}:
             raise PipelineError("invalid control request")
         self.get(run_id)
         with self.connection() as db:
+            if self._transaction.get() is None:
+                db.execute("BEGIN IMMEDIATE")
+            current = db.execute("SELECT version FROM runs WHERE id=?", (run_id,)).fetchone()
+            if expected_version is not None and current["version"] != expected_version:
+                raise PipelineError("concurrent state update")
             cursor = db.execute(
-                "UPDATE runs SET control=? WHERE id=? AND state NOT IN ('completed','cancelled')",
+                "UPDATE runs SET control=?,version=version+1 WHERE id=? AND state NOT IN ('completed','cancelled')",
                 (value, run_id),
             )
             if not cursor.rowcount:
@@ -237,7 +279,8 @@ class Store:
 
     def approve(self, run_id, sha, evidence):
         with self.connection() as db:
-            db.execute("BEGIN IMMEDIATE")
+            if self._transaction.get() is None:
+                db.execute("BEGIN IMMEDIATE")
             row = db.execute("SELECT state,control FROM runs WHERE id=?", (run_id,)).fetchone()
             if not row or row["state"] != "waiting_approval" or row["control"]:
                 raise PipelineError("run is not awaiting approval")

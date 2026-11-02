@@ -4,7 +4,7 @@ Codex CLI를 활용해 기획, 개발, 테스트 작성·실행, 독립적인 �
 
 이 저장소는 모노레포로 관리합니다. 공통 Python 백엔드는 `src/dev_orchestra`에 있으며, 향후 React 앱은 `apps/web`에 추가할 예정입니다. 현재 FastAPI와 React는 구현하지 않았습니다.
 
-GUI 개발 Phase 1에서는 공통 Application Service 계층을 분리했습니다. 기존 `RunService` 인터페이스는 유지하며, `queries`는 DB 조회, `recovery`는 명시적 상태 조정, `approvals`는 검증된 후보 승인, `execution`은 독립 Worker 시작, `events`는 저장 로그와 이벤트 조회를 담당합니다. `ProjectService`는 허용 경로·Git 저장소·테스트/리뷰 정책을 검증합니다. 프로젝트 등록 저장과 DB 확장, HTTP API, 작업 큐, SSE, React는 이후 승인된 Phase에서 구현합니다.
+GUI 개발 Phase 1에서는 공통 Application Service 계층을 분리했습니다. 기존 `RunService` 인터페이스는 유지하며, `queries`는 DB 조회, `recovery`는 명시적 상태 조정, `approvals`는 검증된 후보 승인, `execution`은 독립 Worker 시작, `events`는 저장 로그와 이벤트 조회를 담당합니다. `ProjectService`는 허용 경로·Git 저장소·테스트/리뷰 정책을 검증합니다. Phase 2에서는 프로젝트 영속 관리, DB 스키마 3, 인증된 REST API와 대기 작업 접수를 추가했습니다. 대기 작업을 처리할 Dispatcher, SSE, React는 이후 승인 단계의 구현 범위입니다.
 
 공통 서비스는 FastAPI나 Typer에 의존하지 않습니다. `queries.summary()`는 PRD·설정·서버 디렉터리를 제외한 타입이 있는 요약을 반환하고, 기존 CLI 출력에 필요한 내부 전체 조회는 별도로 유지합니다. `status()`의 기존 복구 동작은 유지되며, 읽기 전용 조회는 복구나 보고서 생성을 수행하지 않습니다.
 
@@ -145,5 +145,28 @@ GUI 착수 전 감사에서 발견한 결함의 수정·검증 결과는 [수정
 - 실행 가능한 Git clean/smudge/process 필터가 설정된 저장소는 안전 정책이 마련될 때까지 실행을 거부합니다. Git LFS 등 필터를 사용하는 프로젝트도 해당할 수 있습니다.
 - 사전 점검과 잠금 대기 중에도 취소를 처리하고, 프로세스 그룹에 남은 자식을 종료합니다.
 - Worker 강제 종료 후에도 별도 관리 프로세스가 자식을 정리합니다. 중복 Worker는 기존 소유권을 덮어쓰지 않으며, 종료 확인 실패를 취소 성공으로 표시하지 않습니다.
-- SQLite 스키마는 버전 2이며 기존 버전 1 데이터를 보존해 갱신합니다. 알 수 없는 버전은 거부합니다.
+- CLI 기본 DB는 스키마 2를 유지하며, 웹 백엔드에는 명시적으로 스키마 3으로 업그레이드합니다. 기존 버전 1 데이터도 CLI의 기존 1→2 갱신 후 보존합니다. 알 수 없는 버전은 거부합니다.
 - 승인·무효화 후 보고서를 갱신하며, 제어·단계 이벤트와 파일별 로그 커서를 제공합니다. FastAPI·SSE·React는 구현하지 않았습니다.
+
+## 로컬 API — Phase 2
+
+웹 의존성은 선택 설치합니다. 아래 명령은 기존 개발 가상환경을 사용하는 예시이며 `--config`는 각 명령 앞에 지정합니다.
+
+```sh
+UV_CACHE_DIR="$PWD/.uv-cache" .tools/uv sync --frozen --extra web
+.venv/bin/devorchestra --config config.yaml database-upgrade
+.venv/bin/devorchestra --config config.yaml api-start --allow-root ~/projects
+```
+
+`database-upgrade`는 실행 중인 Worker·미확인 프로세스·실행 잠금이 있으면 중단합니다. schema 2의 일관된 SQLite 백업과 증거 참조 manifest를 DB 옆에 저장한 뒤 트랜잭션으로 schema 3을 추가합니다. 구버전 CLI/Worker와 혼용하지 마세요. 복원은 모든 writer를 종료한 상태에서 백업으로 수행합니다. 기존 데이터베이스는 API 시작만으로 자동 업그레이드하지 않습니다.
+
+API는 `127.0.0.1:8000`에만 바인딩하며 세션·정확한 Origin/Host·쓰기 CSRF 검사를 적용합니다. `--allow-root` 아래의 Git 저장소만 프로젝트로 등록할 수 있습니다. 원본 저장소·브랜치를 삭제하지 않으며 프로젝트 DELETE는 등록 해제(archive)입니다.
+
+```sh
+# 같은 DB에 60초 유효·일회용 로그인 코드를 발급합니다.
+.venv/bin/devorchestra --config config.yaml web-session
+```
+
+로그인 코드는 로컬 클라이언트가 허용된 Origin에서 `POST /api/session`으로 전달합니다. 응답의 HttpOnly 세션 쿠키와 CSRF 토큰으로 후속 API를 사용합니다. 인증값을 URL query나 로그에 넣지 마세요. `/api/openapi.json`과 `/api/docs`는 인증된 OpenAPI JSON을 제공하며, 외부 CDN을 사용하는 Swagger UI는 제공하지 않습니다. 브라우저 로그인 UI는 React 단계에서 추가합니다.
+
+현재 API는 프로젝트 등록/조회/정책 수정/해제, PRD 업로드, 실행 preview, 멱등 실행 접수, 실행 목록/상세/단계/저장 로그/이벤트/기존 보고서 조회, 취소·일시중지·검증 후 승인·명시적 상태 조정을 제공합니다. 생성 응답 `queued_reason=dispatcher_offline`은 접수가 저장됐다는 뜻입니다. **이번 단계에서 API는 Worker나 Codex를 시작하지 않습니다.** 독립 Dispatcher와 SSE, 재개·수정 요청의 웹 실행 통합은 다음 단계에서 연결합니다. 기존 CLI 직접 실행은 유지합니다.

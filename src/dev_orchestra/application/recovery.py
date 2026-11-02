@@ -53,6 +53,15 @@ class RecoveryService:
         }
         if run["state"] not in active:
             return run
+        if run["state"] == "queued":
+            with self.store.connection() as db:
+                if (
+                    db.execute("SELECT 1 FROM sqlite_master WHERE name='jobs'").fetchone()
+                    and db.execute(
+                        "SELECT 1 FROM jobs WHERE run_id=? AND state='queued'", (run["id"],)
+                    ).fetchone()
+                ):
+                    return run
         directory = Path(run["directory"])
         try:
             with lock(directory / "execution.lock"):

@@ -164,3 +164,44 @@ def doctor(ctx: typer.Context):
     CodexClient(ctx.obj.config.codex).check()
     TestRunner().check(Path.cwd())
     typer.echo("Codex exec capabilities and OS test sandbox verified (no model call)")
+
+
+@app.command("database-upgrade")
+@guarded
+def database_upgrade(ctx: typer.Context):
+    from dev_orchestra.infrastructure.migrations import upgrade
+
+    backup = upgrade(ctx.obj.store.path)
+    typer.echo(str(backup) if backup else "Database schema is current")
+
+
+@app.command("web-session")
+@guarded
+def web_session(ctx: typer.Context):
+    from dev_orchestra.api.security import bootstrap
+
+    with ctx.obj.store.connection() as db:
+        if db.execute("SELECT version FROM schema_version").fetchone()[0] != 3:
+            raise PipelineError("run database-upgrade first")
+    typer.echo(bootstrap(ctx.obj.store))
+
+
+@app.command("api-start")
+@guarded
+def api_start(
+    ctx: typer.Context,
+    allow_root: list[Path] = typer.Option([], "--allow-root"),
+    port: int = typer.Option(8000, min=1024, max=65535),
+):
+    try:
+        import uvicorn
+
+        from dev_orchestra.api.main import create_app
+    except ImportError as error:
+        raise PipelineError("install the web extra: uv sync --extra web") from error
+    uvicorn.run(
+        create_app(ctx.obj.config, allow_root, port),
+        host="127.0.0.1",
+        port=port,
+        proxy_headers=False,
+    )

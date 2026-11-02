@@ -19,5 +19,7 @@ worktrees/
 *.db
 *.db-shm
 *.db-wal
+*.web-key
+*.db.backup-*.manifest.json
 node_modules/
 /docs/

@@ -35,6 +35,11 @@ class RunService:
         return self.create_run(command)
 
     def create_run(self, command: CreateRun):
+        data = self.prepare_run(command)
+        self.store.create(data)
+        return data["id"]
+
+    def prepare_run(self, command: CreateRun, *, run_id=None, branch=None):
         repo, spec, base, max_fixes = command.repo, command.spec, command.base, command.max_fixes
         config = self.config.model_copy(deep=True)
         if max_fixes is not None:
@@ -51,7 +56,7 @@ class RunService:
         spec_text = spec.expanduser().resolve(strict=True).read_text()
         if not spec_text.strip():
             raise PipelineError("PRD must not be empty")
-        run_id = "run-" + uuid.uuid4().hex[:16]
+        run_id = run_id or "run-" + uuid.uuid4().hex[:16]
         directory = config.storage.runs_directory / run_id
         worktree = config.storage.worktrees_directory / run_id
         root = Path(git.call("rev-parse", "--show-toplevel"))
@@ -63,7 +68,7 @@ class RunService:
             "repo": str(repo),
             "base": base,
             "base_sha": sha,
-            "branch": f"{config.project.branch_prefix}/{run_id}",
+            "branch": branch or f"{config.project.branch_prefix}/{run_id}",
             "worktree": str(worktree),
             "directory": str(directory),
             "spec": spec_text,
@@ -75,8 +80,7 @@ class RunService:
         }
         write(directory / "spec.md", spec_text)
         write(directory / "config.json", data["config"])
-        self.store.create(data)
-        return run_id
+        return data
 
     def start(self, run_id, detached=False):
         return self.execution.start(run_id, detached)
@@ -108,11 +112,11 @@ class RunService:
             self.store.control(run_id, None)
             self.store.update(run_id, "queued", error=None, **changes)
 
-    def cancel(self, run_id, pause=False):
+    def cancel(self, run_id, pause=False, *, expected_version=None):
         run = self.store.get(run_id)
         if run["state"] in {"completed", "cancelled"}:
             raise PipelineError("terminal run cannot be cancelled/paused")
-        self.store.control(run_id, "pause" if pause else "cancel")
+        self.store.control(run_id, "pause" if pause else "cancel", expected_version)
         try:
             with lock(Path(run["directory"]) / "execution.lock"):
                 try:
