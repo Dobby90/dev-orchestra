@@ -5,8 +5,9 @@ from dev_orchestra.domain.models import PipelineError
 
 
 class Git:
-    def __init__(self, repo: Path):
+    def __init__(self, repo: Path, ignore=()):
         self.repo = repo.resolve()
+        self.exclusions = [f":(exclude){p}" for p in ignore]
 
     def call(self, *args, input=None):
         proc = subprocess.run(["git", "-c", "core.hooksPath=/dev/null", "-c", "commit.gpgsign=false", "-c", "core.fsmonitor=false", "-C", str(self.repo), *args], input=input, capture_output=True, text=True)
@@ -30,10 +31,10 @@ class Git:
         self.call("worktree", "add", "-b", branch, str(path), sha)
 
     def dirty(self):
-        return self.call("status", "--porcelain", "--untracked-files=all")
+        return self.call("status", "--porcelain", "--untracked-files=all", "--", ".", *self.exclusions)
 
     def commit(self, message):
-        self.call("add", "--all", "--", ".")
+        self.call("add", "--all", "--", ".", *self.exclusions)
         if self.call("diff", "--cached", "--name-only"):
             self.call("commit", "-m", message)
         return self.sha()

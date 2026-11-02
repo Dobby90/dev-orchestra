@@ -40,6 +40,11 @@ class Issue(Model):
     suggestion: str
 
 
+class Coverage(Model):
+    criterion_id: str
+    command_ids: list[str]
+
+
 class AgentResult(Model):
     summary: str
     questions: list[str] = Field(default_factory=list)
@@ -47,7 +52,7 @@ class AgentResult(Model):
     criteria: list[Criterion] = Field(default_factory=list)
     patch: str = ""
     command_ids: list[str] = Field(default_factory=list)
-    coverage: dict[str, list[str]] = Field(default_factory=dict)
+    coverage: list[Coverage] = Field(default_factory=list)
     issues: list[Issue] = Field(default_factory=list)
 
 
