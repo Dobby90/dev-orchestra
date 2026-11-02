@@ -1,0 +1,26 @@
+[build-system]
+requires = ["hatchling>=1.27"]
+build-backend = "hatchling.build"
+
+[project]
+name = "dev-orchestra"
+version = "0.1.0"
+description = "Local, resumable Codex development orchestration"
+requires-python = ">=3.11"
+dependencies = ["typer>=0.15,<1", "pydantic>=2.10,<3", "PyYAML>=6,<7"]
+
+[project.scripts]
+devorchestra = "dev_orchestra.cli:app"
+codex-pipeline = "dev_orchestra.cli:app"
+
+[dependency-groups]
+dev = ["pytest>=8,<10", "ruff>=0.11,<1"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]
+
+[tool.ruff]
+target-version = "py311"
+line-length = 100
+
