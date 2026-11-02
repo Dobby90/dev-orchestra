@@ -23,3 +23,6 @@ worktrees/
 *.db.backup-*.manifest.json
 node_modules/
 /docs/
+/apps/web/playwright-report/
+/apps/web/test-results/
+/apps/web/coverage/

@@ -1,0 +1,295 @@
+import {
+  act,
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+} from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
+import { QueryClientProvider } from "@tanstack/react-query";
+import { MemoryRouter } from "react-router-dom";
+import { describe, expect, it, vi } from "vitest";
+import { App, createQueryClient } from "../src/App";
+import { LoginPage } from "../src/pages/LoginPage";
+import { NewRunPage } from "../src/pages/NewRunPage";
+import { RunDetailPage } from "../src/pages/RunDetailPage";
+import { Routes, Route } from "react-router-dom";
+import { Status, states } from "../src/components/common";
+import { api } from "../src/api/resources";
+import type { Project, Schema, State } from "../src/api/types";
+import { initialPolicy } from "../src/components/ProjectForm";
+const p: Project = {
+  id: "prj-1",
+  name: "프로젝트",
+  repository_path: "/tmp/repo",
+  default_base_branch: "main",
+  version: 0,
+  created_at: "2026-11-02",
+  updated_at: "2026-11-02",
+  archived_at: null,
+  policy: initialPolicy as Project["policy"],
+  schema_version: 1,
+};
+const detail: Schema["RunDetail"] = {
+  schema_version: 1,
+  id: "r1",
+  state: "waiting_approval",
+  version: 4,
+  current_sha: "a".repeat(40),
+  branch: "feature/run",
+  base_sha: "b".repeat(40),
+  final_sha: null,
+  iteration: 0,
+  current_role: null,
+  control: null,
+  event_cursor: 0,
+  project_id: "prj-1",
+  base_branch: "main",
+  created_at: "2026-11-02T01:00:00Z",
+  max_fix_attempts: 3,
+  questions: [],
+  error: null,
+};
+function wrap(node: React.ReactNode, path = "/", client = createQueryClient()) {
+  return render(
+    <QueryClientProvider client={client}>
+      <MemoryRouter initialEntries={[path]}>{node}</MemoryRouter>
+    </QueryClientProvider>,
+  );
+}
+class Stream {
+  onopen = null;
+  onerror = null;
+  addEventListener() {}
+  close() {}
+}
+function setupDetail() {
+  vi.stubGlobal("EventSource", Stream);
+  vi.spyOn(api, "run").mockResolvedValue(detail);
+  vi.spyOn(api, "steps").mockResolvedValue({ items: [] });
+}
+describe("화면·위험 명령", () => {
+  it("초기 401 이후 로딩을 끝내고 원래 URL에서 로그인 화면을 표시한다", async () => {
+    window.history.replaceState({}, "", "/runs/saved");
+    vi.stubGlobal(
+      "fetch",
+      vi
+        .fn()
+        .mockResolvedValue(
+          new Response('{"code":"SESSION_REQUIRED"}', { status: 401 }),
+        ),
+    );
+    render(<App />);
+    expect(await screen.findByLabelText("일회용 로그인 코드")).toBeVisible();
+    expect(window.location.pathname).toBe("/runs/saved");
+    window.history.replaceState({}, "", "/");
+  });
+  it("세션 query를 교체하지 않고 로그인 후 대시보드를 표시한다", async () => {
+    window.history.replaceState({}, "", "/");
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input, init) => {
+        const url = String(input);
+        if (url.endsWith("/session") && init?.method === "POST")
+          return new Response(
+            JSON.stringify({
+              authenticated: true,
+              csrf_token: "csrf",
+              expires_at: "2026-11-02T10:00:00Z",
+            }),
+          );
+        if (url.endsWith("/session"))
+          return new Response('{"code":"SESSION_REQUIRED"}', { status: 401 });
+        if (url.endsWith("/dashboard"))
+          return new Response('{"project_count":0,"counts_by_state":{}}');
+        return new Response('{"items":[],"has_more":false,"next_cursor":null}');
+      }),
+    );
+    render(<App />);
+    await userEvent.type(
+      await screen.findByLabelText("일회용 로그인 코드"),
+      "s".repeat(43),
+    );
+    await userEvent.click(
+      screen.getByRole("button", { name: "작업 공간 열기" }),
+    );
+    expect(
+      await screen.findByRole("heading", { name: "개발의 흐름을 한눈에" }),
+    ).toBeVisible();
+  });
+  it("14개 상태에 텍스트 라벨이 있다", () => {
+    for (const state of Object.keys(states)) {
+      const { unmount } = render(<Status state={state as State} />);
+      expect(screen.getByText(states[state as State].label)).toBeVisible();
+      unmount();
+    }
+  });
+  it("일회용 코드를 URL·저장소에 남기지 않고 로그인한다", async () => {
+    const code = "s".repeat(43);
+    const login = vi.spyOn(api, "login").mockResolvedValue({
+      authenticated: true,
+      csrf_token: "csrf",
+      expires_at: "2026-11-02T10:00:00Z",
+    });
+    const success = vi.fn();
+    wrap(<LoginPage onSuccess={success} />);
+    await userEvent.type(screen.getByLabelText("일회용 로그인 코드"), code);
+    await userEvent.click(
+      screen.getByRole("button", { name: "작업 공간 열기" }),
+    );
+    await waitFor(() => expect(success).toHaveBeenCalled());
+    expect(login).toHaveBeenCalledWith(code, expect.anything());
+    expect(localStorage.getItem("csrf")).toBeNull();
+    expect(screen.getByLabelText("일회용 로그인 코드")).toHaveValue("");
+  });
+  it("SHA 전체 확인과 현재 버전으로만 승인 요청을 보낸다", async () => {
+    setupDetail();
+    const control = vi.spyOn(api, "control").mockResolvedValue({});
+    wrap(
+      <Routes>
+        <Route path="/runs/:id" element={<RunDetailPage />} />
+      </Routes>,
+      "/runs/r1",
+    );
+    await userEvent.click(
+      await screen.findByRole("button", { name: "최종 승인" }),
+    );
+    const confirm = screen.getByRole("button", { name: "최종 승인 확인" });
+    expect(confirm).toBeDisabled();
+    fireEvent.submit(confirm.closest("form")!);
+    expect(control).not.toHaveBeenCalled();
+    await userEvent.type(
+      screen.getByLabelText("위 커밋 SHA 전체를 입력해 확인하세요"),
+      "a".repeat(40),
+    );
+    await userEvent.click(confirm);
+    await waitFor(() =>
+      expect(control).toHaveBeenCalledWith("r1", 4, "approve", {
+        expected_sha: "a".repeat(40),
+      }),
+    );
+  });
+  it("승인 대화상자를 연 뒤 version이 바뀌면 확인을 차단한다", async () => {
+    setupDetail();
+    const client = createQueryClient();
+    wrap(
+      <Routes>
+        <Route path="/runs/:id" element={<RunDetailPage />} />
+      </Routes>,
+      "/runs/r1",
+      client,
+    );
+    await userEvent.click(
+      await screen.findByRole("button", { name: "최종 승인" }),
+    );
+    await userEvent.type(
+      screen.getByLabelText("위 커밋 SHA 전체를 입력해 확인하세요"),
+      "a".repeat(40),
+    );
+    vi.mocked(api.run).mockResolvedValue({ ...detail, version: 5 });
+    await act(async () => {
+      await client.invalidateQueries({ queryKey: ["run", "r1"] });
+    });
+    await waitFor(() =>
+      expect(
+        screen.getByRole("button", { name: "최종 승인 확인" }),
+      ).toBeDisabled(),
+    );
+    expect(screen.getByText(/작업 상태가 변경되었습니다/)).toBeVisible();
+  });
+  it("취소 접수 후 Worker 확정 전에 Cancelled로 표시하지 않는다", async () => {
+    setupDetail();
+    vi.mocked(api.run).mockResolvedValue({
+      ...detail,
+      state: "developing",
+      current_role: "developer",
+    });
+    vi.spyOn(api, "control").mockImplementation(async () => {
+      vi.mocked(api.run).mockResolvedValue({
+        ...detail,
+        state: "developing",
+        control: "cancel",
+        version: 5,
+      });
+      return {};
+    });
+    wrap(
+      <Routes>
+        <Route path="/runs/:id" element={<RunDetailPage />} />
+      </Routes>,
+      "/runs/r1",
+    );
+    await userEvent.click(await screen.findByRole("button", { name: "취소" }));
+    await userEvent.click(
+      screen.getByRole("button", { name: "작업 취소 확인" }),
+    );
+    expect(await screen.findByText(/취소 요청이 접수되었습니다/)).toBeVisible();
+    expect(screen.getByText("개발 중")).toBeVisible();
+    expect(screen.queryByText("취소됨")).not.toBeInTheDocument();
+  });
+  it("CLI 미등록 작업은 조회 전용이며 미구현 결과를 통과로 표시하지 않는다", async () => {
+    setupDetail();
+    vi.mocked(api.run).mockResolvedValue({ ...detail, project_id: null });
+    wrap(
+      <Routes>
+        <Route path="/runs/:id" element={<RunDetailPage />} />
+      </Routes>,
+      "/runs/r1?tab=tests",
+    );
+    expect(await screen.findByText(/CLI 작업 · 조회 전용/)).toBeVisible();
+    expect(
+      screen.queryByRole("button", { name: "최종 승인" }),
+    ).not.toBeInTheDocument();
+    expect(
+      await screen.findByText(/백엔드는 이 상세 결과 API를 제공하지 않습니다/),
+    ).toBeVisible();
+  });
+  it("보고서 HTML·스크립트·외부 이미지를 실행하지 않는다", async () => {
+    setupDetail();
+    vi.spyOn(api, "report").mockResolvedValue({
+      markdown:
+        "# 결과\n<script>window.CANARY=true</script>\n![외부](https://external.invalid/x)\n[링크](javascript:alert(1))",
+    });
+    wrap(
+      <Routes>
+        <Route path="/runs/:id" element={<RunDetailPage />} />
+      </Routes>,
+      "/runs/r1?tab=report",
+    );
+    expect(await screen.findByRole("heading", { name: "결과" })).toBeVisible();
+    expect(document.querySelector(".markdown script")).toBeNull();
+    expect(document.querySelector(".markdown img")).toBeNull();
+    expect(document.querySelector(".markdown a")).toBeNull();
+  });
+  it("입력 변경 시 이전 미리보기를 무효화한다", async () => {
+    vi.spyOn(api, "projects").mockResolvedValue({
+      items: [p],
+      has_more: false,
+      next_cursor: null,
+    });
+    vi.spyOn(api, "project").mockResolvedValue(p);
+    vi.spyOn(api, "branches").mockResolvedValue({ items: ["main"] });
+    vi.spyOn(api, "preview").mockResolvedValue({
+      run_id: "r1",
+      branch: "feature/x",
+      base_sha: "b".repeat(40),
+      project_version: 0,
+      proposal_hash: "h",
+      expires: Date.now() / 1000 + 300,
+      preview_token: "receipt",
+      spec_sha256: "hash",
+    });
+    wrap(<NewRunPage />, "/runs/new?project=prj-1");
+    await userEvent.type(screen.getByLabelText("PRD"), "작업 요구사항");
+    await userEvent.click(screen.getByRole("button", { name: "실행 전 확인" }));
+    expect(
+      await screen.findByRole("button", { name: "확인하고 작업 시작" }),
+    ).toBeVisible();
+    fireEvent.change(screen.getByLabelText("PRD"), {
+      target: { value: "새 요구사항" },
+    });
+    expect(
+      screen.queryByRole("button", { name: "확인하고 작업 시작" }),
+    ).not.toBeInTheDocument();
+  });
+});

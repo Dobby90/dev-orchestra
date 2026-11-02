@@ -9,7 +9,7 @@ from test_workflow import service as service
 
 from dev_orchestra.api.main import create_app
 from dev_orchestra.api.security import bootstrap
-from dev_orchestra.domain.models import PipelineError
+from dev_orchestra.domain.models import PipelineError, State
 from dev_orchestra.infrastructure.locking import lock
 from dev_orchestra.infrastructure.migrations import upgrade
 from dev_orchestra.infrastructure.store import Store
@@ -386,3 +386,41 @@ def test_missing_repository_is_safe_input_error(web):
     )
     assert response.status_code == 422
     assert "missing-private-path" not in response.text
+
+
+def test_ui_public_projection_is_read_only_and_typed(web):
+    client, svc, rid, _, _ = web
+    svc.store.update(rid, error="token=CANARY")
+    before = svc.store.events(rid)
+    response = client.get(f"/api/runs/{rid}")
+    assert response.status_code == 200
+    value = response.json()
+    assert value["base_branch"] == "main"
+    assert value["created_at"]
+    assert value["max_fix_attempts"] == svc.config.workflow.max_fix_attempts
+    assert "CANARY" not in value["error"]
+    assert not {"config", "spec", "directory", "repo", "answers"} & value.keys()
+    assert svc.store.events(rid) == before
+    schemas = client.get("/api/openapi.json").json()["components"]["schemas"]
+    assert set(schemas["State"]["enum"]) == {s.value for s in State}
+    assert {
+        "RunDetail",
+        "RunPage",
+        "StepPage",
+        "PreviewView",
+        "EventPage",
+        "LogPage",
+    } <= schemas.keys()
+
+
+def test_ui_legacy_missing_metadata_is_unknown_not_fabricated(web):
+    client, svc, _, _, _ = web
+    svc.store.create({"id": "legacy-minimal"})
+    response = client.get("/api/runs/legacy-minimal")
+    assert response.status_code == 200
+    value = response.json()
+    assert value["base_branch"] is None
+    assert value["created_at"] is None
+    assert value["max_fix_attempts"] is None
+    assert value["project_id"] is None
+    assert svc.store.events("legacy-minimal") == []

@@ -15,21 +15,34 @@ from starlette.concurrency import run_in_threadpool
 
 from dev_orchestra.api.security import COOKIE, Security, digest, runtime_key
 from dev_orchestra.application.backend import BackendService
-from dev_orchestra.application.contracts import ApprovalCommand
+from dev_orchestra.application.contracts import ApprovalCommand, RunSummary
 from dev_orchestra.application.errors import ApplicationError
 from dev_orchestra.application.service import RunService
 from dev_orchestra.application.web_contracts import (
     ApprovalInput,
+    BranchPage,
+    ControlResult,
+    DashboardView,
+    EventPage,
+    LogPage,
+    PreviewView,
     ProjectCreate,
     ProjectPage,
     ProjectPatch,
     ProjectView,
     Proposal,
     Reason,
+    ReportView,
     ResumeInput,
+    ResumeView,
     RunCreate,
+    RunDetail,
+    RunPage,
     SessionCreate,
     SessionView,
+    SpecContent,
+    SpecView,
+    StepPage,
     SubmissionView,
 )
 from dev_orchestra.config import load_config
@@ -268,7 +281,7 @@ def create_app(config=None, allowed_roots=None, port=8000):
     def archive_project(pid: str, request: Request):
         return backend.change_project(pid, version(request, pid, "project"))
 
-    @app.get("/api/projects/{pid}/branches")
+    @app.get("/api/projects/{pid}/branches", response_model=BranchPage)
     def branches(pid: str):
         from dev_orchestra.infrastructure.git import Git
 
@@ -280,7 +293,7 @@ def create_app(config=None, allowed_roots=None, port=8000):
             .splitlines()
         }
 
-    @app.post("/api/specs", status_code=201)
+    @app.post("/api/specs", status_code=201, response_model=SpecView)
     def spec_upload(file: UploadFile = File(...)):
         if Path(file.filename or "").suffix.lower() not in {".md", ".txt"}:
             raise HTTPException(422, "text PRD required")
@@ -293,7 +306,7 @@ def create_app(config=None, allowed_roots=None, port=8000):
             raise HTTPException(422, "UTF-8 required") from None
         return backend.save_spec(text, Path(file.filename).name)
 
-    @app.post("/api/projects/{pid}/run-previews")
+    @app.post("/api/projects/{pid}/run-previews", response_model=PreviewView)
     def preview(pid: str, body: Proposal):
         if pid != body.project_id:
             raise HTTPException(422, "project mismatch")
@@ -303,7 +316,7 @@ def create_app(config=None, allowed_roots=None, port=8000):
     def submit(body: RunCreate, idempotency_key: str = Header(..., min_length=1, max_length=200)):
         return backend.submit(body, idempotency_key)
 
-    @app.get("/api/runs")
+    @app.get("/api/runs", response_model=RunPage)
     def run_list(
         limit: int = Query(50, ge=1, le=100),
         cursor: str = "",
@@ -312,17 +325,17 @@ def create_app(config=None, allowed_roots=None, port=8000):
     ):
         return runs.queries.page(limit, cursor, state, project_id)
 
-    @app.get("/api/dashboard")
+    @app.get("/api/dashboard", response_model=DashboardView)
     def dashboard():
         return runs.queries.dashboard()
 
-    @app.get("/api/runs/{rid}")
+    @app.get("/api/runs/{rid}", response_model=RunDetail)
     def run_detail(rid: str, response: Response):
         value = runs.queries.snapshot(rid)
         response.headers["ETag"] = f'"run:{rid}:v{value["version"]}"'
         return value
 
-    @app.post("/api/runs/{rid}/cancel", status_code=202)
+    @app.post("/api/runs/{rid}/cancel", status_code=202, response_model=ControlResult)
     def cancel(rid: str, request: Request, body: Reason):
         check_run(request, rid)
         runs.cancel(rid, expected_version=version(request, rid))
@@ -332,7 +345,7 @@ def create_app(config=None, allowed_roots=None, port=8000):
             )
         return {"state": runs.queries.get(rid)["state"]}
 
-    @app.post("/api/runs/{rid}/pause", status_code=202)
+    @app.post("/api/runs/{rid}/pause", status_code=202, response_model=ControlResult)
     def pause(rid: str, request: Request, body: Reason):
         check_run(request, rid)
         runs.cancel(rid, pause=True, expected_version=version(request, rid))
@@ -342,7 +355,7 @@ def create_app(config=None, allowed_roots=None, port=8000):
             )
         return {"state": runs.queries.get(rid)["state"]}
 
-    @app.post("/api/runs/{rid}/resume", status_code=202)
+    @app.post("/api/runs/{rid}/resume", status_code=202, response_model=ResumeView)
     def resume(rid: str, request: Request, body: ResumeInput):
         run = check_run(request, rid)
         if run["state"] not in {"failed", "paused", "needs_input"}:
@@ -362,7 +375,7 @@ def create_app(config=None, allowed_roots=None, port=8000):
             ).fetchone()
         return {"run_id": rid, "job_id": job["id"], "status": "queued"}
 
-    @app.post("/api/runs/{rid}/approve")
+    @app.post("/api/runs/{rid}/approve", response_model=RunSummary)
     def approve(rid: str, request: Request, body: ApprovalInput):
         check_run(request, rid)
         runs.approvals.approve_command(
@@ -372,27 +385,27 @@ def create_app(config=None, allowed_roots=None, port=8000):
         )
         return runs.queries.summary(rid).model_dump(mode="json")
 
-    @app.post("/api/runs/{rid}/reconcile")
+    @app.post("/api/runs/{rid}/reconcile", response_model=RunSummary)
     def reconcile(rid: str, request: Request):
         check_run(request, rid)
         runs.status(rid)
         return runs.queries.summary(rid).model_dump(mode="json")
 
-    @app.get("/api/runs/{rid}/steps")
+    @app.get("/api/runs/{rid}/steps", response_model=StepPage)
     def steps(rid: str):
         rows = runs.queries.steps(rid)
         return {"items": [{k: v for k, v in r.items() if k != "data"} for r in rows]}
 
-    @app.get("/api/runs/{rid}/event-history")
+    @app.get("/api/runs/{rid}/event-history", response_model=EventPage)
     def events(rid: str, after: int = Query(0, ge=0), limit: int = Query(100, ge=1, le=200)):
         return runs.events.stream_page(rid, after, limit)
 
-    @app.get("/api/runs/{rid}/spec")
+    @app.get("/api/runs/{rid}/spec", response_model=SpecContent)
     def run_spec(rid: str):
         value = runs.queries.get(rid)
         return {"text": value["spec"], "additional_instructions": value.get("answers", "")}
 
-    @app.get("/api/runs/{rid}/logs")
+    @app.get("/api/runs/{rid}/logs", response_model=LogPage)
     def logs(
         rid: str,
         role: str | None = None,
@@ -410,7 +423,7 @@ def create_app(config=None, allowed_roots=None, port=8000):
         ]
         return {"schema_version": 2, **page}
 
-    @app.get("/api/runs/{rid}/report")
+    @app.get("/api/runs/{rid}/report", response_model=ReportView)
     def report(rid: str):
         path = Path(runs.queries.get(rid)["directory"]) / "final-report.md"
         if not path.is_file():

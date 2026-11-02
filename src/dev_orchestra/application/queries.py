@@ -45,6 +45,15 @@ class RunQueryService:
                 0
             ]
             value["project_id"] = row["project_id"] if "project_id" in row.keys() else None
+            from dev_orchestra.infrastructure.process import sanitize
+
+            value.update(
+                base_branch=data.get("base"),
+                created_at=data.get("created_at"),
+                max_fix_attempts=data.get("config", {}).get("workflow", {}).get("max_fix_attempts"),
+                questions=sanitize(data.get("questions", [])),
+                error=sanitize(data.get("error")),
+            )
         return value
 
     def page(self, limit=50, cursor="", state=None, project_id=None):

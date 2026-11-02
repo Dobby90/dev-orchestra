@@ -2,9 +2,9 @@
 
 Codex CLI를 활용해 기획, 개발, 테스트 작성·실행, 독립적인 코드 리뷰, 제한된 횟수의 자동 수정을 수행하는 로컬 Python CLI입니다. 사용자 승인은 검증된 커밋을 승인 상태로 기록하며, 대상 프로젝트의 원격 Push나 Merge를 수행하지 않습니다.
 
-이 저장소는 모노레포로 관리합니다. 공통 Python 백엔드는 `src/dev_orchestra`에 있으며, 향후 React 앱은 `apps/web`에 추가할 예정입니다. FastAPI 백엔드와 독립 Worker·SSE를 구현했으며, React 앱은 다음 승인 단계에서 개발합니다.
+이 저장소는 모노레포로 관리합니다. 공통 Python 백엔드는 `src/dev_orchestra`에 있으며, React + TypeScript 앱은 `apps/web`에 있습니다. FastAPI 백엔드·독립 Worker·SSE와 연결되는 로컬 GUI를 Phase 4에서 추가했습니다.
 
-GUI 개발 Phase 1에서는 공통 Application Service 계층을 분리했습니다. 기존 `RunService` 인터페이스는 유지하며, `queries`는 DB 조회, `recovery`는 명시적 상태 조정, `approvals`는 검증된 후보 승인, `execution`은 독립 Worker 시작, `events`는 저장 로그와 이벤트 조회를 담당합니다. `ProjectService`는 허용 경로·Git 저장소·테스트/리뷰 정책을 검증합니다. Phase 2에서는 프로젝트 영속 관리와 인증된 REST API를 추가했습니다. Phase 3에서는 DB 스키마 4, 독립 Dispatcher·Worker의 작업 소유권과 복구, 영속 이벤트·SSE 로그 재생을 추가했습니다. React는 다음 승인 단계의 구현 범위입니다.
+GUI 개발 Phase 1에서는 공통 Application Service 계층을 분리했습니다. 기존 `RunService` 인터페이스는 유지하며, `queries`는 DB 조회, `recovery`는 명시적 상태 조정, `approvals`는 검증된 후보 승인, `execution`은 독립 Worker 시작, `events`는 저장 로그와 이벤트 조회를 담당합니다. `ProjectService`는 허용 경로·Git 저장소·테스트/리뷰 정책을 검증합니다. Phase 2에서는 프로젝트 영속 관리와 인증된 REST API를 추가했습니다. Phase 3에서는 DB 스키마 4, 독립 Dispatcher·Worker의 작업 소유권과 복구, 영속 이벤트·SSE 로그 재생을 추가했습니다. Phase 4에서는 로그인·프로젝트·작업 접수·실행 상세·로그·승인 화면을 추가했습니다. 상세 결과 API와 배포 통합은 후속 단계입니다.
 
 공통 서비스는 FastAPI나 Typer에 의존하지 않습니다. `queries.summary()`는 PRD·설정·서버 디렉터리를 제외한 타입이 있는 요약을 반환하고, 기존 CLI 출력에 필요한 내부 전체 조회는 별도로 유지합니다. `status()`의 기존 복구 동작은 유지되며, 읽기 전용 조회는 복구나 보고서 생성을 수행하지 않습니다.
 
@@ -116,7 +116,7 @@ queued → preparing → planning → developing → testing → reviewing
 - **승인의 유효 범위**: 승인은 특정 SHA에 대한 이력입니다. 파일시스템 감시기는 없으며, `status`에서 현재 승인 유효성을 확인합니다.
 - **로그와 민감정보**: 로그는 스트리밍하며 저장 전에 비밀값을 마스킹합니다. 프로세스별 출력은 최대 8 MiB입니다. 모델의 구조화 응답과 PRD 스냅샷에는 민감한 프로젝트 내용이 포함될 수 있으므로 상태 저장소를 비공개로 관리해야 합니다. 모든 비밀값 형식을 자동 식별할 수는 없습니다.
 - **동시 실행**: SQLite 데이터베이스별로 Worker 하나만 실행합니다. 서로 다른 데이터베이스가 같은 Git common directory를 대상으로 작업해도 저장소 잠금으로 직렬화합니다.
-- **구현 범위**: React GUI, 원격 실행, 대상 프로젝트 의존성 자동 설치, 자동 Push·Merge, 분산 큐는 포함하지 않습니다.
+- **구현 범위**: 원격 실행, 대상 프로젝트 의존성 자동 설치, 자동 Push·Merge, 분산 큐는 포함하지 않습니다.
 
 ## 개발 및 검증
 
@@ -146,7 +146,7 @@ GUI 착수 전 감사에서 발견한 결함의 수정·검증 결과는 [수정
 - 사전 점검과 잠금 대기 중에도 취소를 처리하고, 프로세스 그룹에 남은 자식을 종료합니다.
 - Worker 강제 종료 후에도 별도 관리 프로세스가 자식을 정리합니다. 중복 Worker는 기존 소유권을 덮어쓰지 않으며, 종료 확인 실패를 취소 성공으로 표시하지 않습니다.
 - CLI 기본 DB는 스키마 2를 유지하며, 웹 백엔드·큐에는 명시적으로 스키마 4로 업그레이드합니다. 기존 버전 1 데이터도 CLI의 기존 1→2 갱신 후 보존합니다. 알 수 없는 버전은 거부합니다.
-- 승인·무효화 후 보고서를 갱신하며, 제어·단계 이벤트와 파일별 로그 커서를 제공합니다. FastAPI·SSE는 별도 어댑터에서 제공하며 React는 후속 단계입니다.
+- 승인·무효화 후 보고서를 갱신하며, 제어·단계 이벤트와 파일별 로그 커서를 제공합니다. FastAPI·SSE·React는 공통 서비스를 사용하는 별도 어댑터로 제공합니다.
 
 ## 로컬 API와 독립 Worker — Phase 3
 
@@ -167,7 +167,7 @@ API는 `127.0.0.1:8000`에만 바인딩하며 세션·정확한 Origin/Host·쓰
 .venv/bin/devorchestra --config config.yaml web-session
 ```
 
-로그인 코드는 로컬 클라이언트가 허용된 Origin에서 `POST /api/session`으로 전달합니다. 응답의 HttpOnly 세션 쿠키와 CSRF 토큰으로 후속 API를 사용합니다. 인증값을 URL query나 로그에 넣지 마세요. `/api/openapi.json`과 `/api/docs`는 인증된 OpenAPI JSON을 제공하며, 외부 CDN을 사용하는 Swagger UI는 제공하지 않습니다. 브라우저 로그인 UI는 React 단계에서 추가합니다.
+로그인 코드는 로컬 클라이언트가 허용된 Origin에서 `POST /api/session`으로 전달합니다. 응답의 HttpOnly 세션 쿠키와 CSRF 토큰으로 후속 API를 사용합니다. 인증값을 URL query나 로그에 넣지 마세요. `/api/openapi.json`과 `/api/docs`는 인증된 OpenAPI JSON을 제공하며, 외부 CDN을 사용하는 Swagger UI는 제공하지 않습니다. 브라우저 로그인 UI는 `apps/web`에서 제공합니다.
 
 현재 API는 프로젝트 등록/조회/정책 수정/해제, PRD 업로드, 실행 preview, 멱등 실행 접수, 실행 목록/상세/단계/저장 로그/이벤트/기존 보고서 조회, 취소·일시중지·검증 후 승인·명시적 상태 조정을 제공합니다. 생성 응답은 DB에 접수된 `queued` 상태입니다. Dispatcher가 없으면 `queued_reason=dispatcher_offline`, 실행 중이면 `waiting_capacity`로 반환합니다. API 프로세스는 모델을 실행하지 않으며, 별도로 시작한 Dispatcher가 큐를 소비합니다. 재개 API를 추가했고 수정 요청·결과 상세의 전체 웹 계약은 후속 통합 단계입니다. 기존 CLI 직접 실행은 Dispatcher 없이도 유지됩니다.
 
@@ -183,3 +183,18 @@ API는 `127.0.0.1:8000`에만 바인딩하며 세션·정확한 Origin/Host·쓰
 인증된 `GET /api/runs/{id}/events`는 SSE를 제공합니다. `Last-Event-ID`가 `after`보다 우선하며 서버 재시작 후에도 같은 영속 event ID로 재생합니다. `/event-history`는 같은 이벤트 envelope, `/logs`는 schema 2의 이벤트 커서 페이지를 반환합니다. `/logs?after=...&limit=...&role=developer`에서 필터 결과가 비어도 `next_cursor`로 계속 조회합니다. 기존 CLI의 파일별 로그 커서는 그대로 유지합니다.
 
 로그는 UTF-8 줄 전체를 마스킹한 비공개 `log-views` 파일에 보존한 뒤 최대 4 KiB 구간과 해시를 DB 이벤트에 연결합니다. API는 원본 파일 경로나 인증 capability를 노출하지 않습니다. 일반 소스의 로그 레벨은 `unknown`으로 유지하고 구조가 확인된 workflow 로그만 레벨을 추출합니다. 8 MiB를 넘는 단일 줄은 안전 한도로 인덱싱 오류를 기록합니다. 소스 원본은 CLI 진단용으로 보존하므로 상태 디렉터리를 비공개로 관리해야 합니다. 모든 비밀값 형식을 자동으로 식별하지는 못합니다.
+
+
+## React GUI — Phase 4
+
+Node 22.12 이상에서 저장소 루트의 npm workspace를 사용합니다. Python CLI는 Node나 웹 의존성 설치 없이 계속 사용할 수 있습니다.
+
+```sh
+npm ci
+# 앞 절의 API·Dispatcher를 같은 config로 시작한 뒤 실행합니다.
+npm run dev:web
+```
+
+`http://127.0.0.1:5173`에 접속하여 `web-session`으로 발급한 코드를 입력합니다. 프로젝트 등록 → PRD 작성·업로드 → 실행 전 확인 → 작업 시작 → 로그·타임라인·보고서 → SHA 확인 후 승인 흐름을 제공합니다. 상태 제어 결과를 낙관적으로 완료 표시하지 않으며 SSE 단절 시 주기적 조회로 복구합니다.
+
+상세 설치·검증 명령은 [웹 앱 안내](apps/web/README.md)에 있습니다. JUnit 상세·리뷰 이슈 수명·Diff·수정 요청의 서버 API와 정적 배포·통합 시작 명령은 Phase 5 범위입니다. 현재 결과 탭은 미지원 사유를 표시합니다. Phase 4의 실행 방식은 별도 API·Dispatcher와 Vite 개발 서버입니다.

@@ -1,11 +1,13 @@
 """Public, bounded web contracts; independent of FastAPI."""
 
 from datetime import datetime
-from typing import Annotated, Literal
+from typing import Annotated, Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from dev_orchestra.application.contracts import RunSummary
 from dev_orchestra.config import Tests
+from dev_orchestra.domain.models import State
 
 
 class Input(BaseModel):
@@ -108,3 +110,99 @@ class SessionView(BaseModel):
 class ResumeInput(Input):
     answers_text: str | None = Field(default=None, max_length=65536)
     new_max_fix_attempts: int | None = Field(default=None, gt=0, le=20, strict=True)
+
+
+# Existing read models are explicit so the browser consumes generated OpenAPI types.
+class RunPage(BaseModel):
+    items: list[RunSummary]
+    has_more: bool
+    next_cursor: str | None
+
+
+class RunDetail(RunSummary):
+    event_cursor: int
+    project_id: str | None
+    base_branch: str | None
+    created_at: str | None
+    max_fix_attempts: int | None
+    questions: list[str]
+    error: str | None
+
+
+class DashboardView(BaseModel):
+    counts_by_state: dict[State, int]
+    project_count: int
+
+
+class BranchPage(BaseModel):
+    items: list[str]
+
+
+class SpecView(BaseModel):
+    id: str
+    sha256: str
+    bytes: int
+
+
+class SpecContent(BaseModel):
+    text: str
+    additional_instructions: str
+
+
+class PreviewView(BaseModel):
+    run_id: str
+    branch: str
+    base_sha: str
+    project_version: int
+    proposal_hash: str
+    expires: int
+    preview_token: str
+    spec_sha256: str
+
+
+class StepView(BaseModel):
+    id: int
+    run_id: str
+    role: str
+    iteration: int
+    attempt: int
+    input_sha: str
+    output_sha: str | None
+    status: str
+
+
+class StepPage(BaseModel):
+    items: list[StepView]
+
+
+class EventEnvelope(BaseModel):
+    schema_version: Literal[1] = 1
+    id: int
+    run_id: str
+    kind: str
+    occurred_at: str
+    data: dict[str, Any]
+
+
+class EventPage(BaseModel):
+    items: list[EventEnvelope]
+    next_cursor: int
+    has_more: bool
+
+
+class LogPage(EventPage):
+    schema_version: Literal[2] = 2
+
+
+class ReportView(BaseModel):
+    markdown: str
+
+
+class ControlResult(BaseModel):
+    state: State
+
+
+class ResumeView(BaseModel):
+    run_id: str
+    job_id: str
+    status: Literal["queued"]
