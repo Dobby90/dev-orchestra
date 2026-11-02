@@ -1,6 +1,5 @@
 """Codex exec adapter. Fresh read-only sessions return validated patches."""
 
-import subprocess
 from pathlib import Path
 
 from dev_orchestra.domain.models import AgentRequest, AgentResult, PipelineError
@@ -23,13 +22,22 @@ class CodexClient:
     def __init__(self, config):
         self.config = config
 
-    def check(self):
-        p = subprocess.run([self.config.command, "exec", "--help"], capture_output=True, text=True)
-        if p.returncode or any(
-            flag not in p.stdout
-            for flag in ["--output-schema", "--ephemeral", "--ignore-user-config", "--json"]
-        ):
-            raise PipelineError("Codex CLI is unavailable or lacks required exec capabilities")
+    def check(self, stop=lambda: None):
+        import tempfile
+
+        with tempfile.TemporaryDirectory(prefix="devorchestra-check-") as temp:
+            rc, output = execute(
+                [self.config.command, "exec", "--help"],
+                Path(temp),
+                self.config.timeout_seconds,
+                Path(temp) / "check.log",
+                stop=stop,
+            )
+            if rc or any(
+                flag not in output
+                for flag in ["--output-schema", "--ephemeral", "--ignore-user-config", "--json"]
+            ):
+                raise PipelineError("Codex CLI is unavailable or lacks required exec capabilities")
 
     def run(self, request: AgentRequest, directory: Path, stop=lambda: None):
         from dev_orchestra.agents.prompts import prompt
@@ -71,6 +79,19 @@ class CodexClient:
         if not result.exists():
             raise PipelineError("Codex returned no final JSON")
         try:
-            return AgentResult.model_validate_json(result.read_text())
+            import json
+
+            raw = json.loads(result.read_text())
+            required = set(AgentResult.model_fields)
+            if not isinstance(raw, dict) or set(raw) != required:
+                raise ValueError("incomplete role response")
+            validated = AgentResult.model_validate(raw, strict=True)
+            from dev_orchestra.infrastructure.process import sanitize
+
+            write(result, sanitize(validated.model_dump()))
+            return validated
         except (ValueError, OSError) as error:
+            from dev_orchestra.infrastructure.process import redact
+
+            write(result, redact(result.read_text()))
             raise PipelineError("invalid Codex result schema") from error

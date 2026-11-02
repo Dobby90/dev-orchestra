@@ -87,7 +87,12 @@ class Config(Model):
 
 
 def load_config(path: Path | None = None) -> Config:
-    config = Config.model_validate(yaml.safe_load(path.read_text()) or {}) if path else Config()
+    from dev_orchestra.domain.models import PipelineError
+
+    try:
+        config = Config.model_validate(yaml.safe_load(path.read_text()) or {}) if path else Config()
+    except yaml.YAMLError as error:
+        raise PipelineError("설정 YAML 구문이 올바르지 않습니다") from error
     root = path.resolve().parent if path else Path.cwd()
     for name in Config.model_fields["storage"].annotation.model_fields:
         value = getattr(config.storage, name).expanduser()

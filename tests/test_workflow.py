@@ -164,6 +164,7 @@ def test_tampered_evidence_blocks_approval(service):
 
 def test_crashed_active_run_can_resume_when_lock_is_free(service):
     svc, run_id, _ = service
+    svc.store.update(run_id, "planning")
     svc.store.update(run_id, "developing")
     svc.resume(run_id)
     Runner(svc.store, FakeAgent(), FakeTests()).execute(run_id)

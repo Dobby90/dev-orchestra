@@ -12,6 +12,26 @@ class Git:
         self.exclusions = [f":(exclude){p}" for p in ignore]
 
     def call(self, *args, input=None):
+        # Git clean/smudge/process drivers execute outside agent sandboxes.
+        config = subprocess.run(
+            [
+                "git",
+                "-C",
+                str(self.repo),
+                "config",
+                "--get-regexp",
+                r"^filter\..*\.(clean|smudge|process|driver)$",
+            ],
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+        if config.returncode == 0 and config.stdout.strip():
+            raise PipelineError(
+                "repository executable filters require an explicit isolation policy"
+            )
+        if config.returncode not in (0, 1):
+            raise PipelineError("cannot inspect repository filter policy")
         proc = subprocess.run(
             [
                 "git",
@@ -28,6 +48,7 @@ class Git:
             input=input,
             capture_output=True,
             text=True,
+            timeout=30,
         )
         if proc.returncode:
             raise PipelineError(f"git {args[0]} failed: {proc.stderr.strip()}")

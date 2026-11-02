@@ -64,6 +64,12 @@ def parse_junit(path):
             for c in cases
             if c.find("failure") is not None or c.find("error") is not None
         ]
+        # Global setup/tool errors may exist only on suite attributes.
+        for suite in root.iter():
+            if suite.tag in {"testsuite", "testsuites"}:
+                declared = int(suite.attrib.get("errors", 0)) + int(suite.attrib.get("failures", 0))
+                if declared > len(failures):
+                    raise ValueError("suite failure counts disagree with testcase evidence")
         skipped = sum(c.find("skipped") is not None for c in cases)
         if skipped == len(cases):
             raise ValueError("all tests skipped")
@@ -80,11 +86,11 @@ def parse_junit(path):
 class TestRunner:
     __test__ = False
 
-    def check(self, worktree):
+    def check(self, worktree, stop=lambda: None):
         with tempfile.TemporaryDirectory(prefix="devorchestra-probe-") as temp:
             scratch = Path(temp).resolve()
             argv = sandbox_command(worktree, [], scratch, ["/usr/bin/true"])
-            rc, _ = execute(argv, worktree, 10, scratch / "probe.log")
+            rc, _ = execute(argv, worktree, 10, scratch / "probe.log", stop=stop)
             if rc:
                 raise PipelineError("OS sandbox unavailable; refusing model calls and tests")
 

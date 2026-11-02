@@ -17,8 +17,6 @@ def main():
     config = Config.model_validate(store.get(run_id)["config"])
     client = CodexClient(config.codex)
     try:
-        client.check()
-        TestRunner().check(Path(store.get(run_id)["repo"]))
         Runner(store, client, TestRunner()).execute(run_id)
     except OwnershipError:
         raise SystemExit(2)
@@ -26,6 +24,7 @@ def main():
         from dev_orchestra.infrastructure.process import redact
 
         store.update(run_id, "failed", error=redact(str(error)))
+        Runner(store, None, None).report(run_id)
         raise SystemExit(1)
 
 

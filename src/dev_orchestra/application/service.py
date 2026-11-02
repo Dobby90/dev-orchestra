@@ -8,6 +8,7 @@ from pathlib import Path
 
 from dev_orchestra.config import Config
 from dev_orchestra.domain.models import PipelineError
+from dev_orchestra.infrastructure.evidence import checkpoints, verified_candidate
 from dev_orchestra.infrastructure.files import digest, write
 from dev_orchestra.infrastructure.git import Git
 from dev_orchestra.infrastructure.locking import lock
@@ -93,6 +94,7 @@ class RunService:
                     except ProcessLookupError:
                         continue
                     raise PipelineError("orphan process still alive; inspect before resuming")
+            checkpoints(self.store, run)
             self.store.interrupt_steps(run_id, "previous worker exited before checkpoint")
             changes = {}
             if answers:
@@ -126,6 +128,7 @@ class RunService:
     def approve(self, run_id):
         run = self.store.get(run_id)
         with lock(Path(run["directory"]) / "execution.lock"):
+            run = self.store.get(run_id)
             git = Git(
                 Path(run["worktree"]), Config.model_validate(run["config"]).tests.output_paths
             )
@@ -139,14 +142,20 @@ class RunService:
                 )
             if run.get("next_role") != "done" or not run["test_result"]["execution"]["passed"]:
                 raise PipelineError("missing successful validation evidence")
-            for step in self.store.steps(run_id):
-                if step["status"] == "completed":
-                    artifact = Path(step["data"]["artifact"])
-                    if digest(artifact.read_bytes()) != step["data"]["hash"]:
-                        raise PipelineError("approval evidence was modified")
+            sha = git.sha()
+            verified_candidate(self.store, run, sha)
+            if git.sha() != sha or git.dirty():
+                raise PipelineError("candidate changed during approval")
             self.store.approve(
-                run_id, git.sha(), digest(json.dumps(run["test_result"], sort_keys=True).encode())
+                run_id, sha, digest(json.dumps(run["test_result"], sort_keys=True).encode())
             )
+
+        self.refresh_report(run_id)
+
+    def refresh_report(self, run_id):
+        from dev_orchestra.orchestration.runner import Runner
+
+        Runner(self.store, None, None).report(run_id)
 
     def cleanup(self, run_id):
         run = self.store.get(run_id)
@@ -158,21 +167,30 @@ class RunService:
 
     def status(self, run_id):
         run = self.store.get(run_id)
-        if run["state"] == "completed" and Path(run["worktree"]).exists():
-            git = Git(
-                Path(run["worktree"]), Config.model_validate(run["config"]).tests.output_paths
-            )
-            if git.sha() != run.get("final_sha") or git.dirty():
+        if run["state"] == "completed":
+            branch_sha = Git(Path(run["repo"])).call("rev-parse", "refs/heads/" + run["branch"])
+            dirty = False
+            if Path(run["worktree"]).exists():
+                dirty = bool(
+                    Git(
+                        Path(run["worktree"]),
+                        Config.model_validate(run["config"]).tests.output_paths,
+                    ).dirty()
+                )
+            if branch_sha != run.get("final_sha") or dirty:
                 self.store.update(
                     run_id,
                     "needs_input",
                     error="approved result changed; historical approval retained",
+                    expected_version=run["version"],
                 )
+                self.refresh_report(run_id)
                 run = self.store.get(run_id)
         return run
 
     def report(self, run_id):
         run = self.store.get(run_id)
+        self.refresh_report(run_id)
         path = Path(run["directory"]) / "final-report.md"
         if not path.exists():
             raise PipelineError("report is not available yet")
@@ -186,3 +204,43 @@ class RunService:
         if role is None and (directory / "workflow.log").exists():
             paths.insert(0, directory / "workflow.log")
         return [p for p in paths if role is None or p.parent.parent.name == role]
+
+    def log_chunks(self, run_id, cursor=None, role=None, limit=65536):
+        """Replay durable file logs using per-attempt paths and byte offsets."""
+        if not 1 <= limit <= 1048576:
+            raise PipelineError("invalid log chunk limit")
+        run = self.store.get(run_id)
+        root = Path(run["directory"])
+        cursor = dict(cursor or {})
+        chunks = []
+        for path in self.log_paths(run_id, role):
+            key = str(path.relative_to(root))
+            offset = cursor.get(key, 0)
+            if not isinstance(offset, int) or offset < 0 or offset > path.stat().st_size:
+                raise PipelineError("invalid log cursor")
+            with path.open("rb") as handle:
+                handle.seek(offset)
+                data = handle.read(limit)
+                # Finish a UTF-8 code point so byte cursors never lose Korean text.
+                if data:
+                    import codecs
+
+                    decoder = codecs.getincrementaldecoder("utf-8")("replace")
+                    decoder.decode(data, final=False)
+                    while decoder.getstate()[0]:
+                        extra = handle.read(1)
+                        if not extra:
+                            break
+                        data += extra
+                        decoder.decode(extra, final=False)
+            if data:
+                chunks.append(
+                    {
+                        "run_id": run_id,
+                        "log_id": key,
+                        "offset": offset,
+                        "text": data.decode("utf-8", errors="replace"),
+                    }
+                )
+                cursor[key] = offset + len(data)
+        return {"schema_version": 1, "chunks": chunks, "cursor": cursor}

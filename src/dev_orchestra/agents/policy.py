@@ -50,6 +50,8 @@ def apply_patch(worktree: Path, patch: str, role: str, test_paths: list[str]):
             if path.name.startswith(".env") or path.suffix in {".pem", ".key"}:
                 raise PipelineError("secret file patch denied")
             is_test = in_paths(name, test_paths)
+            if role == "tester" and is_test and path.exists():
+                raise PipelineError("existing tests are immutable; create new test files")
             if role == "tester" and not is_test:
                 raise PipelineError("test agent attempted production change")
             if role in {"developer", "fixer"} and is_test and path.exists():

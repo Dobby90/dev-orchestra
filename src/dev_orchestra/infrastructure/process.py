@@ -16,9 +16,13 @@ from dev_orchestra.infrastructure.files import write
 
 
 def redact(text):
+    text = re.sub(r"(?i)\bBearer\s+[A-Za-z0-9._~+/-]+=*", "Bearer [REDACTED]", text)
     text = re.sub(
-        r"(?i)(api[_-]?key|token|password|secret)([\s:=]+)[^\s,\"']+", r"\1\2[REDACTED]", text
+        r'(?i)(["\']?(?:api[_-]?key|token|password|secret|authorization)["\']?\s*[:=]\s*)(?:"[^"\n]*"|\'[^\'\n]*\'|[^\s,}]+)',
+        r'\1"[REDACTED]"',
+        text,
     )
+    text = re.sub(r"(?i)\bBearer\s+[A-Za-z0-9._~+/-]+=*", "Bearer [REDACTED]", text)
     return re.sub(r"\b(?:sk-|github_pat_|ghp_)[A-Za-z0-9_-]+", "[REDACTED]", text)
 
 
@@ -87,6 +91,10 @@ def execute(argv, cwd: Path, timeout, log: Path, stdin=None, stop=lambda: None, 
                 if pending:
                     emit(pending)
             process.wait(timeout=max(0.1, deadline - time.monotonic()))
+            try:
+                os.killpg(process.pid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
             return process.returncode, "".join(collected)
         except BaseException:
             # Descendants retain the process group even if the leader already exited.
@@ -98,7 +106,27 @@ def execute(argv, cwd: Path, timeout, log: Path, stdin=None, stop=lambda: None, 
                 process.wait()
             except ProcessLookupError:
                 pass
+            # A reaped leader does not imply that its group is empty.
+            try:
+                os.killpg(process.pid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
             raise
         finally:
             process.stdout.close()
             write(marker, {"pid": process.pid, "finished": True})
+
+
+def sanitize(value):
+    if isinstance(value, str):
+        return redact(value)
+    if isinstance(value, list):
+        return [sanitize(item) for item in value]
+    if isinstance(value, dict):
+        return {
+            key: "[REDACTED]"
+            if key.lower() in {"token", "password", "secret", "authorization", "api_key"}
+            else sanitize(item)
+            for key, item in value.items()
+        }
+    return value

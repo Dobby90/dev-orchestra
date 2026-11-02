@@ -7,6 +7,7 @@ from pathlib import Path
 from dev_orchestra.agents.policy import apply_patch
 from dev_orchestra.config import Config
 from dev_orchestra.domain.models import AgentRequest, PipelineError, StopRequested
+from dev_orchestra.infrastructure.evidence import checkpoints, verified_candidate
 from dev_orchestra.infrastructure.files import contained, digest, write
 from dev_orchestra.infrastructure.git import Git
 from dev_orchestra.infrastructure.locking import lock
@@ -35,21 +36,37 @@ class Runner:
     def execute(self, run_id):
         run = self.store.get(run_id)
         directory = Path(run["directory"])
-        if run["state"] in {"completed", "cancelled", "waiting_approval", "needs_input", "paused"}:
-            return
-        with (
-            lock(directory / "execution.lock"),
-            lock(self.store.path.with_suffix(".worker.lock"), wait=True),
-            lock(Git(Path(run["repo"])).common() / "devorchestra.lock", wait=True),
-        ):
+        with lock(directory / "execution.lock"):
+            run = self.store.get(run_id)
+            if run["state"] in {
+                "completed",
+                "cancelled",
+                "waiting_approval",
+                "needs_input",
+                "paused",
+            }:
+                return
             logger = logging.getLogger(f"devorchestra.{run_id}")
             logger.setLevel(logging.INFO)
             logger.propagate = False
             handler = logging.FileHandler(directory / "workflow.log")
-            handler.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(message)s"))
             logger.addHandler(handler)
+
+            def stop():
+                return self.store.get(run_id)["control"]
+
             try:
-                self._execute(run_id)
+                with (
+                    lock(self.store.path.with_suffix(".worker.lock"), wait=True, stop=stop),
+                    lock(
+                        Git(Path(run["repo"])).common() / "devorchestra.lock", wait=True, stop=stop
+                    ),
+                ):
+                    if hasattr(self.agent, "check"):
+                        self.agent.check(stop=stop)
+                    if hasattr(self.tests, "check"):
+                        self.tests.check(Path(run["repo"]), stop=stop)
+                    self._execute(run_id)
             except StopRequested as error:
                 self.store.update(run_id, "cancelled" if str(error) == "cancel" else "paused")
             except Exception as error:
@@ -57,7 +74,6 @@ class Runner:
             finally:
                 self.store.interrupt_steps(run_id, "stage interrupted before completion")
                 self.report(run_id)
-                logger.info("Run stopped in state %s", self.store.get(run_id)["state"])
                 logger.removeHandler(handler)
                 handler.close()
 
@@ -66,6 +82,7 @@ class Runner:
         if run["control"]:
             raise StopRequested(run["control"])
         config = Config.model_validate(run["config"])
+        checkpoints(self.store, run)
         directory, worktree = Path(run["directory"]), Path(run["worktree"])
         original = Git(Path(run["repo"]))
         # Each repository mutation has an intent in the run record before it is attempted.
@@ -97,9 +114,14 @@ class Runner:
             iteration = run.get("iteration", 0)
             role = run.get("next_role", "planner")
             if role == "done":
+                candidate = git.sha()
+                verified_candidate(self.store, run, candidate)
                 self.store.update(run_id, "reporting")
                 self.report(run_id)
-                self.store.update(run_id, "waiting_approval", final_sha=git.sha())
+                if git.dirty() or git.sha() != candidate:
+                    raise PipelineError("candidate changed after verification")
+                verified_candidate(self.store, self.store.get(run_id), candidate)
+                self.store.update(run_id, "waiting_approval", final_sha=candidate)
                 return
             sha = git.sha()
             logging.getLogger(f"devorchestra.{run_id}").info(
@@ -171,9 +193,7 @@ class Runner:
                         if not issue.evidence.strip():
                             raise PipelineError("review finding requires evidence")
                 apply_patch(worktree, result.patch, role, config.tests.write_paths)
-                out_sha = git.commit(
-                    f"DevOrchestra {run_id} {role} iteration {iteration} step {step_id}"
-                )
+                out_sha = git.commit(f"자동 개발: {run_id} {role} 회차 {iteration} 단계 {step_id}")
                 self.store.update(run_id, current_sha=out_sha)
                 payload = result.model_dump() | {"sha": out_sha}
                 if role == "tester":
@@ -193,6 +213,9 @@ class Runner:
                         raise PipelineError(
                             "test execution modified tracked source or created untracked files"
                         )
+                from dev_orchestra.infrastructure.process import sanitize
+
+                payload = sanitize(payload)
                 artifact = step_dir / "result.json"
                 checksum = write(artifact, payload)
                 write(directory / FILES[role], payload)
@@ -284,5 +307,6 @@ class Runner:
             except PipelineError:
                 pass
         content += "\n\n## Remaining risks\n\nReview findings and missing/failed verification above remain actionable. Automatic review cannot prove absence of defects.\n\nHuman approval is required; no push or merge is performed.\n"
+        content = redact(content)
         write(Path(run["directory"]) / "metadata.json", summary)
         write(Path(run["directory"]) / "final-report.md", content)
