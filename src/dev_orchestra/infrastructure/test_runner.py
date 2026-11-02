@@ -53,6 +53,14 @@ def parse_junit(path):
 class TestRunner:
     __test__ = False
 
+    def check(self, worktree):
+        with tempfile.TemporaryDirectory(prefix="devorchestra-probe-") as temp:
+            scratch = Path(temp).resolve()
+            argv = sandbox_command(worktree, [], scratch, ["/usr/bin/true"])
+            rc, _ = execute(argv, worktree, 10, scratch / "probe.log")
+            if rc:
+                raise PipelineError("OS sandbox unavailable; refusing model calls and tests")
+
     def run(self, worktree, config, directory, stop=lambda: None):
         if not config.commands:
             raise PipelineError("configure at least one allowlisted test command")

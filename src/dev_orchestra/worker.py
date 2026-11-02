@@ -15,6 +15,7 @@ def main():
     client = CodexClient(config.codex)
     try:
         client.check()
+        TestRunner().check(Path(store.get(run_id)["repo"]))
         Runner(store, client, TestRunner()).execute(run_id)
     except Exception as error:
         from dev_orchestra.infrastructure.process import redact

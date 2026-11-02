@@ -113,3 +113,26 @@ class RunService:
             if run["state"] not in {"completed", "cancelled", "failed", "needs_input"}:
                 raise PipelineError("active run cannot be cleaned up")
             Git(Path(run["repo"])).remove(Path(run["worktree"]))
+
+    def status(self, run_id):
+        run = self.store.get(run_id)
+        if run["state"] == "completed" and Path(run["worktree"]).exists():
+            git = Git(Path(run["worktree"]), Config.model_validate(run["config"]).tests.output_paths)
+            if git.sha() != run.get("final_sha") or git.dirty():
+                self.store.update(run_id, "needs_input", error="approved result changed; historical approval retained")
+                run = self.store.get(run_id)
+        return run
+
+    def report(self, run_id):
+        run = self.store.get(run_id)
+        path = Path(run["directory"]) / "final-report.md"
+        if not path.exists():
+            raise PipelineError("report is not available yet")
+        return path.read_text()
+
+    def log_paths(self, run_id, role=None):
+        if role is not None and role not in {"planner", "developer", "tester", "reviewer", "fixer"}:
+            raise PipelineError("invalid role filter")
+        directory = Path(self.store.get(run_id)["directory"])
+        paths = sorted(directory.glob("iterations/*/*/*/*.log"))
+        return [p for p in paths if role is None or p.parent.parent.name == role]
