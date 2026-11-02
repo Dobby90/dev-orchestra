@@ -1,29 +1,31 @@
-# CLI MVP implementation record
+# CLI MVP 구현 계획 및 기록
 
-The CLI requirements and reviewed chat design govern implementation. GUI is deferred.
+CLI 요구사항과 대화에서 검토한 설계를 기준으로 구현합니다. GUI 구현은 이후 단계로 미룹니다.
 
-## Architecture
+## 아키텍처
 
-One Python package (`src/dev_orchestra`) contains domain models, application services,
-orchestration, agents and infrastructure. Typer is an adapter only. Future React lives
-under `apps/web`; future FastAPI calls the same application services.
+하나의 Python 패키지인 `src/dev_orchestra`에 도메인 모델, 애플리케이션 서비스, 오케스트레이션, 에이전트, 인프라 구현을 배치합니다. Typer는 공통 서비스를 호출하는 CLI 어댑터로만 사용합니다. 향후 React는 `apps/web`에 추가하고, FastAPI는 CLI와 동일한 애플리케이션 서비스를 호출합니다.
 
-Host-owned commits, immutable PRD/config snapshots, SHA-bound validation and approvals,
-test-only patch application, independent read-only review, bounded fixes and SQLite
-checkpoints are the core invariants. No workflow push or merge commands are provided.
+다음 원칙을 유지합니다.
 
-## Phases and gates
+- Git 커밋은 호스트 프로그램이 관리합니다.
+- 실행 당시 PRD와 설정을 변경되지 않는 스냅샷으로 보존합니다.
+- 검증 결과와 사용자 승인을 커밋 SHA에 연결합니다.
+- Test Agent의 패치는 허용된 테스트 경로에만 적용합니다.
+- 코드 리뷰는 독립적인 읽기 전용 세션에서 수행합니다.
+- 자동 수정 횟수에 상한을 적용합니다.
+- SQLite 체크포인트를 기반으로 실행 상태를 보존합니다.
+- 워크플로에는 대상 프로젝트를 Push하거나 Merge하는 명령을 제공하지 않습니다.
 
-1. Bootstrap: isolated Python >=3.11, dependency lock, package smoke test.
-2. Engine: strict config, SQLite ownership, worktree isolation, process timeouts,
-   Codex capability checks and artifact persistence; unit tests.
-3. Agents: typed outputs, test patch path restrictions, independent read-only review;
-   protocol and malicious patch tests.
-4. Orchestrator: fixed baseline, bounded fix loop, durable checkpoints, cancellation,
-   evidence-bound approval; mocked workflow integration tests.
-5. CLI: required eight commands plus operational helpers; Typer integration tests.
-6. Verification: temporary Git repos, restart/failure/security scenarios, documentation,
-   opt-in real Codex E2E only after user authorization for model usage.
+## 단계별 구현 범위와 완료 조건
 
-Each completed phase is tested, committed and pushed. Real model calls are not part
-of routine tests. Security guarantees must be distinguished from mocked verification.
+| 단계 | 구현 범위 | 완료 조건 |
+|---|---|---|
+| 1. 초기 구성 | 모노레포와 프로젝트용 Python 환경 구성 | Python 3.11 이상 격리 환경, 의존성 잠금 파일, 패키지 기본 동작 테스트 확인 |
+| 2. 핵심 엔진 | 엄격한 설정 검증, SQLite 상태·실행 소유권 관리, Worktree 격리, 프로세스 타임아웃, Codex 기능 확인, 산출물 저장 | 핵심 기능 단위 테스트 통과 |
+| 3. 에이전트 | 타입이 정의된 출력, 테스트 패치 경로 제한, 독립적인 읽기 전용 리뷰 | 에이전트 입출력 규약 및 악의적인 패치 차단 테스트 통과 |
+| 4. Orchestrator | 고정된 기준 커밋, 수정 횟수 제한, 영속 체크포인트, 취소, 검증 근거에 연결된 승인 | Mock 에이전트를 사용한 워크플로 통합 테스트 통과 |
+| 5. CLI | 필수 명령 8개와 운영 보조 명령 | Typer 기반 CLI 통합 테스트 통과 |
+| 6. 최종 검증 | 임시 Git 저장소, 재시작·실패·보안 시나리오, 문서화, 실제 Codex E2E | 시나리오 검증 완료. 실제 모델 호출은 사용자의 모델 사용 승인 이후에만 수행 |
+
+각 단계가 완료되면 테스트를 실행하고 커밋·Push합니다. 실제 모델 호출은 일반 테스트에 포함하지 않습니다. Mock으로 확인한 동작과 실제 환경에서 검증한 보안 통제의 범위를 구분해 기록합니다.

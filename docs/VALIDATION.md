@@ -1,54 +1,48 @@
-# CLI MVP verification — 2026-11-02
+# CLI MVP 검증 기록 — 2026-11-02
 
-## Phase results
+## 단계별 결과
 
-| Phase | Scope | Result at phase checkpoint |
+| 단계 | 검증 범위 | 해당 단계 완료 시점의 결과 |
 |---|---|---|
-| 1 | Python/monorepo/bootstrap/lock | 1 test passed; project runtime Python 3.12.16 |
-| 2 | Config, SQLite, Git, processes, Codex adapter | 9 tests passed |
-| 3 | Role agents, guarded patches, JUnit and sandbox runner | 14 tests passed |
-| 4 | Workflow, bounded fixes, checkpoint resume, approval | 20 tests passed |
-| 5 | CLI and service adapter | 22 tests passed |
-| 6 | Expanded failure/security checks, real E2E, packaging | 38 tests passed including actual macOS sandbox test |
+| 1 | Python 환경, 모노레포 초기 구성, 의존성 잠금 | 테스트 1개 통과. 프로젝트 런타임 Python 3.12.16 |
+| 2 | 설정, SQLite, Git, 프로세스, Codex 어댑터 | 테스트 9개 통과 |
+| 3 | 역할별 에이전트, 패치 검증, JUnit, 샌드박스 실행기 | 테스트 14개 통과 |
+| 4 | 워크플로, 수정 한도, 체크포인트 재개, 승인 | 테스트 20개 통과 |
+| 5 | CLI와 공통 서비스 연결 | 테스트 22개 통과 |
+| 6 | 실패·보안 시나리오 보강, 실제 E2E, 패키징 | 실제 macOS 샌드박스 검증을 포함해 테스트 38개 통과 |
 
-Final commands:
+최종 검증에 사용한 명령과 결과는 다음과 같습니다.
 
-- `DEVORCHESTRA_TEST_SANDBOX=1 .venv/bin/python -m pytest -q`: **38 passed**.
-- `.venv/bin/ruff check src tests scripts`: passed.
-- `.venv/bin/ruff format --check src tests scripts`: passed, 24 files.
-- `.tools/uv build --offline`: wheel and source distribution built.
-- `devorchestra doctor`: Codex exec capability and native macOS sandbox checks passed.
+- `DEVORCHESTRA_TEST_SANDBOX=1 .venv/bin/python -m pytest -q`: **38개 통과**.
+- `.venv/bin/ruff check src tests scripts`: 통과.
+- `.venv/bin/ruff format --check src tests scripts`: 파일 24개 확인, 통과.
+- `.tools/uv build --offline`: wheel과 소스 배포 패키지 빌드 성공.
+- `devorchestra doctor`: Codex 비대화형 실행 기능과 실제 macOS 샌드박스 검사 통과.
 
-## Actual model E2E
+## 실제 모델 E2E
 
-User authorized real Codex usage. A temporary repository with a minimal calculator PRD
-was used. Planning, development, test generation and independent review used actual
-Codex CLI 0.165.0 sessions. Test execution used the native macOS sandbox and actual pytest.
+사용자에게 실제 Codex 사용 승인을 받은 후, 간단한 계산기 PRD와 임시 저장소로 검증했습니다. 기획, 개발, 테스트 생성, 독립적인 리뷰에 실제 Codex CLI 0.165.0 세션을 사용했습니다. 테스트는 실제 macOS 샌드박스에서 pytest로 실행했습니다.
 
-Observed final evidence:
+최종 확인 결과는 다음과 같습니다.
 
-- State `completed` after SHA-bound human-approval operation.
-- 9 pytest cases, 0 failures, 0 skipped, exit code 0.
-- Review returned 0 findings.
-- One approval recorded for the verified commit.
-- Original repository checkout remained unchanged.
+- SHA에 연결된 사용자 승인 처리 후 상태가 `completed`로 전환됨.
+- pytest 테스트 9개 실행, 실패 0개, 건너뛰기 0개, 종료 코드 0.
+- 리뷰 지적사항 0건.
+- 검증된 커밋에 대한 승인 기록 1건 생성.
+- 원래 저장소의 작업 디렉터리 보존 확인.
 
-Initial failures exposed the `/var` canonical-path alias issue and malformed model diff
-headers/hunk counts. Both were fixed; completed planning was preserved and the run resumed.
-Diff normalization only adjusts section-header indentation and lets Git recount hunk sizes;
-path validation, Git's own numstat interpretation and apply checks remain enforced.
+초기 실행에서는 `/var` 경로 별칭의 정규화 처리와 모델이 생성한 Diff의 헤더·hunk 줄 수 오류가 발견됐습니다. 두 문제를 수정한 뒤 완료된 Planning 결과를 보존하고 실행을 재개했습니다.
 
-A full real-model fix loop was not forced. Bounded fix loops, test failure, review failure,
-budget exhaustion and resume scenarios were verified using mock agents and temporary Git
-repositories. Native Linux/bwrap and non-Python project toolchains were not exercised.
-See README safety limits; passing tests do not establish complete hostile-code isolation.
+Diff 정규화는 구간 헤더의 들여쓰기만 보정하고, hunk 크기는 Git이 다시 계산하도록 처리합니다. 파일 경로 검증, Git의 numstat 해석 결과 대조, 패치 적용 전 검사는 유지합니다.
 
-## Git publication
+실제 모델이 자동 수정 반복에 진입하도록 실패를 강제로 만들지는 않았습니다. 수정 횟수 제한, 테스트 실패, 리뷰 문제, 수정 예산 소진, 재개 시나리오는 Mock 에이전트와 임시 Git 저장소로 검증했습니다. Linux의 bwrap과 Python 이외 프로젝트의 도구 체인은 실행 검증하지 않았습니다.
 
-Phase commits are preserved locally. HTTPS Push attempts failed with repository write
-permission denial, then invalid credentials. Existing SSH authentication could not be used
-because the GitHub host key was absent; host verification was not bypassed. Publication
-was subsequently completed using user-provided authentication. All Phase 1–6 commits
-through `a5b071a` were pushed to `origin/main`, and the remote branch SHA was verified
-against local HEAD. No credentials are present in source, configuration examples,
-test fixtures or documentation; the temporary authentication cache was cleared.
+안전성의 제약은 [README](../README.md)의 안전성 및 현재 제약 항목을 참고하세요. 테스트 통과가 완전한 악성 코드 격리를 보장하지는 않습니다.
+
+## Git 원격 반영
+
+각 단계의 커밋을 로컬에 보존했습니다. 초기 HTTPS Push는 저장소 쓰기 권한 거절과 인증 정보 오류로 실패했습니다. 기존 SSH 인증도 GitHub 호스트 키가 없어 사용할 수 없었으며, 호스트 검증을 우회하지 않았습니다.
+
+이후 사용자가 제공한 인증으로 원격 반영을 완료했습니다. `a5b071a`까지의 1~6단계 커밋 전체를 `origin/main`에 Push하고, 원격 브랜치 SHA와 로컬 HEAD가 일치하는지 확인했습니다.
+
+인증 정보는 소스, 설정 예제, 테스트 데이터, 문서에 포함하지 않았습니다. 사용한 임시 인증 캐시는 삭제했습니다.
