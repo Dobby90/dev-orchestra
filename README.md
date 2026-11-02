@@ -228,7 +228,7 @@ UV_CACHE_DIR="$PWD/.uv-cache" .tools/uv build --offline
 
 ## GUI MVP 최종 검증 — Phase 6
 
-현재 출고 판정은 **CONDITIONAL**입니다. Python164개·React23개·실제 Codex의 Fix/V2 재검증과 패키지 검사는 통과했으나, 최신 정적 GUI 교차 E2E에 원인 미확정 시간 초과가 남아 있습니다. 동일한 최종 E2E 전체 통과 전에는 GUI MVP 출고 완료로 간주하지 않습니다.
+현재 출고 판정은 **READY**입니다. macOS·단일 사용자·신뢰하는 로컬 프로젝트·Chromium 범위에서 Python164개·React23개·실제 Codex의 Fix/V2 재검증·패키지 검사와 최종 개발 서버/정적 GUI E2E 각3개가 통과했습니다. 이전 브라우저 시간 초과 기록은 보존하며, 사용자가 확인한 절전·잠금·세션 중단 이후 연속 관측한 재검증에서 제품 코드·단언·시간 제한 변경 없이 통과했습니다. 강제 절전/OS 중단 뒤의 모든 복구를 검증했다는 뜻은 아닙니다.
 
 공통 서비스·API·SQLite 큐·독립 Worker·SSE·React·CLI 통합에 대한 회귀와 브라우저 검사를 제공합니다. 웹 관리 프로세스가 강제 종료되면 비공개 파이프의 연결 종료로 자신이 시작한 API·Dispatcher가 종료됩니다. 실행 중 Run Worker와 재사용한 외부 Dispatcher는 유지합니다. 시작 중 종료·중복 시작·포트 충돌도 기존 프로세스를 임의로 종료하지 않습니다. 웹 로그와 비공개 설정 파일은 0600으로 저장합니다.
 
@@ -260,3 +260,5 @@ wheel을 설치한 독립 환경 두 개를 준비했다면 다음 검사기로 
 ```
 
 배포 의존성 감사는 0건이고, 개발 전용 타입 생성기의 Moderate 3건과 TestClient의 httpx 전환 경고는 남아 있습니다. 장시간 메모리/부하·Linux bwrap·Firefox/WebKit·OS 재부팅/디스크 고장 검증은 완료로 간주하지 않습니다. 악성 저장소에 대한 완전한 호스트 읽기 격리, 원격/다중 사용자 운용은 지원 범위에 포함하지 않습니다. 상세 결과는 로컬 [Phase 6 검증 기록](docs/gui-phase6-results.md)과 [GUI MVP 최종 판정](docs/gui-mvp-readiness-report.md)에 보존합니다.
+
+장시간 무인 검사는 컴퓨터가 실행 가능한 상태를 유지해야 합니다. macOS에서 검사를 실행하는 동안만 유휴 절전을 방지하려면 `/usr/bin/caffeinate -i env E2E_BUNDLED=1 PLAYWRIGHT_BROWSERS_PATH=/private/tmp/devorchestra-pw-browsers npm run test:e2e --workspace apps/web`을 사용할 수 있습니다. 영구 전원 설정은 변경하지 않으며 명시적 절전·잠금·세션 중단 전체를 방지하는 기능은 아닙니다.
