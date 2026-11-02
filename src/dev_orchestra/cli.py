@@ -57,7 +57,7 @@ def run(
     typer.echo(run_id)
     service.start(run_id, detached=detach)
     if not detach:
-        result = service.store.get(run_id)
+        result = service.queries.get(run_id)
         typer.echo(json.dumps(result, ensure_ascii=False, indent=2))
         if result["state"] in {"failed", "needs_input", "cancelled"}:
             raise typer.Exit(2)
@@ -72,7 +72,7 @@ def status(ctx: typer.Context, run_id: str):
 @app.command("list")
 @guarded
 def list_runs(ctx: typer.Context):
-    typer.echo(json.dumps(ctx.obj.store.list(), ensure_ascii=False, indent=2))
+    typer.echo(json.dumps(ctx.obj.queries.list(), ensure_ascii=False, indent=2))
 
 
 @app.command()
@@ -86,7 +86,7 @@ def resume(
 ):
     ctx.obj.resume(run_id, answers, max_fix_attempts)
     ctx.obj.start(run_id, detached=detach)
-    result = ctx.obj.store.get(run_id)
+    result = ctx.obj.queries.get(run_id)
     typer.echo(json.dumps(result, ensure_ascii=False, indent=2))
     if not detach and result["state"] in {"failed", "needs_input"}:
         raise typer.Exit(2)
@@ -131,14 +131,18 @@ def report(ctx: typer.Context, run_id: str):
 def logs(ctx: typer.Context, run_id: str, follow: bool = False, role: str | None = None):
     positions = {}
     while True:
-        for path in ctx.obj.log_paths(run_id, role):
-            with path.open() as handle:
-                handle.seek(positions.get(path, 0))
-                text = handle.read()
-                positions[path] = handle.tell()
-            if text:
-                typer.echo(f"[{path.name}]\n{text}", nl=False)
-        state = ctx.obj.store.get(run_id)["state"]
+        page = ctx.obj.log_chunks(run_id, positions, role)
+        positions = page["cursor"]
+        for chunk in page["chunks"]:
+            typer.echo(f"[{Path(chunk['log_id']).name}]\n{chunk['text']}", nl=False)
+        state = ctx.obj.queries.get(run_id)["state"]
+        # Drain all persisted chunks before ending a one-shot/terminal read.
+        if page["chunks"] and (
+            not follow
+            or state
+            in {"waiting_approval", "completed", "failed", "cancelled", "paused", "needs_input"}
+        ):
+            continue
         if not follow or state in {
             "waiting_approval",
             "completed",

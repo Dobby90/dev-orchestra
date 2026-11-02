@@ -4,6 +4,10 @@ Codex CLI를 활용해 기획, 개발, 테스트 작성·실행, 독립적인 �
 
 이 저장소는 모노레포로 관리합니다. 공통 Python 백엔드는 `src/dev_orchestra`에 있으며, 향후 React 앱은 `apps/web`에 추가할 예정입니다. 현재 FastAPI와 React는 구현하지 않았습니다.
 
+GUI 개발 Phase 1에서는 공통 Application Service 계층을 분리했습니다. 기존 `RunService` 인터페이스는 유지하며, `queries`는 DB 조회, `recovery`는 명시적 상태 조정, `approvals`는 검증된 후보 승인, `execution`은 독립 Worker 시작, `events`는 저장 로그와 이벤트 조회를 담당합니다. `ProjectService`는 허용 경로·Git 저장소·테스트/리뷰 정책을 검증합니다. 프로젝트 등록 저장과 DB 확장, HTTP API, 작업 큐, SSE, React는 이후 승인된 Phase에서 구현합니다.
+
+공통 서비스는 FastAPI나 Typer에 의존하지 않습니다. `queries.summary()`는 PRD·설정·서버 디렉터리를 제외한 타입이 있는 요약을 반환하고, 기존 CLI 출력에 필요한 내부 전체 조회는 별도로 유지합니다. `status()`의 기존 복구 동작은 유지되며, 읽기 전용 조회는 복구나 보고서 생성을 수행하지 않습니다.
+
 ## 설치
 
 Git, Python 3.11 이상, Codex CLI, OS 샌드박스가 필요합니다. Codex CLI 0.166.0에서 명령 호환성과 OS 샌드박스를 검증했습니다. macOS에서는 Seatbelt를 사용하고, Linux에서는 `bwrap`이 필요합니다. 현재 MVP는 Windows를 지원하지 않습니다.

@@ -1,21 +1,22 @@
 """Shared application service; independent of Typer and future HTTP adapters."""
 
-import json
-import subprocess
-import sys
 import uuid
 from pathlib import Path
 
-import psutil
-
+from dev_orchestra.application.approvals import ApprovalService
+from dev_orchestra.application.contracts import CreateRun
+from dev_orchestra.application.events import EventService
+from dev_orchestra.application.execution import ExecutionService
+from dev_orchestra.application.queries import RunQueryService
+from dev_orchestra.application.recovery import RecoveryService
 from dev_orchestra.config import Config
 from dev_orchestra.domain.models import PipelineError
-from dev_orchestra.infrastructure.evidence import checkpoints, verified_candidate
+from dev_orchestra.infrastructure.evidence import checkpoints
 from dev_orchestra.infrastructure.files import digest, write
 from dev_orchestra.infrastructure.git import Git
 from dev_orchestra.infrastructure.locking import OwnershipError, lock
 from dev_orchestra.infrastructure.process import execution_scope
-from dev_orchestra.infrastructure.process_owner import alive, ensure_stopped, identity
+from dev_orchestra.infrastructure.process_owner import ensure_stopped
 from dev_orchestra.infrastructure.store import Store, now
 
 
@@ -23,8 +24,18 @@ class RunService:
     def __init__(self, config: Config):
         self.config = config
         self.store = Store(config.storage.database)
+        self.queries = RunQueryService(self.store)
+        self.events = EventService(self.store)
+        self.approvals = ApprovalService(self.store, self.refresh_report)
+        self.recovery = RecoveryService(self.store, self.refresh_report)
+        self.execution = ExecutionService(self.store, self.status)
 
     def create(self, repo: Path, spec: Path, base=None, max_fixes=None):
+        command = CreateRun(repo=repo, spec=spec, base=base, max_fixes=max_fixes)
+        return self.create_run(command)
+
+    def create_run(self, command: CreateRun):
+        repo, spec, base, max_fixes = command.repo, command.spec, command.base, command.max_fixes
         config = self.config.model_copy(deep=True)
         if max_fixes is not None:
             config.workflow.max_fix_attempts = max_fixes
@@ -68,25 +79,7 @@ class RunService:
         return run_id
 
     def start(self, run_id, detached=False):
-        args = [sys.executable, "-m", "dev_orchestra.worker", str(self.store.path), run_id]
-        directory = Path(self.store.get(run_id)["directory"])
-        with (directory / "worker.log").open("a") as output:
-            process = subprocess.Popen(
-                args, stdout=output, stderr=subprocess.STDOUT, start_new_session=True
-            )
-        try:
-            launch = identity(process.pid)
-        except psutil.NoSuchProcess:
-            launch = {"pid": process.pid, "create_time": None}
-        write(directory / "launch.json", launch)
-        if not detached:
-            try:
-                process.wait()
-            except KeyboardInterrupt:
-                self.store.control(run_id, "pause")
-                process.wait()
-            self.status(run_id)
-        return process.pid
+        return self.execution.start(run_id, detached)
 
     def resume(self, run_id, answers=None, max_fixes=None):
         run = self.store.get(run_id)
@@ -135,31 +128,7 @@ class RunService:
             pass  # The live Worker acknowledges only after guardian cleanup.
 
     def approve(self, run_id):
-        run = self.store.get(run_id)
-        with lock(Path(run["directory"]) / "execution.lock"):
-            run = self.store.get(run_id)
-            git = Git(
-                Path(run["worktree"]), Config.model_validate(run["config"]).tests.output_paths
-            )
-            if (
-                run["state"] != "waiting_approval"
-                or git.dirty()
-                or git.sha() != run.get("final_sha")
-            ):
-                raise PipelineError(
-                    "approval requires unchanged verified HEAD and a clean worktree"
-                )
-            if run.get("next_role") != "done" or not run["test_result"]["execution"]["passed"]:
-                raise PipelineError("missing successful validation evidence")
-            sha = git.sha()
-            verified_candidate(self.store, run, sha)
-            if git.sha() != sha or git.dirty():
-                raise PipelineError("candidate changed during approval")
-            self.store.approve(
-                run_id, sha, digest(json.dumps(run["test_result"], sort_keys=True).encode())
-            )
-
-        self.refresh_report(run_id)
+        return self.approvals.approve(run_id)
 
     def refresh_report(self, run_id):
         from dev_orchestra.orchestration.runner import Runner
@@ -177,98 +146,13 @@ class RunService:
             Git(Path(run["repo"])).remove(Path(run["worktree"]))
 
     def _finish_idle_control(self, run):
-        if not run["control"] or run["state"] in {"completed", "cancelled"}:
-            return run
-        if run["control"] == "pause" and run["state"] == "paused":
-            return run
-        directory = Path(run["directory"])
-        try:
-            with lock(directory / "execution.lock"):
-                run = self.store.get(run["id"])
-                if not run["control"] or run["state"] in {"completed", "cancelled"}:
-                    return run
-                try:
-                    ensure_stopped(directory)
-                except PipelineError as error:
-                    if run.get("error") != str(error):
-                        self.store.update(run["id"], "needs_input", error=str(error))
-                else:
-                    self.store.interrupt_steps(run["id"], "idle control acknowledged")
-                    self.store.update(
-                        run["id"], "cancelled" if run["control"] == "cancel" else "paused"
-                    )
-                self.refresh_report(run["id"])
-                return self.store.get(run["id"])
-        except OwnershipError:
-            return self.store.get(run["id"])
+        return self.recovery._finish_idle_control(run)
 
     def _reconcile_worker(self, run):
-        active = {
-            "queued",
-            "preparing",
-            "planning",
-            "developing",
-            "testing",
-            "reviewing",
-            "fixing",
-            "reporting",
-        }
-        if run["state"] not in active:
-            return run
-        directory = Path(run["directory"])
-        try:
-            with lock(directory / "execution.lock"):
-                run = self.store.get(run["id"])
-                if run["state"] not in active:
-                    return run
-                launch_path, worker_path = directory / "launch.json", directory / "worker.json"
-                launch = json.loads(launch_path.read_text()) if launch_path.exists() else None
-                worker = json.loads(worker_path.read_text()) if worker_path.exists() else None
-                if (
-                    launch
-                    and alive(launch)
-                    and (
-                        not worker
-                        or any(launch.get(k) != worker.get(k) for k in ["pid", "create_time"])
-                    )
-                ):
-                    return run  # The newly spawned Worker has not claimed the run yet.
-                if not launch and not worker and run["state"] == "queued":
-                    return run  # A run may be created without starting it immediately.
-                self.store.interrupt_steps(run["id"], "Worker ownership lost")
-                self.store.update(
-                    run["id"],
-                    "failed",
-                    expected_version=run["version"],
-                    error="Worker ownership lost; inspect or resume the preserved checkpoint",
-                )
-                self.refresh_report(run["id"])
-                return self.store.get(run["id"])
-        except OwnershipError:
-            return self.store.get(run["id"])
+        return self.recovery._reconcile_worker(run)
 
     def status(self, run_id):
-        run = self._reconcile_worker(self._finish_idle_control(self.store.get(run_id)))
-        if run["state"] == "completed":
-            branch_sha = Git(Path(run["repo"])).call("rev-parse", "refs/heads/" + run["branch"])
-            dirty = False
-            if Path(run["worktree"]).exists():
-                dirty = bool(
-                    Git(
-                        Path(run["worktree"]),
-                        Config.model_validate(run["config"]).tests.output_paths,
-                    ).dirty()
-                )
-            if branch_sha != run.get("final_sha") or dirty:
-                self.store.update(
-                    run_id,
-                    "needs_input",
-                    error="approved result changed; historical approval retained",
-                    expected_version=run["version"],
-                )
-                self.refresh_report(run_id)
-                run = self.store.get(run_id)
-        return run
+        return self.recovery.status(run_id)
 
     def report(self, run_id):
         run = self.store.get(run_id)
@@ -279,50 +163,7 @@ class RunService:
         return path.read_text()
 
     def log_paths(self, run_id, role=None):
-        if role is not None and role not in {"planner", "developer", "tester", "reviewer", "fixer"}:
-            raise PipelineError("invalid role filter")
-        directory = Path(self.store.get(run_id)["directory"])
-        paths = sorted(directory.glob("iterations/*/*/*/*.log"))
-        if role is None and (directory / "workflow.log").exists():
-            paths.insert(0, directory / "workflow.log")
-        return [p for p in paths if role is None or p.parent.parent.name == role]
+        return self.events.log_paths(run_id, role)
 
     def log_chunks(self, run_id, cursor=None, role=None, limit=65536):
-        """Replay durable file logs using per-attempt paths and byte offsets."""
-        if not 1 <= limit <= 1048576:
-            raise PipelineError("invalid log chunk limit")
-        run = self.store.get(run_id)
-        root = Path(run["directory"])
-        cursor = dict(cursor or {})
-        chunks = []
-        for path in self.log_paths(run_id, role):
-            key = str(path.relative_to(root))
-            offset = cursor.get(key, 0)
-            if not isinstance(offset, int) or offset < 0 or offset > path.stat().st_size:
-                raise PipelineError("invalid log cursor")
-            with path.open("rb") as handle:
-                handle.seek(offset)
-                data = handle.read(limit)
-                # Finish a UTF-8 code point so byte cursors never lose Korean text.
-                if data:
-                    import codecs
-
-                    decoder = codecs.getincrementaldecoder("utf-8")("replace")
-                    decoder.decode(data, final=False)
-                    while decoder.getstate()[0]:
-                        extra = handle.read(1)
-                        if not extra:
-                            break
-                        data += extra
-                        decoder.decode(extra, final=False)
-            if data:
-                chunks.append(
-                    {
-                        "run_id": run_id,
-                        "log_id": key,
-                        "offset": offset,
-                        "text": data.decode("utf-8", errors="replace"),
-                    }
-                )
-                cursor[key] = offset + len(data)
-        return {"schema_version": 1, "chunks": chunks, "cursor": cursor}
+        return self.events.log_chunks(run_id, cursor, role, limit)
