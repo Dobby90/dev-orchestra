@@ -3,12 +3,13 @@
 import platform
 import shutil
 import tempfile
+import uuid
 import xml.etree.ElementTree as ET
 from pathlib import Path
 
 from dev_orchestra.domain.models import PipelineError
 from dev_orchestra.infrastructure.files import contained
-from dev_orchestra.infrastructure.process import environment, execute
+from dev_orchestra.infrastructure.process import environment, execute, execution_directory
 
 
 def sandbox_command(worktree, outputs, scratch, argv):
@@ -90,7 +91,17 @@ class TestRunner:
         with tempfile.TemporaryDirectory(prefix="devorchestra-probe-") as temp:
             scratch = Path(temp).resolve()
             argv = sandbox_command(worktree, [], scratch, ["/usr/bin/true"])
-            rc, _ = execute(argv, worktree, 10, scratch / "probe.log", stop=stop)
+            rc, _ = execute(
+                argv,
+                worktree,
+                10,
+                (
+                    execution_directory() / "preflight" / (uuid.uuid4().hex + "-sandbox.log")
+                    if execution_directory()
+                    else scratch / "probe.log"
+                ),
+                stop=stop,
+            )
             if rc:
                 raise PipelineError("OS sandbox unavailable; refusing model calls and tests")
 

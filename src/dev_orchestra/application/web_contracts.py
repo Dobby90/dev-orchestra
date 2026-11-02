@@ -95,7 +95,7 @@ class SubmissionView(BaseModel):
     job_id: str
     operation_id: str
     status: Literal["queued"]
-    queued_reason: Literal["dispatcher_offline"]
+    queued_reason: Literal["dispatcher_offline", "waiting_capacity"]
     run_version: int
 
 
@@ -103,3 +103,8 @@ class SessionView(BaseModel):
     authenticated: Literal[True] = True
     expires_at: datetime
     csrf_token: str
+
+
+class ResumeInput(Input):
+    answers_text: str | None = Field(default=None, max_length=65536)
+    new_max_fix_attempts: int | None = Field(default=None, gt=0, le=20, strict=True)

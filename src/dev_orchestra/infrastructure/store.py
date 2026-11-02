@@ -32,7 +32,7 @@ class Store:
             ).fetchone()
             if exists:
                 versions = [r[0] for r in db.execute("SELECT version FROM schema_version")]
-                if versions == [3]:
+                if versions in ([3], [4]):
                     return
                 if versions not in ([1], [2]):
                     raise PipelineError("unsupported database schema version")

@@ -85,7 +85,12 @@ class RunService:
     def start(self, run_id, detached=False):
         return self.execution.start(run_id, detached)
 
-    def resume(self, run_id, answers=None, max_fixes=None):
+    def resume(self, run_id, answers=None, max_fixes=None, *, expected_version=None):
+        from dev_orchestra.application.queue import QueueService
+
+        queue = QueueService(self.store)
+        if queue.enabled():
+            queue.recover()
         run = self.store.get(run_id)
         with lock(Path(run["directory"]) / "execution.lock"):
             run = self.store.get(run_id)
@@ -109,14 +114,26 @@ class RunService:
                 raise PipelineError(
                     "explicitly increase max-fix-attempts to resume an exhausted run"
                 )
-            self.store.control(run_id, None)
-            self.store.update(run_id, "queued", error=None, **changes)
+            with self.store.transaction() as db:
+                self.store.control(
+                    run_id,
+                    None,
+                    expected_version if expected_version is not None else run["version"],
+                )
+                self.store.update(run_id, "queued", error=None, **changes)
+                if queue.enabled():
+                    queue.enqueue(run_id, connection=db)
 
     def cancel(self, run_id, pause=False, *, expected_version=None):
         run = self.store.get(run_id)
         if run["state"] in {"completed", "cancelled"}:
             raise PipelineError("terminal run cannot be cancelled/paused")
-        self.store.control(run_id, "pause" if pause else "cancel", expected_version)
+        with self.store.transaction() as db:
+            self.store.control(run_id, "pause" if pause else "cancel", expected_version)
+            if db.execute("SELECT 1 FROM sqlite_master WHERE name='jobs'").fetchone():
+                db.execute(
+                    "UPDATE jobs SET state='cancelled' WHERE run_id=? AND state='queued'", (run_id,)
+                )
         try:
             with lock(Path(run["directory"]) / "execution.lock"):
                 try:

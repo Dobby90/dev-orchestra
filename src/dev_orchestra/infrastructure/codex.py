@@ -1,10 +1,11 @@
 """Codex exec adapter. Fresh read-only sessions return validated patches."""
 
+import uuid
 from pathlib import Path
 
 from dev_orchestra.domain.models import AgentRequest, AgentResult, PipelineError
 from dev_orchestra.infrastructure.files import write
-from dev_orchestra.infrastructure.process import execute
+from dev_orchestra.infrastructure.process import execute, execution_directory
 
 
 def strict_schema(value):
@@ -30,7 +31,11 @@ class CodexClient:
                 [self.config.command, "exec", "--help"],
                 Path(temp),
                 self.config.timeout_seconds,
-                Path(temp) / "check.log",
+                (
+                    execution_directory() / "preflight" / (uuid.uuid4().hex + "-codex.log")
+                    if execution_directory()
+                    else Path(temp) / "check.log"
+                ),
                 stop=stop,
             )
             if rc or any(

@@ -35,7 +35,7 @@ class Runner:
     def __init__(self, store, agent, tests):
         self.store, self.agent, self.tests = store, agent, tests
 
-    def execute(self, run_id):
+    def execute(self, run_id, claim=None):
         run = self.store.get(run_id)
         directory = Path(run["directory"])
         with lock(directory / "execution.lock"), execution_scope(directory):
@@ -48,12 +48,17 @@ class Runner:
                 "paused",
             }:
                 return
+            if claim:
+                from dev_orchestra.application.queue import QueueService
+
+                QueueService(self.store).enter(*claim, run_id=run_id)
             worker = identity(os.getpid()) | {"finished": False}
             write(directory / "worker.json", worker)
             logger = logging.getLogger(f"devorchestra.{run_id}")
             logger.setLevel(logging.INFO)
             logger.propagate = False
             handler = logging.FileHandler(directory / "workflow.log")
+            handler.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(message)s"))
             logger.addHandler(handler)
 
             def stop():
@@ -67,6 +72,11 @@ class Runner:
                     ),
                 ):
                     ensure_stopped(directory)
+                    if claim:
+                        from dev_orchestra.application.queue import QueueService
+
+                        QueueService(self.store).running(*claim)
+                        self.validate_registered_repository(run)
                     if hasattr(self.agent, "check"):
                         self.agent.check(stop=stop)
                     if hasattr(self.tests, "check"):
@@ -91,6 +101,25 @@ class Runner:
                 logger.removeHandler(handler)
                 handler.close()
                 write(directory / "worker.json", worker | {"finished": True})
+
+    def validate_registered_repository(self, run):
+        with self.store.connection() as db:
+            project = db.execute(
+                "SELECT p.* FROM projects p JOIN runs r ON r.project_id=p.id WHERE r.id=?",
+                (run["id"],),
+            ).fetchone()
+        if project:
+            from dev_orchestra.application.projects import ProjectService
+
+            info = ProjectService([Path(project["repository_path"]).parent]).validate_repository(
+                Path(project["repository_path"]), run["base"]
+            )
+            stat = info.git_common_directory.stat()
+            if run["repo"] != str(info.repository_path) or json.loads(project["identity"]) != {
+                "device": stat.st_dev,
+                "inode": stat.st_ino,
+            }:
+                raise PipelineError("registered repository identity changed")
 
     def _execute(self, run_id):
         run = self.store.get(run_id)

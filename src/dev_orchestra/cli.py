@@ -181,7 +181,7 @@ def web_session(ctx: typer.Context):
     from dev_orchestra.api.security import bootstrap
 
     with ctx.obj.store.connection() as db:
-        if db.execute("SELECT version FROM schema_version").fetchone()[0] != 3:
+        if db.execute("SELECT version FROM schema_version").fetchone()[0] != 4:
             raise PipelineError("run database-upgrade first")
     typer.echo(bootstrap(ctx.obj.store))
 
@@ -205,3 +205,68 @@ def api_start(
         port=port,
         proxy_headers=False,
     )
+
+
+worker_app = typer.Typer(help="Independent local queue Dispatcher")
+app.add_typer(worker_app, name="worker")
+
+
+@worker_app.command("start")
+@guarded
+def worker_start(ctx: typer.Context, detach: bool = False):
+    from dev_orchestra.application.queue import QueueService
+
+    queue = QueueService(ctx.obj.store)
+    if not queue.enabled():
+        raise PipelineError("run database-upgrade first")
+    if queue.dispatcher_status()["alive"]:
+        raise PipelineError("Dispatcher is already running")
+    if not detach:
+        from dev_orchestra.execution.dispatcher import Dispatcher
+
+        Dispatcher(ctx.obj.store).run()
+        return
+    import subprocess
+    import sys
+
+    output_path = ctx.obj.store.path.with_suffix(".dispatcher.log")
+    with output_path.open("a") as output:
+        child = subprocess.Popen(
+            [sys.executable, "-m", "dev_orchestra.execution.dispatcher", str(ctx.obj.store.path)],
+            stdout=output,
+            stderr=subprocess.STDOUT,
+            start_new_session=True,
+        )
+    deadline = time.monotonic() + 10
+    while time.monotonic() < deadline:
+        state = queue.dispatcher_status()
+        if state["alive"]:
+            typer.echo(json.dumps(state))
+            return
+        if child.poll() is not None:
+            raise PipelineError("Dispatcher failed to start; inspect its local log")
+        time.sleep(0.05)
+    raise PipelineError("Dispatcher startup not confirmed; inspect worker status")
+
+
+@worker_app.command("status")
+@guarded
+def worker_status(ctx: typer.Context):
+    from dev_orchestra.application.queue import QueueService
+
+    queue = QueueService(ctx.obj.store)
+    if not queue.enabled():
+        raise PipelineError("run database-upgrade first")
+    typer.echo(json.dumps(queue.dispatcher_status()))
+
+
+@worker_app.command("stop")
+@guarded
+def worker_stop(ctx: typer.Context):
+    from dev_orchestra.application.queue import QueueService
+
+    if not QueueService(ctx.obj.store).enabled():
+        raise PipelineError("run database-upgrade first")
+    with ctx.obj.store.connection() as db:
+        db.execute("UPDATE dispatchers SET stop_requested=1 WHERE slot=1")
+    typer.echo("Dispatcher stop requested; active Workers continue")

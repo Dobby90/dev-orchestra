@@ -1,6 +1,8 @@
 """Private process entrypoint; a future worker command can reuse the runner."""
 
+import json
 import sys
+from contextlib import nullcontext
 from pathlib import Path
 
 from dev_orchestra.config import Config
@@ -16,8 +18,20 @@ def execute():
     run_id = sys.argv[2]
     config = Config.model_validate(store.get(run_id)["config"])
     client = CodexClient(config.codex)
+    claim = None
+    if len(sys.argv) > 3:
+        from dev_orchestra.application.monitor import WorkerMonitor
+        from dev_orchestra.application.queue import QueueService
+
+        token = json.loads(sys.stdin.read())["token"]
+        claim = (sys.argv[3], token)
+        queue = QueueService(store)
+        monitor = WorkerMonitor(queue, *claim, run_id)
+    else:
+        monitor = nullcontext()
     try:
-        Runner(store, client, TestRunner()).execute(run_id)
+        with monitor:
+            Runner(store, client, TestRunner()).execute(run_id, claim=claim)
     except OwnershipError:
         raise SystemExit(2)
     except Exception as error:
@@ -26,6 +40,9 @@ def execute():
         store.update(run_id, "failed", error=redact(str(error)))
         Runner(store, None, None).report(run_id)
         raise SystemExit(1)
+    finally:
+        if claim:
+            queue.finish(*claim)
 
 
 def main():

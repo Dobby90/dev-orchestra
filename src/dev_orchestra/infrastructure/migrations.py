@@ -11,6 +11,8 @@ from dev_orchestra.domain.models import PipelineError
 from dev_orchestra.infrastructure.files import write
 from dev_orchestra.infrastructure.locking import lock
 from dev_orchestra.infrastructure.process_owner import alive, markers
+from dev_orchestra.infrastructure.schema4 import CURRENT_SCHEMA
+from dev_orchestra.infrastructure.schema4 import SCHEMA as SCHEMA4
 
 SCHEMA = """
 CREATE TABLE projects (
@@ -50,10 +52,10 @@ def upgrade(path: Path):
         db = sqlite3.connect(path, timeout=10)
         try:
             version = db.execute("SELECT version FROM schema_version").fetchall()
-            if version == [(3,)]:
+            if version == [(CURRENT_SCHEMA,)]:
                 return None
-            if version != [(2,)]:
-                raise PipelineError("upgrade requires initialized schema 2")
+            if version not in ([(2,)], [(3,)]):
+                raise PipelineError("upgrade requires initialized schema 2 or 3")
             for (raw,) in db.execute("SELECT data FROM runs"):
                 directory = Path(json.loads(raw).get("directory", path.parent / "missing"))
                 locks.enter_context(lock(directory / "execution.lock"))
@@ -78,7 +80,7 @@ def upgrade(path: Path):
             write(
                 backup.with_suffix(".manifest.json"),
                 {
-                    "source_schema": 2,
+                    "source_schema": version[0][0],
                     "backup": backup.name,
                     "counts": counts,
                     "step_evidence_references": references,
@@ -91,12 +93,12 @@ def upgrade(path: Path):
                     os.chmod(sidecar, 0o600)
             db.execute("PRAGMA foreign_keys=ON")
             db.execute("BEGIN IMMEDIATE")
-            for statement in SCHEMA.split(";"):
+            for statement in ((SCHEMA if version == [(2,)] else "") + SCHEMA4).split(";"):
                 if statement.strip():
                     db.execute(statement)
             if db.execute("PRAGMA foreign_key_check").fetchall():
                 raise PipelineError("foreign key check failed")
-            db.execute("UPDATE schema_version SET version=3")
+            db.execute("UPDATE schema_version SET version=?", (CURRENT_SCHEMA,))
             db.commit()
             return backup
         except BaseException:

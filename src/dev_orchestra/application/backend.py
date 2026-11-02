@@ -284,13 +284,16 @@ class BackendService:
         op = identifier("op")
         job = identifier("job")
         sid = identifier("spec")
+        from dev_orchestra.application.queue import QueueService
+
+        online = QueueService(self.store).dispatcher_status()["alive"]
         result = {
             "schema_version": 1,
             "run_id": data["id"],
             "job_id": job,
             "operation_id": op,
             "status": "queued",
-            "queued_reason": "dispatcher_offline",
+            "queued_reason": "waiting_capacity" if online else "dispatcher_offline",
             "run_version": 0,
         }
         with self.store.transaction() as db:

@@ -41,6 +41,20 @@ class RecoveryService:
             return self.store.get(run["id"])
 
     def _reconcile_worker(self, run):
+        with self.store.connection() as db:
+            queued_execution = db.execute("SELECT version FROM schema_version").fetchone()[0] == 4
+        if queued_execution:
+            from dev_orchestra.application.queue import QueueService
+
+            QueueService(self.store).recover()
+            run = self.store.get(run["id"])
+            with self.store.connection() as db:
+                if db.execute(
+                    "SELECT 1 FROM jobs WHERE run_id=? AND state IN ('queued','claimed','running')",
+                    (run["id"],),
+                ).fetchone():
+                    # Durable job ownership supersedes a previous attempt's launch marker.
+                    return run
         active = {
             "queued",
             "preparing",

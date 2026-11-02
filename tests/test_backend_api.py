@@ -57,7 +57,7 @@ def test_migration_preserves_backup_and_cli(web):
     reopened = Store(svc.store.path)
     assert reopened.get(rid) == svc.store.get(rid)
     with reopened.connection() as db:
-        assert db.execute("SELECT version FROM schema_version").fetchone()[0] == 3
+        assert db.execute("SELECT version FROM schema_version").fetchone()[0] == 4
         assert db.execute("PRAGMA integrity_check").fetchone()[0] == "ok"
         assert not db.execute("PRAGMA foreign_key_check").fetchall()
     assert upgrade(svc.store.path) is None

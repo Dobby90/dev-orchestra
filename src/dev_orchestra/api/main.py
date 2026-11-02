@@ -2,7 +2,6 @@
 
 import hmac
 import ipaddress
-import json
 import os
 import re
 import sqlite3
@@ -27,6 +26,7 @@ from dev_orchestra.application.web_contracts import (
     ProjectView,
     Proposal,
     Reason,
+    ResumeInput,
     RunCreate,
     SessionCreate,
     SessionView,
@@ -47,7 +47,7 @@ def create_app(config=None, allowed_roots=None, port=8000):
     if new:
         upgrade(runs.store.path)
     with runs.store.connection() as db:
-        if db.execute("SELECT version FROM schema_version").fetchone()[0] != 3:
+        if db.execute("SELECT version FROM schema_version").fetchone()[0] != 4:
             raise PipelineError("run devorchestra database-upgrade before starting API")
     roots = (
         allowed_roots
@@ -172,7 +172,11 @@ def create_app(config=None, allowed_roots=None, port=8000):
                     parts.append(chunk)
                 request._body = b"".join(parts)
         response = await call_next(request)
-        response.headers["Cache-Control"] = "no-store"
+        response.headers["Cache-Control"] = (
+            "no-cache, no-transform"
+            if response.headers.get("content-type", "").startswith("text/event-stream")
+            else "no-store"
+        )
         response.headers["X-Content-Type-Options"] = "nosniff"
         response.headers["Referrer-Policy"] = "no-referrer"
         response.headers["Content-Security-Policy"] = "default-src 'self'; frame-ancestors 'none'"
@@ -338,6 +342,26 @@ def create_app(config=None, allowed_roots=None, port=8000):
             )
         return {"state": runs.queries.get(rid)["state"]}
 
+    @app.post("/api/runs/{rid}/resume", status_code=202)
+    def resume(rid: str, request: Request, body: ResumeInput):
+        run = check_run(request, rid)
+        if run["state"] not in {"failed", "paused", "needs_input"}:
+            raise ApplicationError("INVALID_STATE", "run is not resumable")
+        import tempfile
+
+        with tempfile.TemporaryDirectory(prefix="devorchestra-answers-") as temp:
+            answers = Path(temp) / "answers.md" if body.answers_text is not None else None
+            if answers:
+                answers.write_text(body.answers_text)
+            runs.resume(
+                rid, answers, body.new_max_fix_attempts, expected_version=version(request, rid)
+            )
+        with runs.store.connection() as db:
+            job = db.execute(
+                "SELECT id FROM jobs WHERE run_id=? ORDER BY rowid DESC LIMIT 1", (rid,)
+            ).fetchone()
+        return {"run_id": rid, "job_id": job["id"], "status": "queued"}
+
     @app.post("/api/runs/{rid}/approve")
     def approve(rid: str, request: Request, body: ApprovalInput):
         check_run(request, rid)
@@ -361,12 +385,7 @@ def create_app(config=None, allowed_roots=None, port=8000):
 
     @app.get("/api/runs/{rid}/event-history")
     def events(rid: str, after: int = Query(0, ge=0), limit: int = Query(100, ge=1, le=200)):
-        page = runs.events.history(rid, after, limit)
-        for item in page["items"]:
-            item["data"] = sanitize(
-                {k: v for k, v in json.loads(item["data"]).items() if k != "artifact"}
-            )
-        return page
+        return runs.events.stream_page(rid, after, limit)
 
     @app.get("/api/runs/{rid}/spec")
     def run_spec(rid: str):
@@ -374,8 +393,22 @@ def create_app(config=None, allowed_roots=None, port=8000):
         return {"text": value["spec"], "additional_instructions": value.get("answers", "")}
 
     @app.get("/api/runs/{rid}/logs")
-    def logs(rid: str, role: str | None = None):
-        return sanitize(runs.events.log_chunks(rid, role=role))
+    def logs(
+        rid: str,
+        role: str | None = None,
+        after: int = Query(0, ge=0),
+        limit: int = Query(100, ge=1, le=200),
+    ):
+        if role is not None and role not in {"planner", "developer", "tester", "reviewer", "fixer"}:
+            raise HTTPException(422, "invalid role")
+        page = runs.events.stream_page(rid, after, limit)
+        page["items"] = [
+            e
+            for e in page["items"]
+            if e["kind"] in {"log.appended", "log.unavailable"}
+            and (role is None or e["data"].get("role") == role)
+        ]
+        return {"schema_version": 2, **page}
 
     @app.get("/api/runs/{rid}/report")
     def report(rid: str):
@@ -384,4 +417,7 @@ def create_app(config=None, allowed_roots=None, port=8000):
             raise HTTPException(404, "report not available")
         return {"markdown": sanitize(path.read_text())}
 
+    from dev_orchestra.api.stream import routes
+
+    app.include_router(routes(runs, security))
     return app

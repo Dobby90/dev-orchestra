@@ -73,3 +73,62 @@ class EventService:
                 )
                 cursor[key] = offset + len(data)
         return {"schema_version": 1, "chunks": chunks, "cursor": cursor}
+
+    def stream_page(self, run_id, after=0, limit=200, budget=65536):
+        import json
+
+        from dev_orchestra.infrastructure.log_index import LogIndexer
+        from dev_orchestra.infrastructure.process import sanitize
+
+        page = self.history(run_id, after, limit)
+        items = []
+        size = 0
+        aliases = {
+            "state": "state.changed",
+            "control_requested": "control.requested",
+            "step_started": "step.started",
+            "step_completed": "step.completed",
+            "approved": "approval.recorded",
+        }
+        for row in page["items"]:
+            kind = aliases.get(row["kind"], row["kind"])
+            data = json.loads(row["data"])
+            if kind == "log.appended":
+                try:
+                    data = LogIndexer(self.store).replay(run_id, row["id"])
+                except PipelineError:
+                    kind = "log.unavailable"
+                    data = {"reason": "log view missing or modified"}
+            else:
+                data = sanitize(
+                    {k: v for k, v in data.items() if k not in {"artifact", "claim_token", "token"}}
+                )
+            event = {
+                "schema_version": 1,
+                "id": row["id"],
+                "run_id": run_id,
+                "kind": kind,
+                "occurred_at": row["timestamp"],
+                "data": data,
+            }
+            length = len(json.dumps(event, ensure_ascii=False).encode())
+            if length > budget:
+                event = {
+                    **event,
+                    "kind": "event.unavailable",
+                    "data": {"reason": "event exceeds page budget"},
+                }
+                length = len(json.dumps(event).encode())
+            if size + length > budget:
+                break
+            items.append(event)
+            size += length
+        return {
+            "items": items,
+            "next_cursor": items[-1]["id"] if items else after,
+            "has_more": page["has_more"] or len(items) < len(page["items"]),
+        }
+
+    def high_water(self):
+        with self.store.connection() as db:
+            return db.execute("SELECT coalesce(max(id),0) FROM events").fetchone()[0]
