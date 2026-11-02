@@ -1,31 +1,49 @@
 """Offline test execution with read-only source and explicit output directories."""
-import os
+
 import platform
 import shutil
 import tempfile
 import xml.etree.ElementTree as ET
 from pathlib import Path
+
 from dev_orchestra.domain.models import PipelineError
 from dev_orchestra.infrastructure.files import contained
-from dev_orchestra.infrastructure.process import execute, environment
+from dev_orchestra.infrastructure.process import environment, execute
 
 
 def sandbox_command(worktree, outputs, scratch, argv):
     if platform.system() == "Darwin":
         # Seatbelt applies to every descendant, including repository test/build scripts.
         import json
-        sub = lambda p: "(subpath " + json.dumps(str(p.resolve())) + ")"
-        readable = [Path(p) for p in ["/System", "/Library", "/usr", "/bin", "/sbin", "/opt", "/dev", "/private/var/db", "/private/etc", "/etc"]]
-        readable += [worktree, scratch, Path(os.sys.executable).resolve().parent.parent]
-        profile = "(version 1)(deny default)(allow process*)(allow sysctl-read)(allow mach-lookup)"
-        profile += "(allow file-read* " + " ".join(sub(p) for p in readable) + ")"
-        profile += "(allow file-write* " + " ".join(sub(p) for p in [scratch, *outputs]) + " (literal \"/dev/null\"))"
+
+        def sub(p):
+            return "(subpath " + json.dumps(str(p.resolve())) + ")"
+
+        profile = "(version 1)(deny default)(allow process*)(allow sysctl-read)(allow mach-lookup)(allow file-read*)"
+        for name in [".ssh", ".aws", ".codex", ".config/gh", ".git-credentials"]:
+            profile += "(deny file-read* " + sub(Path.home() / name) + ")"
+        profile += (
+            "(allow file-write* "
+            + " ".join(sub(p) for p in [scratch, *outputs])
+            + ' (literal "/dev/null"))'
+        )
         for item in worktree.rglob("*"):
             if item.name.startswith(".env") or item.suffix in {".pem", ".key"}:
                 profile += "(deny file-read* " + sub(item) + ")"
         return ["/usr/bin/sandbox-exec", "-p", profile, *argv]
     if platform.system() == "Linux" and shutil.which("bwrap"):
-        command = ["bwrap", "--die-with-parent", "--unshare-net", "--ro-bind", "/", "/", "--dev", "/dev", "--proc", "/proc"]
+        command = [
+            "bwrap",
+            "--die-with-parent",
+            "--unshare-net",
+            "--ro-bind",
+            "/",
+            "/",
+            "--dev",
+            "/dev",
+            "--proc",
+            "/proc",
+        ]
         for p in [scratch, *outputs]:
             command += ["--bind", str(p), str(p)]
         return command + ["--chdir", str(worktree), "--", *argv]
@@ -41,11 +59,20 @@ def parse_junit(path):
         cases = list(root.iter("testcase"))
         if not cases:
             raise ValueError("no tests executed")
-        failures = [c.attrib.get("name", "unknown") for c in cases if c.find("failure") is not None or c.find("error") is not None]
+        failures = [
+            c.attrib.get("name", "unknown")
+            for c in cases
+            if c.find("failure") is not None or c.find("error") is not None
+        ]
         skipped = sum(c.find("skipped") is not None for c in cases)
         if skipped == len(cases):
             raise ValueError("all tests skipped")
-        return {"total": len(cases), "failed": len(failures), "skipped": skipped, "failures": failures}
+        return {
+            "total": len(cases),
+            "failed": len(failures),
+            "skipped": skipped,
+            "failures": failures,
+        }
     except (OSError, ET.ParseError, ValueError) as error:
         raise PipelineError(f"invalid or absent JUnit test evidence: {error}") from error
 
@@ -75,6 +102,7 @@ class TestRunner:
                 raise PipelineError("output path must be a directory")
             # Never grant write access to any tracked production/test file via output paths.
             from dev_orchestra.infrastructure.git import Git
+
             tracked = Git(worktree).call("ls-files").splitlines()
             if any((worktree / name).is_relative_to(p) for name in tracked for p in outputs):
                 raise PipelineError("output path contains tracked source files")
@@ -83,9 +111,29 @@ class TestRunner:
             report.unlink(missing_ok=True)
             with tempfile.TemporaryDirectory(prefix="devorchestra-test-") as temp:
                 scratch = Path(temp).resolve()
-                env = environment() | {"HOME": str(scratch), "TMPDIR": str(scratch), "TMP": str(scratch), "TEMP": str(scratch)}
+                env = environment() | {
+                    "HOME": str(scratch),
+                    "TMPDIR": str(scratch),
+                    "TMP": str(scratch),
+                    "TEMP": str(scratch),
+                }
                 argv = sandbox_command(worktree, outputs, scratch, command.argv)
-                rc, _ = execute(argv, worktree, command.timeout_seconds, directory / f"{command_id}.log", stop=stop, env=env)
+                rc, _ = execute(
+                    argv,
+                    worktree,
+                    command.timeout_seconds,
+                    directory / f"{command_id}.log",
+                    stop=stop,
+                    env=env,
+                )
             counts = parse_junit(report)
-            results.append({"command_id": command_id, "argv": command.argv, "exit_code": rc, **counts, "passed": rc == 0 and counts["failed"] == 0})
+            results.append(
+                {
+                    "command_id": command_id,
+                    "argv": command.argv,
+                    "exit_code": rc,
+                    **counts,
+                    "passed": rc == 0 and counts["failed"] == 0,
+                }
+            )
         return {"passed": all(r["passed"] for r in results), "commands": results}

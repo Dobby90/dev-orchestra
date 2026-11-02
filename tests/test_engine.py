@@ -1,6 +1,7 @@
 import sys
-from pathlib import Path
+
 import pytest
+
 from dev_orchestra.config import Config, load_config
 from dev_orchestra.domain.models import PipelineError
 from dev_orchestra.infrastructure.files import relative_path
@@ -38,5 +39,10 @@ def test_process(tmp_path):
     rc, out = execute([sys.executable, "-c", "print('hello')"], tmp_path, 5, tmp_path / "ok.log")
     assert rc == 0 and "hello" in out
     with pytest.raises(PipelineError, match="timeout"):
-        execute([sys.executable, "-c", "import time; time.sleep(10)"], tmp_path, .1, tmp_path / "timeout.log")
+        execute(
+            [sys.executable, "-c", "import time; time.sleep(10)"],
+            tmp_path,
+            0.1,
+            tmp_path / "timeout.log",
+        )
     assert "sk-abc123" not in redact("key sk-abc123 token=foo")

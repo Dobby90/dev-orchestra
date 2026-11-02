@@ -1,8 +1,11 @@
 """Strict YAML configuration, resolved once and snapshotted per run."""
+
 from pathlib import Path
 from typing import Literal
+
 import yaml
 from pydantic import Field, model_validator
+
 from dev_orchestra.domain.models import Model
 
 
@@ -26,7 +29,8 @@ class Workflow(Model):
 
 class Review(Model):
     blocking_severities: list[Literal["critical", "high", "medium", "low"]] = Field(
-        default_factory=lambda: ["critical", "high"])
+        default_factory=lambda: ["critical", "high"]
+    )
     include_test_files: Literal[True] = True
 
 
@@ -66,8 +70,13 @@ class Config(Model):
     @model_validator(mode="after")
     def validate_policy(self):
         from dev_orchestra.infrastructure.files import relative_path
+
         for path in self.tests.write_paths + self.tests.output_paths:
             relative_path(path)
+        import re
+
+        if any(not re.fullmatch(r"[A-Za-z0-9_-]+", key) for key in self.tests.commands):
+            raise ValueError("test command IDs must be safe identifiers")
         for command in self.tests.commands.values():
             relative_path(command.junit_report)
             if any(x in command.argv for x in ["--passWithNoTests", "--collect-only"]):

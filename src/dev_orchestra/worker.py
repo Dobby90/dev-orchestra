@@ -1,8 +1,11 @@
 """Private process entrypoint; a future worker command can reuse the runner."""
+
 import sys
 from pathlib import Path
+
 from dev_orchestra.config import Config
 from dev_orchestra.infrastructure.codex import CodexClient
+from dev_orchestra.infrastructure.locking import OwnershipError
 from dev_orchestra.infrastructure.store import Store
 from dev_orchestra.infrastructure.test_runner import TestRunner
 from dev_orchestra.orchestration.runner import Runner
@@ -17,8 +20,11 @@ def main():
         client.check()
         TestRunner().check(Path(store.get(run_id)["repo"]))
         Runner(store, client, TestRunner()).execute(run_id)
+    except OwnershipError:
+        raise SystemExit(2)
     except Exception as error:
         from dev_orchestra.infrastructure.process import redact
+
         store.update(run_id, "failed", error=redact(str(error)))
         raise SystemExit(1)
 

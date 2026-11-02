@@ -1,6 +1,8 @@
 """Transport-independent workflow contracts."""
+
 from enum import StrEnum
 from typing import Literal
+
 from pydantic import BaseModel, ConfigDict, Field
 
 

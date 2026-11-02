@@ -1,10 +1,13 @@
 """Typer adapter. All workflow decisions belong to shared services/runner."""
+
 import functools
 import json
-from pathlib import Path
 import time
+from pathlib import Path
+
 import typer
 from pydantic import ValidationError
+
 from dev_orchestra.application.service import RunService
 from dev_orchestra.config import load_config
 from dev_orchestra.domain.models import PipelineError
@@ -19,14 +22,20 @@ def guarded(function):
             return function(*args, **kwargs)
         except (PipelineError, ValidationError, OSError, ValueError) as error:
             from dev_orchestra.infrastructure.process import redact
+
             typer.echo(redact(str(error)), err=True)
             raise typer.Exit(1) from error
+
     return invoke
 
 
 @app.callback()
 @guarded
-def setup(ctx: typer.Context, config: Path | None = typer.Option(None, "--config"), database: Path | None = typer.Option(None, "--database")):
+def setup(
+    ctx: typer.Context,
+    config: Path | None = typer.Option(None, "--config"),
+    database: Path | None = typer.Option(None, "--database"),
+):
     settings = load_config(config)
     if database:
         settings.storage.database = database.expanduser().resolve()
@@ -35,7 +44,14 @@ def setup(ctx: typer.Context, config: Path | None = typer.Option(None, "--config
 
 @app.command()
 @guarded
-def run(ctx: typer.Context, repo: Path = typer.Option(...), spec: Path = typer.Option(...), base: str | None = None, max_fix_attempts: int | None = typer.Option(None, min=0), detach: bool = False):
+def run(
+    ctx: typer.Context,
+    repo: Path = typer.Option(...),
+    spec: Path = typer.Option(...),
+    base: str | None = None,
+    max_fix_attempts: int | None = typer.Option(None, min=0),
+    detach: bool = False,
+):
     service = ctx.obj
     run_id = service.create(repo, spec, base, max_fix_attempts)
     typer.echo(run_id)
@@ -61,7 +77,13 @@ def list_runs(ctx: typer.Context):
 
 @app.command()
 @guarded
-def resume(ctx: typer.Context, run_id: str, answers: Path | None = None, max_fix_attempts: int | None = typer.Option(None, min=0), detach: bool = False):
+def resume(
+    ctx: typer.Context,
+    run_id: str,
+    answers: Path | None = None,
+    max_fix_attempts: int | None = typer.Option(None, min=0),
+    detach: bool = False,
+):
     ctx.obj.resume(run_id, answers, max_fix_attempts)
     ctx.obj.start(run_id, detached=detach)
     result = ctx.obj.store.get(run_id)
@@ -117,9 +139,16 @@ def logs(ctx: typer.Context, run_id: str, follow: bool = False, role: str | None
             if text:
                 typer.echo(f"[{path.name}]\n{text}", nl=False)
         state = ctx.obj.store.get(run_id)["state"]
-        if not follow or state in {"waiting_approval", "completed", "failed", "cancelled", "paused", "needs_input"}:
+        if not follow or state in {
+            "waiting_approval",
+            "completed",
+            "failed",
+            "cancelled",
+            "paused",
+            "needs_input",
+        }:
             break
-        time.sleep(.3)
+        time.sleep(0.3)
 
 
 @app.command()
@@ -127,6 +156,7 @@ def logs(ctx: typer.Context, run_id: str, follow: bool = False, role: str | None
 def doctor(ctx: typer.Context):
     from dev_orchestra.infrastructure.codex import CodexClient
     from dev_orchestra.infrastructure.test_runner import TestRunner
+
     CodexClient(ctx.obj.config.codex).check()
     TestRunner().check(Path.cwd())
     typer.echo("Codex exec capabilities and OS test sandbox verified (no model call)")

@@ -1,6 +1,8 @@
 """Only host code mutates Git metadata; never changes the original checkout."""
+
 import subprocess
 from pathlib import Path
+
 from dev_orchestra.domain.models import PipelineError
 
 
@@ -10,7 +12,23 @@ class Git:
         self.exclusions = [f":(exclude){p}" for p in ignore]
 
     def call(self, *args, input=None):
-        proc = subprocess.run(["git", "-c", "core.hooksPath=/dev/null", "-c", "commit.gpgsign=false", "-c", "core.fsmonitor=false", "-C", str(self.repo), *args], input=input, capture_output=True, text=True)
+        proc = subprocess.run(
+            [
+                "git",
+                "-c",
+                "core.hooksPath=/dev/null",
+                "-c",
+                "commit.gpgsign=false",
+                "-c",
+                "core.fsmonitor=false",
+                "-C",
+                str(self.repo),
+                *args,
+            ],
+            input=input,
+            capture_output=True,
+            text=True,
+        )
         if proc.returncode:
             raise PipelineError(f"git {args[0]} failed: {proc.stderr.strip()}")
         return proc.stdout.strip()
@@ -31,7 +49,9 @@ class Git:
         self.call("worktree", "add", "-b", branch, str(path), sha)
 
     def dirty(self):
-        return self.call("status", "--porcelain", "--untracked-files=all", "--", ".", *self.exclusions)
+        return self.call(
+            "status", "--porcelain", "--untracked-files=all", "--", ".", *self.exclusions
+        )
 
     def commit(self, message):
         self.call("add", "--all", "--", ".", *self.exclusions)

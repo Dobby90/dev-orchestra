@@ -1,0 +1,34 @@
+project:
+  default_base_branch: main
+  branch_prefix: feature/ai
+codex:
+  command: codex
+  model: null
+  timeout_seconds: 1800
+  role_timeouts:
+    reviewer: 900
+workflow:
+  max_fix_attempts: 3
+  auto_commit: true
+  require_human_approval: true
+review:
+  blocking_severities: [critical, high]
+  include_test_files: true
+git:
+  auto_push: false
+  auto_merge: false
+  keep_worktree_on_failure: true
+storage:
+  database: ~/.devorchestra/pipeline.db
+  runs_directory: ~/.devorchestra/runs
+  worktrees_directory: ~/.devorchestra/worktrees
+tests:
+  # Commands are trusted host configuration. Use the target project's interpreter.
+  # Every command must execute tests and produce a fresh JUnit XML report.
+  commands:
+    unit:
+      argv: [/absolute/path/to/project/.venv/bin/python, -m, pytest, tests, --junitxml=build/junit.xml, -q]
+      timeout_seconds: 600
+      junit_report: build/junit.xml
+  write_paths: [tests]
+  output_paths: [build, .pytest_cache]

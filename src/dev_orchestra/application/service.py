@@ -1,9 +1,11 @@
 """Shared application service; independent of Typer and future HTTP adapters."""
+
 import json
 import subprocess
 import sys
 import uuid
 from pathlib import Path
+
 from dev_orchestra.config import Config
 from dev_orchestra.domain.models import PipelineError
 from dev_orchestra.infrastructure.files import digest, write
@@ -23,7 +25,9 @@ class RunService:
             config.workflow.max_fix_attempts = max_fixes
         config = Config.model_validate(config.model_dump())
         if not config.tests.commands:
-            raise PipelineError("configure tests.commands with argv and junit_report before running")
+            raise PipelineError(
+                "configure tests.commands with argv and junit_report before running"
+            )
         repo = repo.expanduser().resolve(strict=True)
         git = Git(repo)
         base = base or config.project.default_base_branch
@@ -38,10 +42,21 @@ class RunService:
         for path in [directory, worktree, config.storage.database]:
             if path.resolve().is_relative_to(root.resolve()):
                 raise PipelineError("storage and worktrees must be outside the target repository")
-        data = {"id": run_id, "repo": str(repo), "base": base, "base_sha": sha,
-                "branch": f"{config.project.branch_prefix}/{run_id}", "worktree": str(worktree),
-                "directory": str(directory), "spec": spec_text, "spec_hash": digest(spec_text.encode()),
-                "config": config.model_dump(mode="json"), "iteration": 0, "next_role": "planner", "created_at": now()}
+        data = {
+            "id": run_id,
+            "repo": str(repo),
+            "base": base,
+            "base_sha": sha,
+            "branch": f"{config.project.branch_prefix}/{run_id}",
+            "worktree": str(worktree),
+            "directory": str(directory),
+            "spec": spec_text,
+            "spec_hash": digest(spec_text.encode()),
+            "config": config.model_dump(mode="json"),
+            "iteration": 0,
+            "next_role": "planner",
+            "created_at": now(),
+        }
         write(directory / "spec.md", spec_text)
         write(directory / "config.json", data["config"])
         self.store.create(data)
@@ -51,7 +66,9 @@ class RunService:
         args = [sys.executable, "-m", "dev_orchestra.worker", str(self.store.path), run_id]
         directory = Path(self.store.get(run_id)["directory"])
         with (directory / "worker.log").open("a") as output:
-            process = subprocess.Popen(args, stdout=output, stderr=subprocess.STDOUT, start_new_session=True)
+            process = subprocess.Popen(
+                args, stdout=output, stderr=subprocess.STDOUT, start_new_session=True
+            )
         if not detached:
             try:
                 process.wait()
@@ -63,8 +80,20 @@ class RunService:
     def resume(self, run_id, answers=None, max_fixes=None):
         run = self.store.get(run_id)
         with lock(Path(run["directory"]) / "execution.lock"):
-            if run["state"] not in {"failed", "paused", "needs_input"}:
+            run = self.store.get(run_id)
+            if run["state"] in {"completed", "cancelled", "waiting_approval"}:
                 raise PipelineError("run is not resumable")
+            import os
+
+            for marker in Path(run["directory"]).glob("iterations/*/*/*/*.process.json"):
+                record = json.loads(marker.read_text())
+                if not record["finished"]:
+                    try:
+                        os.kill(record["pid"], 0)
+                    except ProcessLookupError:
+                        continue
+                    raise PipelineError("orphan process still alive; inspect before resuming")
+            self.store.interrupt_steps(run_id, "previous worker exited before checkpoint")
             changes = {}
             if answers:
                 changes["answers"] = answers.read_text()
@@ -77,7 +106,9 @@ class RunService:
                 if run.get("next_role") == "reviewer":
                     changes |= {"next_role": "fixer", "iteration": run["iteration"] + 1}
             if run.get("error") == "fix budget exhausted" and max_fixes is None:
-                raise PipelineError("explicitly increase max-fix-attempts to resume an exhausted run")
+                raise PipelineError(
+                    "explicitly increase max-fix-attempts to resume an exhausted run"
+                )
             self.store.control(run_id, None)
             self.store.update(run_id, "queued", error=None, **changes)
 
@@ -95,9 +126,17 @@ class RunService:
     def approve(self, run_id):
         run = self.store.get(run_id)
         with lock(Path(run["directory"]) / "execution.lock"):
-            git = Git(Path(run["worktree"]), Config.model_validate(run["config"]).tests.output_paths)
-            if run["state"] != "waiting_approval" or git.dirty() or git.sha() != run.get("final_sha"):
-                raise PipelineError("approval requires unchanged verified HEAD and a clean worktree")
+            git = Git(
+                Path(run["worktree"]), Config.model_validate(run["config"]).tests.output_paths
+            )
+            if (
+                run["state"] != "waiting_approval"
+                or git.dirty()
+                or git.sha() != run.get("final_sha")
+            ):
+                raise PipelineError(
+                    "approval requires unchanged verified HEAD and a clean worktree"
+                )
             if run.get("next_role") != "done" or not run["test_result"]["execution"]["passed"]:
                 raise PipelineError("missing successful validation evidence")
             for step in self.store.steps(run_id):
@@ -105,11 +144,14 @@ class RunService:
                     artifact = Path(step["data"]["artifact"])
                     if digest(artifact.read_bytes()) != step["data"]["hash"]:
                         raise PipelineError("approval evidence was modified")
-            self.store.approve(run_id, git.sha(), digest(json.dumps(run["test_result"], sort_keys=True).encode()))
+            self.store.approve(
+                run_id, git.sha(), digest(json.dumps(run["test_result"], sort_keys=True).encode())
+            )
 
     def cleanup(self, run_id):
         run = self.store.get(run_id)
         with lock(Path(run["directory"]) / "execution.lock"):
+            run = self.store.get(run_id)
             if run["state"] not in {"completed", "cancelled", "failed", "needs_input"}:
                 raise PipelineError("active run cannot be cleaned up")
             Git(Path(run["repo"])).remove(Path(run["worktree"]))
@@ -117,9 +159,15 @@ class RunService:
     def status(self, run_id):
         run = self.store.get(run_id)
         if run["state"] == "completed" and Path(run["worktree"]).exists():
-            git = Git(Path(run["worktree"]), Config.model_validate(run["config"]).tests.output_paths)
+            git = Git(
+                Path(run["worktree"]), Config.model_validate(run["config"]).tests.output_paths
+            )
             if git.sha() != run.get("final_sha") or git.dirty():
-                self.store.update(run_id, "needs_input", error="approved result changed; historical approval retained")
+                self.store.update(
+                    run_id,
+                    "needs_input",
+                    error="approved result changed; historical approval retained",
+                )
                 run = self.store.get(run_id)
         return run
 
@@ -135,4 +183,6 @@ class RunService:
             raise PipelineError("invalid role filter")
         directory = Path(self.store.get(run_id)["directory"])
         paths = sorted(directory.glob("iterations/*/*/*/*.log"))
+        if role is None and (directory / "workflow.log").exists():
+            paths.insert(0, directory / "workflow.log")
         return [p for p in paths if role is None or p.parent.parent.name == role]
