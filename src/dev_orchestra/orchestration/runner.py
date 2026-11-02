@@ -2,6 +2,7 @@
 
 import json
 import logging
+import os
 from pathlib import Path
 
 from dev_orchestra.agents.policy import apply_patch
@@ -11,7 +12,8 @@ from dev_orchestra.infrastructure.evidence import checkpoints, verified_candidat
 from dev_orchestra.infrastructure.files import contained, digest, write
 from dev_orchestra.infrastructure.git import Git
 from dev_orchestra.infrastructure.locking import lock
-from dev_orchestra.infrastructure.process import redact
+from dev_orchestra.infrastructure.process import execution_scope, redact
+from dev_orchestra.infrastructure.process_owner import ensure_stopped, identity
 
 STATES = {
     "planner": "planning",
@@ -36,7 +38,7 @@ class Runner:
     def execute(self, run_id):
         run = self.store.get(run_id)
         directory = Path(run["directory"])
-        with lock(directory / "execution.lock"):
+        with lock(directory / "execution.lock"), execution_scope(directory):
             run = self.store.get(run_id)
             if run["state"] in {
                 "completed",
@@ -46,6 +48,8 @@ class Runner:
                 "paused",
             }:
                 return
+            worker = identity(os.getpid()) | {"finished": False}
+            write(directory / "worker.json", worker)
             logger = logging.getLogger(f"devorchestra.{run_id}")
             logger.setLevel(logging.INFO)
             logger.propagate = False
@@ -62,20 +66,31 @@ class Runner:
                         Git(Path(run["repo"])).common() / "devorchestra.lock", wait=True, stop=stop
                     ),
                 ):
+                    ensure_stopped(directory)
                     if hasattr(self.agent, "check"):
                         self.agent.check(stop=stop)
                     if hasattr(self.tests, "check"):
                         self.tests.check(Path(run["repo"]), stop=stop)
                     self._execute(run_id)
             except StopRequested as error:
-                self.store.update(run_id, "cancelled" if str(error) == "cancel" else "paused")
+                try:
+                    ensure_stopped(directory)
+                except PipelineError as cleanup_error:
+                    self.store.update(run_id, "needs_input", error=str(cleanup_error))
+                else:
+                    self.store.update(run_id, "cancelled" if str(error) == "cancel" else "paused")
             except Exception as error:
                 self.store.update(run_id, "failed", error=redact(str(error)))
             finally:
+                try:
+                    ensure_stopped(directory)
+                except PipelineError as error:
+                    self.store.update(run_id, "needs_input", error=str(error))
                 self.store.interrupt_steps(run_id, "stage interrupted before completion")
                 self.report(run_id)
                 logger.removeHandler(handler)
                 handler.close()
+                write(directory / "worker.json", worker | {"finished": True})
 
     def _execute(self, run_id):
         run = self.store.get(run_id)

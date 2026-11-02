@@ -1,9 +1,11 @@
 """Only host code mutates Git metadata; never changes the original checkout."""
 
 import subprocess
+import uuid
 from pathlib import Path
 
 from dev_orchestra.domain.models import PipelineError
+from dev_orchestra.infrastructure.process import execute, execution_directory
 
 
 class Git:
@@ -11,9 +13,25 @@ class Git:
         self.repo = repo.resolve()
         self.exclusions = [f":(exclude){p}" for p in ignore]
 
+    def _run(self, argv, timeout, input=None):
+        directory = execution_directory()
+        if directory is not None:
+            log = directory / "git" / (uuid.uuid4().hex + ".log")
+            rc, output = execute(
+                argv,
+                self.repo,
+                timeout,
+                log,
+                stdin=input,
+                # Git diff/status are internal data; persisted logs stay redacted.
+                capture_raw=True,
+            )
+            return subprocess.CompletedProcess(argv, rc, output, log.read_text())
+        return subprocess.run(argv, input=input, capture_output=True, text=True, timeout=timeout)
+
     def call(self, *args, input=None):
         # Git clean/smudge/process drivers execute outside agent sandboxes.
-        config = subprocess.run(
+        config = self._run(
             [
                 "git",
                 "-C",
@@ -22,8 +40,6 @@ class Git:
                 "--get-regexp",
                 r"^filter\..*\.(clean|smudge|process|driver)$",
             ],
-            capture_output=True,
-            text=True,
             timeout=10,
         )
         if config.returncode == 0 and config.stdout.strip():
@@ -32,7 +48,7 @@ class Git:
             )
         if config.returncode not in (0, 1):
             raise PipelineError("cannot inspect repository filter policy")
-        proc = subprocess.run(
+        proc = self._run(
             [
                 "git",
                 "-c",
@@ -46,8 +62,6 @@ class Git:
                 *args,
             ],
             input=input,
-            capture_output=True,
-            text=True,
             timeout=30,
         )
         if proc.returncode:

@@ -116,9 +116,9 @@ class Store:
                 "fixing": {"testing"},
                 "reporting": {"waiting_approval"},
                 "waiting_approval": {"completed", "needs_input", "paused", "cancelled", "failed"},
-                "failed": {"queued", "cancelled", "paused"},
+                "failed": {"queued", "cancelled", "paused", "needs_input"},
                 "needs_input": {"queued", "cancelled", "paused"},
-                "paused": {"queued", "cancelled"},
+                "paused": {"queued", "cancelled", "needs_input"},
                 "completed": {"needs_input"},
                 "cancelled": set(),
             }
