@@ -329,3 +329,16 @@ def test_log_cursor_preserves_korean(service):
         if not result["chunks"]:
             break
     assert text == "한글로그\n"
+
+
+def test_concurrent_report_artifacts_are_atomic(tmp_path):
+    from concurrent.futures import ThreadPoolExecutor
+
+    from dev_orchestra.infrastructure.files import write
+
+    path = tmp_path / "report.json"
+    with ThreadPoolExecutor(max_workers=8) as pool:
+        list(pool.map(lambda value: write(path, {"value": value}), range(32)))
+    assert json.loads(path.read_text())["value"] in range(32)
+    assert path.stat().st_mode & 0o077 == 0
+    assert not list(tmp_path.glob(".report.json.*"))

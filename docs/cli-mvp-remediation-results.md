@@ -2,12 +2,13 @@
 
 검증일: 2026-11-02 (Asia/Seoul)  
 수정 전 감사 대상: `5f93bde38eda2279c7c51d486cc5a47d65598bfa`  
-수정 코드·회귀 테스트 커밋: `99bb906`  
+주요 결함 수정 코드·회귀 테스트 커밋: `99bb906`
+추가 보강: 동시 보고서 저장에 고유 임시 파일과 원자적 교체 적용, 생성 산출물 파일 권한 제한
 현재 준비도 판단: **CONDITIONAL** — 재현된 결함은 보완했으나 실제 모델 Fix·권한 위반·전 장애 경계·다른 플랫폼 검증은 추가로 필요합니다. 원래의 48개 항목을 모두 다시 실행한 정식 READY 판정은 아닙니다.
 
 ## 결과 요약
 
-- 기존 테스트를 포함한 **61개 테스트 통과**, 제외된 테스트 없음.
+- 기존 테스트를 포함한 **62개 테스트 통과**, 제외된 테스트 없음.
 - 실제 macOS 샌드박스에서 파일 쓰기·네트워크 차단 검사 통과.
 - Codex CLI **0.166.0** 실제 E2E: pytest **12개 통과**, 실패 0개, 건너뛰기 0개, 종료 코드 0.
 - 실제 독립 리뷰 결과: **Low 1건**. 기본 차단 기준인 Critical·High는 없었으며 Low는 기록한 채 승인 처리했습니다. 지적 0건으로 표시하지 않습니다.
@@ -30,13 +31,13 @@
 | Q08 대기 작업 취소 | 필수 / Medium | 블로킹 flock 대신 취소 요청을 확인하는 제한 간격 대기 | `test_queue_cancel_is_independent_of_execution_slot` 통과. 다른 실행 잠금 유지 중에도 취소 확정 |
 | Q09 상태·DB 버전 | 필수 / Medium | 합법적 상태 전이 및 예상 버전 검증. 스키마 1→2 갱신, 미지원 버전 거부 | `test_state_and_version_validation`, `test_schema_v1_migration_preserves_data` 통과 |
 | Q10 JUnit 상위 오류 | 필수 / Medium | suite 수준 오류 수가 testcase 증거와 맞지 않으면 파싱 실패 | `test_suite_error_is_not_success` 및 0건·전체 skip·XML 검사 통과 |
-| Q11 승인 후 보고서 | 필수 / Medium | 승인 후 보고서 갱신, 조회 시 DB 기준 재생성 | `test_approval_report_matches_state` 통과. DB와 보고서 모두 completed |
+| Q11 승인 후 보고서 | 필수 / Medium | 승인 후 보고서 갱신, 조회 시 DB 기준 재생성. 동시 저장은 고유 임시 파일로 원자적 교체 | `test_approval_report_matches_state`, `test_concurrent_report_artifacts_are_atomic` 통과. DB와 보고서 모두 completed |
 | Q12 YAML 오류 | 필수 / Medium | YAML 구문 오류를 민감 원문 없는 도메인 입력 오류로 변환 | 기존 CLI 오류 테스트와 설정 오류 처리 확인. traceback 대신 설정 오류 메시지 |
 | Q13 사전 실패 보고서 | 권장 / Medium | 사전 점검을 Runner 안에서 수행하고 모든 실패 경로에 보고서 생성 | `test_preflight_failure_has_report` 통과. 실행 파일 누락 원인 조회 가능 |
 | Q14 제어·로그 이벤트 | 권장 / Medium | 버전 있는 제어·단계 이벤트, 단계·회차·산출물 참조 저장. 서비스에 파일별 바이트 커서 조회 추가 | `test_control_events_have_cursor`, `test_log_cursor_replay`, `test_log_cursor_preserves_korean` 통과. SSE 서버는 미구현 |
 | Q15 재개 전 증거 검증 | 필수 / Medium | 모든 완료 체크포인트의 체크섬·JSON·출력 SHA를 resume와 실행 진입에서 확인 | `test_resume_detects_prior_evidence_corruption` 통과. 추가 역할 호출 전 거절 |
 
-제품 코드 위치는 `src/dev_orchestra/infrastructure/evidence.py`, `process.py`, `codex.py`, `git.py`, `locking.py`, `store.py`, `test_runner.py`, `application/service.py`, `orchestration/runner.py`, `config.py`, `agents/policy.py` 및 `worker.py`입니다. 회귀 테스트는 `tests/test_remediation.py`에 있습니다.
+제품 코드 위치는 `src/dev_orchestra/infrastructure/evidence.py`, `files.py`, `process.py`, `codex.py`, `git.py`, `locking.py`, `store.py`, `test_runner.py`, `application/service.py`, `orchestration/runner.py`, `config.py`, `agents/policy.py` 및 `worker.py`입니다. 회귀 테스트는 `tests/test_remediation.py`에 있습니다.
 
 ## 실제 강제 종료 경계
 
@@ -59,8 +60,8 @@ UV_CACHE_DIR="$PWD/.uv-cache" .tools/uv build --offline
 .venv/bin/python scripts/e2e.py
 ```
 
-- 최종 전체 테스트 로그: `/private/tmp/devorchestra-remediation-tests-final.log` — **61 passed in 27.00s**.
-- 실제 Codex E2E 로그: `/private/tmp/devorchestra-remediation-e2e.log` — **REAL E2E PASSED**.
+- 최종 전체 테스트 로그: `/private/tmp/devorchestra-remediation-tests-final.log` — **62 passed in 27.43s**.
+- 실제 Codex E2E 로그(주요 결함 수정 후 실행, 이후 동시 저장 보강은 전체 회귀로 검증): `/private/tmp/devorchestra-remediation-e2e.log` — **REAL E2E PASSED**.
 - 실제 E2E 산출물: `/var/folders/n1/ktxrq6sj1r7d_zq3k5s840s80000gn/T/devorchestra-e2e-u1yxweei/`.
 - lint 결과: **All checks passed**. format 결과: **26 files already formatted**.
 - 패키지: `dist/dev_orchestra-0.1.0-py3-none-any.whl`, `dist/dev_orchestra-0.1.0.tar.gz` 빌드 성공. 캐시 디렉터리 위치에 대한 uv 경고는 빌드 실패가 아닙니다.
