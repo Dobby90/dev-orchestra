@@ -48,5 +48,7 @@ See README safety limits; passing tests do not establish complete hostile-code i
 Phase commits are preserved locally. HTTPS Push attempts failed with repository write
 permission denial, then invalid credentials. Existing SSH authentication could not be used
 because the GitHub host key was absent; host verification was not bypassed. Publication
-remains pending valid local GitHub authentication. No credentials are present in source,
-configuration examples, test fixtures or documentation.
+was subsequently completed using user-provided authentication. All Phase 1–6 commits
+through `a5b071a` were pushed to `origin/main`, and the remote branch SHA was verified
+against local HEAD. No credentials are present in source, configuration examples,
+test fixtures or documentation; the temporary authentication cache was cleared.
