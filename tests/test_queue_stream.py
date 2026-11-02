@@ -47,14 +47,14 @@ def prepared(service, tmp_path):
     stub.write_text(f"""#!{sys.executable}
 import json,sys,time
 from pathlib import Path
-from dev_orchestra.domain.models import AgentResult,Criterion,Coverage
+from dev_orchestra.domain.models import AgentResult,Criterion,Coverage,ReviewResultV2
 if '--help' in sys.argv:
  print('--output-schema --ephemeral --ignore-user-config --json');sys.exit(0)
 req=json.loads(sys.stdin.read().split('UNTRUSTED TASK DATA:\\n',1)[1])
 if req['role']=='developer' and not Path({str(release)!r}).exists():
  print('한글 진행 token=CANARY',flush=True)
  while not Path({str(release)!r}).exists():time.sleep(.05)
-r=AgentResult(summary='검증')
+r=ReviewResultV2(summary='검증') if req['role']=='reviewer' and req['context'].get('review_contract')==2 else AgentResult(summary='검증')
 if req['role']=='planner':r.plan='계획';r.criteria=[Criterion(id='AC1',description='조건')]
 if req['role']=='tester':r.command_ids=['unit'];r.coverage=[Coverage(criterion_id='AC1',command_ids=['unit'])]
 Path(sys.argv[sys.argv.index('--output-last-message')+1]).write_text(r.model_dump_json())

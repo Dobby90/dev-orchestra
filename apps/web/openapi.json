@@ -652,7 +652,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ControlResult"
+                  "$ref": "#/components/schemas/OperationView"
                 }
               }
             }
@@ -701,7 +701,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ControlResult"
+                  "$ref": "#/components/schemas/OperationView"
                 }
               }
             }
@@ -750,7 +750,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ResumeView"
+                  "$ref": "#/components/schemas/OperationView"
                 }
               }
             }
@@ -799,7 +799,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/RunSummary"
+                  "$ref": "#/components/schemas/OperationView"
                 }
               }
             }
@@ -838,8 +838,550 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/RunSummary"
+                  "$ref": "#/components/schemas/OperationView"
                 }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/runs/{rid}/request-changes": {
+      "post": {
+        "summary": "Request Changes",
+        "operationId": "request_changes_api_runs__rid__request_changes_post",
+        "parameters": [
+          {
+            "name": "rid",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Rid"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ChangeInput"
+              }
+            }
+          }
+        },
+        "responses": {
+          "202": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OperationView"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/runs/{rid}/defer": {
+      "post": {
+        "summary": "Defer",
+        "operationId": "defer_api_runs__rid__defer_post",
+        "parameters": [
+          {
+            "name": "rid",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Rid"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DeferInput"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OperationView"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/runs/{rid}/cleanup": {
+      "post": {
+        "summary": "Cleanup",
+        "operationId": "cleanup_api_runs__rid__cleanup_post",
+        "parameters": [
+          {
+            "name": "rid",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Rid"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CleanupInput"
+              }
+            }
+          }
+        },
+        "responses": {
+          "202": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OperationView"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/runs/{rid}/issues/{issue_id}/disposition": {
+      "post": {
+        "summary": "Disposition",
+        "operationId": "disposition_api_runs__rid__issues__issue_id__disposition_post",
+        "parameters": [
+          {
+            "name": "rid",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Rid"
+            }
+          },
+          {
+            "name": "issue_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Issue Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DispositionInput"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OperationView"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/operations/{op_id}": {
+      "get": {
+        "summary": "Operation",
+        "operationId": "operation_api_operations__op_id__get",
+        "parameters": [
+          {
+            "name": "op_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Op Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OperationView"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/runs/{rid}/tests": {
+      "get": {
+        "summary": "Test Results",
+        "operationId": "test_results_api_runs__rid__tests_get",
+        "parameters": [
+          {
+            "name": "rid",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Rid"
+            }
+          },
+          {
+            "name": "step_id",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "integer",
+                  "minimum": 1
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Step Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TestResultView"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/runs/{rid}/reviews": {
+      "get": {
+        "summary": "Review Results",
+        "operationId": "review_results_api_runs__rid__reviews_get",
+        "parameters": [
+          {
+            "name": "rid",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Rid"
+            }
+          },
+          {
+            "name": "step_id",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "integer",
+                  "minimum": 1
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Step Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ReviewResultView"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/runs/{rid}/changes": {
+      "get": {
+        "summary": "Changed Files",
+        "operationId": "changed_files_api_runs__rid__changes_get",
+        "parameters": [
+          {
+            "name": "rid",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Rid"
+            }
+          },
+          {
+            "name": "candidate_sha",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Candidate Sha"
+            }
+          },
+          {
+            "name": "revision",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "integer",
+                  "minimum": 0
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Revision"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ChangesView"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/runs/{rid}/diff": {
+      "get": {
+        "summary": "File Diff",
+        "operationId": "file_diff_api_runs__rid__diff_get",
+        "parameters": [
+          {
+            "name": "rid",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Rid"
+            }
+          },
+          {
+            "name": "file_id",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "File Id"
+            }
+          },
+          {
+            "name": "candidate_sha",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Candidate Sha"
+            }
+          },
+          {
+            "name": "revision",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "minimum": 0,
+              "default": 0,
+              "title": "Revision"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DiffView"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/runs/{rid}/artifacts/{aid}": {
+      "get": {
+        "summary": "Artifact",
+        "operationId": "artifact_api_runs__rid__artifacts__aid__get",
+        "parameters": [
+          {
+            "name": "rid",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Rid"
+            }
+          },
+          {
+            "name": "aid",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Aid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
               }
             }
           },
@@ -1113,6 +1655,43 @@
         }
       }
     },
+    "/api/runs/{rid}/logs/download": {
+      "get": {
+        "summary": "Logs Download",
+        "operationId": "logs_download_api_runs__rid__logs_download_get",
+        "parameters": [
+          {
+            "name": "rid",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Rid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/runs/{rid}/events": {
       "get": {
         "summary": "Events",
@@ -1211,17 +1790,325 @@
         ],
         "title": "BranchPage"
       },
-      "ControlResult": {
+      "ChangeInput": {
         "properties": {
-          "state": {
-            "$ref": "#/components/schemas/State"
+          "expected_sha": {
+            "type": "string",
+            "pattern": "^(?:[0-9a-f]{40}|[0-9a-f]{64})$",
+            "title": "Expected Sha"
+          },
+          "instructions": {
+            "type": "string",
+            "maxLength": 65536,
+            "minLength": 1,
+            "title": "Instructions"
+          },
+          "new_max_fix_attempts": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "maximum": 20.0,
+                "exclusiveMinimum": 0.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "New Max Fix Attempts"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "expected_sha",
+          "instructions"
+        ],
+        "title": "ChangeInput"
+      },
+      "ChangedFile": {
+        "properties": {
+          "file_id": {
+            "type": "string",
+            "title": "File Id"
+          },
+          "path": {
+            "type": "string",
+            "title": "Path"
+          },
+          "status": {
+            "type": "string",
+            "title": "Status"
+          },
+          "binary": {
+            "type": "boolean",
+            "title": "Binary"
+          },
+          "truncated": {
+            "type": "boolean",
+            "title": "Truncated"
+          },
+          "additions": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Additions"
+          },
+          "deletions": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Deletions"
+          },
+          "artifact_id": {
+            "type": "string",
+            "title": "Artifact Id"
           }
         },
         "type": "object",
         "required": [
-          "state"
+          "file_id",
+          "path",
+          "status",
+          "binary",
+          "truncated",
+          "additions",
+          "deletions",
+          "artifact_id"
         ],
-        "title": "ControlResult"
+        "title": "ChangedFile"
+      },
+      "ChangesView": {
+        "properties": {
+          "available": {
+            "type": "boolean",
+            "title": "Available"
+          },
+          "revision": {
+            "type": "integer",
+            "title": "Revision"
+          },
+          "base_sha": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Base Sha"
+          },
+          "merge_base_sha": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Merge Base Sha"
+          },
+          "candidate_sha": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Candidate Sha"
+          },
+          "files": {
+            "items": {
+              "$ref": "#/components/schemas/ChangedFile"
+            },
+            "type": "array",
+            "title": "Files"
+          },
+          "history": {
+            "items": {
+              "$ref": "#/components/schemas/SnapshotStamp"
+            },
+            "type": "array",
+            "title": "History"
+          }
+        },
+        "type": "object",
+        "required": [
+          "available",
+          "revision",
+          "base_sha",
+          "merge_base_sha",
+          "candidate_sha",
+          "files",
+          "history"
+        ],
+        "title": "ChangesView"
+      },
+      "CleanupInput": {
+        "properties": {
+          "confirm": {
+            "type": "boolean",
+            "const": true,
+            "title": "Confirm"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "confirm"
+        ],
+        "title": "CleanupInput"
+      },
+      "CommandView": {
+        "properties": {
+          "command_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Command Id"
+          },
+          "argv": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Argv"
+          },
+          "status": {
+            "type": "string",
+            "title": "Status",
+            "default": "unknown"
+          },
+          "exit_code": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Exit Code"
+          },
+          "duration_seconds": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Duration Seconds"
+          },
+          "total": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Total"
+          },
+          "failed": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Failed"
+          },
+          "skipped": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Skipped"
+          },
+          "passed": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Passed"
+          },
+          "failures": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Failures"
+          },
+          "failure_details": {
+            "items": {
+              "$ref": "#/components/schemas/FailureView"
+            },
+            "type": "array",
+            "title": "Failure Details"
+          },
+          "junit_artifact_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Junit Artifact Id"
+          },
+          "error": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Error"
+          }
+        },
+        "type": "object",
+        "title": "CommandView"
       },
       "DashboardView": {
         "properties": {
@@ -1246,6 +2133,124 @@
           "project_count"
         ],
         "title": "DashboardView"
+      },
+      "DeferInput": {
+        "properties": {
+          "reason": {
+            "type": "string",
+            "maxLength": 4000,
+            "minLength": 1,
+            "title": "Reason"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "reason"
+        ],
+        "title": "DeferInput"
+      },
+      "DiffView": {
+        "properties": {
+          "file_id": {
+            "type": "string",
+            "title": "File Id"
+          },
+          "path": {
+            "type": "string",
+            "title": "Path"
+          },
+          "status": {
+            "type": "string",
+            "title": "Status"
+          },
+          "binary": {
+            "type": "boolean",
+            "title": "Binary"
+          },
+          "truncated": {
+            "type": "boolean",
+            "title": "Truncated"
+          },
+          "additions": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Additions"
+          },
+          "deletions": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Deletions"
+          },
+          "artifact_id": {
+            "type": "string",
+            "title": "Artifact Id"
+          },
+          "base_sha": {
+            "type": "string",
+            "title": "Base Sha"
+          },
+          "candidate_sha": {
+            "type": "string",
+            "title": "Candidate Sha"
+          },
+          "text": {
+            "type": "string",
+            "title": "Text"
+          }
+        },
+        "type": "object",
+        "required": [
+          "file_id",
+          "path",
+          "status",
+          "binary",
+          "truncated",
+          "additions",
+          "deletions",
+          "artifact_id",
+          "base_sha",
+          "candidate_sha",
+          "text"
+        ],
+        "title": "DiffView"
+      },
+      "DispositionInput": {
+        "properties": {
+          "reason": {
+            "type": "string",
+            "maxLength": 4000,
+            "minLength": 1,
+            "title": "Reason"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "unresolved",
+              "dismissed"
+            ],
+            "title": "Status"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "reason",
+          "status"
+        ],
+        "title": "DispositionInput"
       },
       "EventEnvelope": {
         "properties": {
@@ -1313,6 +2318,121 @@
         ],
         "title": "EventPage"
       },
+      "ExecutionView": {
+        "properties": {
+          "job_state": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Job State"
+          },
+          "worker_liveness": {
+            "type": "string",
+            "enum": [
+              "alive",
+              "stopped",
+              "lost",
+              "unresponsive",
+              "unknown"
+            ],
+            "title": "Worker Liveness",
+            "default": "unknown"
+          },
+          "heartbeat_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Heartbeat At"
+          },
+          "cleanup": {
+            "type": "string",
+            "enum": [
+              "confirmed",
+              "pending",
+              "manual_required",
+              "unknown"
+            ],
+            "title": "Cleanup",
+            "default": "unknown"
+          },
+          "worktree_removed": {
+            "type": "boolean",
+            "title": "Worktree Removed",
+            "default": false
+          }
+        },
+        "type": "object",
+        "title": "ExecutionView"
+      },
+      "FailureView": {
+        "properties": {
+          "name": {
+            "type": "string",
+            "title": "Name"
+          },
+          "classname": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Classname"
+          },
+          "file": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "File"
+          },
+          "line": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Line"
+          },
+          "message": {
+            "type": "string",
+            "title": "Message",
+            "default": ""
+          },
+          "details": {
+            "type": "string",
+            "title": "Details",
+            "default": ""
+          }
+        },
+        "type": "object",
+        "required": [
+          "name"
+        ],
+        "title": "FailureView"
+      },
       "HTTPValidationError": {
         "properties": {
           "detail": {
@@ -1357,6 +2477,86 @@
           "has_more"
         ],
         "title": "LogPage"
+      },
+      "OperationView": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "title": "Id"
+          },
+          "run_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Run Id"
+          },
+          "kind": {
+            "type": "string",
+            "title": "Kind"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "accepted",
+              "applied",
+              "rejected",
+              "needs_input"
+            ],
+            "title": "Status"
+          },
+          "state": {
+            "$ref": "#/components/schemas/State"
+          },
+          "result": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Result"
+          },
+          "created_at": {
+            "type": "string",
+            "title": "Created At"
+          },
+          "applied_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Applied At"
+          },
+          "error": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Error"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "run_id",
+          "kind",
+          "status",
+          "state",
+          "result",
+          "created_at",
+          "applied_at",
+          "error"
+        ],
+        "title": "OperationView"
       },
       "Policy": {
         "properties": {
@@ -1715,6 +2915,44 @@
           "markdown": {
             "type": "string",
             "title": "Markdown"
+          },
+          "artifact_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Artifact Id"
+          },
+          "generated_version": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Generated Version"
+          },
+          "current_version": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Current Version"
+          },
+          "stale": {
+            "type": "boolean",
+            "title": "Stale",
+            "default": true
           }
         },
         "type": "object",
@@ -1755,29 +2993,208 @@
         "type": "object",
         "title": "ResumeInput"
       },
-      "ResumeView": {
+      "ReviewIssueView": {
         "properties": {
-          "run_id": {
+          "issue_id": {
             "type": "string",
-            "title": "Run Id"
+            "title": "Issue Id"
           },
-          "job_id": {
+          "id": {
             "type": "string",
-            "title": "Job Id"
+            "title": "Id"
+          },
+          "severity": {
+            "type": "string",
+            "enum": [
+              "critical",
+              "high",
+              "medium",
+              "low"
+            ],
+            "title": "Severity"
+          },
+          "file": {
+            "type": "string",
+            "title": "File"
+          },
+          "line": {
+            "type": "integer",
+            "title": "Line"
+          },
+          "description": {
+            "type": "string",
+            "title": "Description"
+          },
+          "evidence": {
+            "type": "string",
+            "title": "Evidence"
+          },
+          "suggestion": {
+            "type": "string",
+            "title": "Suggestion"
           },
           "status": {
             "type": "string",
-            "const": "queued",
+            "enum": [
+              "unresolved",
+              "resolved",
+              "dismissed"
+            ],
             "title": "Status"
+          },
+          "source_sha": {
+            "type": "string",
+            "title": "Source Sha"
+          },
+          "resolution_evidence": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Resolution Evidence"
+          },
+          "status_note": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Status Note"
+          },
+          "assessed_sha": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Assessed Sha"
+          },
+          "assessed_step_id": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Assessed Step Id"
           }
         },
         "type": "object",
         "required": [
-          "run_id",
-          "job_id",
-          "status"
+          "issue_id",
+          "id",
+          "severity",
+          "file",
+          "line",
+          "description",
+          "evidence",
+          "suggestion",
+          "status",
+          "source_sha",
+          "resolution_evidence"
         ],
-        "title": "ResumeView"
+        "title": "ReviewIssueView"
+      },
+      "ReviewResultView": {
+        "properties": {
+          "status": {
+            "type": "string",
+            "enum": [
+              "not_run",
+              "running",
+              "available",
+              "unavailable"
+            ],
+            "title": "Status"
+          },
+          "step_id": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Step Id"
+          },
+          "sha": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Sha"
+          },
+          "revision": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Revision"
+          },
+          "summary": {
+            "type": "string",
+            "title": "Summary"
+          },
+          "issues": {
+            "items": {
+              "$ref": "#/components/schemas/ReviewIssueView"
+            },
+            "type": "array",
+            "title": "Issues"
+          },
+          "history": {
+            "items": {
+              "$ref": "#/components/schemas/StepStamp"
+            },
+            "type": "array",
+            "title": "History"
+          },
+          "legacy_incomplete": {
+            "type": "boolean",
+            "title": "Legacy Incomplete"
+          },
+          "blocking_severities": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Blocking Severities"
+          }
+        },
+        "type": "object",
+        "required": [
+          "status",
+          "step_id",
+          "sha",
+          "revision",
+          "summary",
+          "issues",
+          "history",
+          "legacy_incomplete",
+          "blocking_severities"
+        ],
+        "title": "ReviewResultView"
       },
       "RunCreate": {
         "properties": {
@@ -1965,6 +3382,24 @@
               }
             ],
             "title": "Control"
+          },
+          "revision": {
+            "type": "integer",
+            "title": "Revision",
+            "default": 0
+          },
+          "execution": {
+            "$ref": "#/components/schemas/ExecutionView"
+          },
+          "validation": {
+            "$ref": "#/components/schemas/ValidationView"
+          },
+          "allowed_actions": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Allowed Actions"
           },
           "event_cursor": {
             "type": "integer",
@@ -2227,6 +3662,24 @@
         ],
         "title": "SessionView"
       },
+      "SnapshotStamp": {
+        "properties": {
+          "revision": {
+            "type": "integer",
+            "title": "Revision"
+          },
+          "candidate_sha": {
+            "type": "string",
+            "title": "Candidate Sha"
+          }
+        },
+        "type": "object",
+        "required": [
+          "revision",
+          "candidate_sha"
+        ],
+        "title": "SnapshotStamp"
+      },
       "SpecContent": {
         "properties": {
           "text": {
@@ -2304,6 +3757,82 @@
         ],
         "title": "StepPage"
       },
+      "StepStamp": {
+        "properties": {
+          "id": {
+            "type": "integer",
+            "title": "Id"
+          },
+          "revision": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Revision"
+          },
+          "iteration": {
+            "type": "integer",
+            "title": "Iteration"
+          },
+          "attempt": {
+            "type": "integer",
+            "title": "Attempt"
+          },
+          "status": {
+            "type": "string",
+            "title": "Status"
+          },
+          "output_sha": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Output Sha"
+          },
+          "started_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Started At"
+          },
+          "finished_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Finished At"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "revision",
+          "iteration",
+          "attempt",
+          "status",
+          "output_sha",
+          "started_at",
+          "finished_at"
+        ],
+        "title": "StepStamp"
+      },
       "StepView": {
         "properties": {
           "id": {
@@ -2344,6 +3873,33 @@
           "status": {
             "type": "string",
             "title": "Status"
+          },
+          "revision": {
+            "type": "integer",
+            "title": "Revision",
+            "default": 0
+          },
+          "started_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Started At"
+          },
+          "finished_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Finished At"
           }
         },
         "type": "object",
@@ -2458,6 +4014,154 @@
         ],
         "title": "TestCommand"
       },
+      "TestResultView": {
+        "properties": {
+          "status": {
+            "type": "string",
+            "enum": [
+              "not_run",
+              "running",
+              "passed",
+              "failed",
+              "unavailable",
+              "parse_error",
+              "timeout",
+              "unknown"
+            ],
+            "title": "Status"
+          },
+          "step_id": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Step Id"
+          },
+          "sha": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Sha"
+          },
+          "revision": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Revision"
+          },
+          "duration_seconds": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Duration Seconds"
+          },
+          "total": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Total"
+          },
+          "passed": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Passed"
+          },
+          "failed": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Failed"
+          },
+          "skipped": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Skipped"
+          },
+          "commands": {
+            "items": {
+              "$ref": "#/components/schemas/CommandView"
+            },
+            "type": "array",
+            "title": "Commands"
+          },
+          "failures": {
+            "items": {
+              "$ref": "#/components/schemas/FailureView"
+            },
+            "type": "array",
+            "title": "Failures"
+          },
+          "history": {
+            "items": {
+              "$ref": "#/components/schemas/StepStamp"
+            },
+            "type": "array",
+            "title": "History"
+          },
+          "legacy_incomplete": {
+            "type": "boolean",
+            "title": "Legacy Incomplete"
+          }
+        },
+        "type": "object",
+        "required": [
+          "status",
+          "step_id",
+          "sha",
+          "revision",
+          "duration_seconds",
+          "total",
+          "passed",
+          "failed",
+          "skipped",
+          "commands",
+          "failures",
+          "history",
+          "legacy_incomplete"
+        ],
+        "title": "TestResultView"
+      },
       "Tests": {
         "properties": {
           "commands": {
@@ -2547,6 +4251,83 @@
           "type"
         ],
         "title": "ValidationError"
+      },
+      "ValidationView": {
+        "properties": {
+          "status": {
+            "type": "string",
+            "enum": [
+              "pending",
+              "valid",
+              "invalid",
+              "unknown"
+            ],
+            "title": "Status",
+            "default": "unknown"
+          },
+          "revision": {
+            "type": "integer",
+            "title": "Revision",
+            "default": 0
+          },
+          "candidate_sha": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Candidate Sha"
+          },
+          "test_sha": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Test Sha"
+          },
+          "review_sha": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Review Sha"
+          },
+          "checked_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Checked At"
+          },
+          "reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reason"
+          }
+        },
+        "type": "object",
+        "title": "ValidationView"
       }
     }
   }

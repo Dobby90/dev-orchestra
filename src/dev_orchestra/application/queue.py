@@ -19,7 +19,7 @@ class QueueService:
 
     def enabled(self):
         with self.store.connection() as db:
-            return db.execute("SELECT version FROM schema_version").fetchone()[0] == 4
+            return db.execute("SELECT version FROM schema_version").fetchone()[0] in {4, 5}
 
     def dispatcher_status(self):
         with self.store.connection() as db:

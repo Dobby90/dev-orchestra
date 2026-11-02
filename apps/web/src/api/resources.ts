@@ -63,15 +63,60 @@ export const api = {
       body: data,
     });
   },
+  tests: (rid: string, step?: number) =>
+    request<Schema["TestResultView"]>(
+      `/runs/${id(rid)}/tests${step ? `?step_id=${step}` : ""}`,
+    ),
+  reviews: (rid: string, step?: number) =>
+    request<Schema["ReviewResultView"]>(
+      `/runs/${id(rid)}/reviews${step ? `?step_id=${step}` : ""}`,
+    ),
+  changes: (rid: string, revision: number, candidate?: string) =>
+    request<Schema["ChangesView"]>(
+      `/runs/${id(rid)}/changes?revision=${revision}${candidate ? `&candidate_sha=${id(candidate)}` : ""}`,
+    ),
+  diff: (rid: string, file: string, candidate: string, revision: number) =>
+    request<Schema["DiffView"]>(
+      `/runs/${id(rid)}/diff?file_id=${id(file)}&candidate_sha=${id(candidate)}&revision=${revision}`,
+    ),
+  operation: (op: string) =>
+    request<Schema["OperationView"]>(`/operations/${id(op)}`),
+  disposition: (
+    rid: string,
+    issue: string,
+    revision: number,
+    body: Schema["DispositionInput"],
+    key: string,
+  ) =>
+    request<Schema["OperationView"]>(
+      `/runs/${id(rid)}/issues/${id(issue)}/disposition`,
+      {
+        method: "POST",
+        headers: { ...version("run", rid, revision), "Idempotency-Key": key },
+        body: JSON.stringify(body),
+      },
+    ),
   control: (
     rid: string,
     revision: number,
-    action: "pause" | "cancel" | "resume" | "approve" | "reconcile",
+    action:
+      | "pause"
+      | "cancel"
+      | "resume"
+      | "approve"
+      | "reconcile"
+      | "request-changes"
+      | "defer"
+      | "cleanup",
     body: unknown,
+    key?: string,
   ) =>
-    request<unknown>(`/runs/${id(rid)}/${action}`, {
+    request<Schema["OperationView"]>(`/runs/${id(rid)}/${action}`, {
       method: "POST",
-      headers: version("run", rid, revision),
+      headers: {
+        ...version("run", rid, revision),
+        ...(key ? { "Idempotency-Key": key } : {}),
+      },
       body: JSON.stringify(body),
     }),
 };

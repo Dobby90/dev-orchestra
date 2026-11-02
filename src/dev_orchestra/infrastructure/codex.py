@@ -3,7 +3,7 @@
 import uuid
 from pathlib import Path
 
-from dev_orchestra.domain.models import AgentRequest, AgentResult, PipelineError
+from dev_orchestra.domain.models import AgentRequest, AgentResult, PipelineError, ReviewResultV2
 from dev_orchestra.infrastructure.files import write
 from dev_orchestra.infrastructure.process import execute, execution_directory
 
@@ -50,7 +50,12 @@ class CodexClient:
         directory.mkdir(parents=True, exist_ok=True)
         schema = directory / "schema.json"
         result = directory / "response.json"
-        write(schema, strict_schema(AgentResult.model_json_schema()))
+        model = (
+            ReviewResultV2
+            if request.role == "reviewer" and request.context.get("review_contract") == 2
+            else AgentResult
+        )
+        write(schema, strict_schema(model.model_json_schema()))
         argv = [
             self.config.command,
             "-a",
@@ -87,10 +92,10 @@ class CodexClient:
             import json
 
             raw = json.loads(result.read_text())
-            required = set(AgentResult.model_fields)
+            required = set(model.model_fields)
             if not isinstance(raw, dict) or set(raw) != required:
                 raise ValueError("incomplete role response")
-            validated = AgentResult.model_validate(raw, strict=True)
+            validated = model.model_validate(raw, strict=True)
             from dev_orchestra.infrastructure.process import sanitize
 
             write(result, sanitize(validated.model_dump()))

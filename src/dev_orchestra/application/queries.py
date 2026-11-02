@@ -54,7 +54,10 @@ class RunQueryService:
                 questions=sanitize(data.get("questions", [])),
                 error=sanitize(data.get("error")),
             )
-        return value
+        from dev_orchestra.application.observations import observe
+
+        data["project_id"] = value["project_id"]
+        return value | observe(self.store, data)
 
     def page(self, limit=50, cursor="", state=None, project_id=None):
         if not 1 <= limit <= 100:

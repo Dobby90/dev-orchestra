@@ -32,7 +32,7 @@ class Store:
             ).fetchone()
             if exists:
                 versions = [r[0] for r in db.execute("SELECT version FROM schema_version")]
-                if versions in ([3], [4]):
+                if versions in ([3], [4], [5]):
                     return
                 if versions not in ([1], [2]):
                     raise PipelineError("unsupported database schema version")
@@ -168,6 +168,20 @@ class Store:
                 }.get(data.get("next_role"))
                 if resume_target:
                     allowed.add(resume_target)
+            if (
+                row["state"] == "waiting_approval"
+                and target == "queued"
+                and changes.get("revision") == json.loads(row["data"]).get("revision", 0) + 1
+                and changes.get("iteration") == json.loads(row["data"]).get("iteration", 0) + 1
+                and changes.get("next_role") == "fixer"
+                and "final_sha" in changes
+                and changes["final_sha"] is None
+                and "test_result" in changes
+                and changes["test_result"] is None
+                and "review_result" in changes
+                and changes["review_result"] is None
+            ):
+                allowed.add("queued")
             if target != row["state"] and target not in allowed:
                 raise PipelineError(f"invalid state transition: {row['state']} -> {target}")
             db.execute(
@@ -181,6 +195,26 @@ class Store:
                 db.execute(
                     "UPDATE jobs SET state='cancelled' WHERE run_id=? AND state='queued'", (run_id,)
                 )
+            if db.execute("SELECT version FROM schema_version").fetchone()[0] >= 5:
+                if "revision" in changes:
+                    db.execute(
+                        "UPDATE runs SET revision=? WHERE id=?", (changes["revision"], run_id)
+                    )
+                if (
+                    target == "needs_input"
+                    and row["control"] in {"cancel", "pause"}
+                    and changes.get("error")
+                ):
+                    db.execute(
+                        "UPDATE operations SET status='needs_input',error=? WHERE run_id=? AND kind=? AND status='accepted'",
+                        (changes["error"], run_id, row["control"]),
+                    )
+                if target in {"cancelled", "paused"}:
+                    kind = "cancel" if target == "cancelled" else "pause"
+                    db.execute(
+                        "UPDATE operations SET status='applied',applied_at=? WHERE run_id=? AND kind=? AND status='accepted'",
+                        (now(), run_id, kind),
+                    )
             self._event(
                 db,
                 run_id,
@@ -220,6 +254,11 @@ class Store:
                 "INSERT INTO steps(run_id,role,iteration,attempt,input_sha,status,data) VALUES(?,?,?,?,?,'running','{}')",
                 (run_id, role, iteration, attempt, sha),
             )
+            if db.execute("SELECT version FROM schema_version").fetchone()[0] >= 5:
+                db.execute(
+                    "UPDATE steps SET revision=?,started_at=? WHERE id=?",
+                    (self.get(run_id).get("revision", 0), now(), cursor.lastrowid),
+                )
             self._event(
                 db,
                 run_id,
@@ -233,12 +272,14 @@ class Store:
             )
             return cursor.lastrowid, attempt
 
-    def finish_step(self, step, sha, data):
+    def finish_step(self, step, sha, data, status="completed"):
         with self.connection() as db:
             db.execute(
-                "UPDATE steps SET status='completed',output_sha=?,data=? WHERE id=?",
-                (sha, json.dumps(data), step),
+                "UPDATE steps SET status=?,output_sha=?,data=? WHERE id=?",
+                (status, sha, json.dumps(data), step),
             )
+            if db.execute("SELECT version FROM schema_version").fetchone()[0] >= 5:
+                db.execute("UPDATE steps SET finished_at=? WHERE id=?", (now(), step))
             row = db.execute(
                 "SELECT run_id,role,iteration FROM steps WHERE id=?", (step,)
             ).fetchone()
@@ -277,11 +318,15 @@ class Store:
                 )
             ]
 
-    def approve(self, run_id, sha, evidence):
+    def approve(self, run_id, sha, evidence, expected_version=None):
         with self.connection() as db:
             if self._transaction.get() is None:
                 db.execute("BEGIN IMMEDIATE")
-            row = db.execute("SELECT state,control FROM runs WHERE id=?", (run_id,)).fetchone()
+            row = db.execute(
+                "SELECT state,control,version FROM runs WHERE id=?", (run_id,)
+            ).fetchone()
+            if expected_version is not None and row and row["version"] != expected_version:
+                raise PipelineError("concurrent state update")
             if not row or row["state"] != "waiting_approval" or row["control"]:
                 raise PipelineError("run is not awaiting approval")
             db.execute(
@@ -296,6 +341,16 @@ class Store:
 
     def interrupt_steps(self, run_id, reason):
         with self.connection() as db:
+            if db.execute("SELECT version FROM schema_version").fetchone()[0] >= 5:
+                rows = db.execute(
+                    "SELECT id FROM steps WHERE run_id=? AND status='running'", (run_id,)
+                ).fetchall()
+                for row in rows:
+                    self._event(db, run_id, "step.interrupted", {"step_id": row["id"]})
+                db.execute(
+                    "UPDATE steps SET finished_at=? WHERE run_id=? AND status='running'",
+                    (now(), run_id),
+                )
             db.execute(
                 "UPDATE steps SET status='interrupted',data=? WHERE run_id=? AND status='running'",
                 (json.dumps({"error": reason, "finished_at": now()}), run_id),

@@ -8,10 +8,12 @@ export function LogViewer({
   logs,
   removed,
   unavailable,
+  runId,
 }: {
   logs: Log[];
   removed: number;
   unavailable: boolean;
+  runId?: string;
 }) {
   const [role, setRole] = useState(""),
     [level, setLevel] = useState(""),
@@ -53,6 +55,14 @@ export function LogViewer({
   return (
     <section>
       <div className="log-toolbar">
+        {runId && (
+          <Button asChild variant="ghost">
+            <a href={`/api/runs/${encodeURIComponent(runId)}/logs/download`}>
+              <Download size={15} />
+              서버 로그 다운로드
+            </a>
+          </Button>
+        )}
         <select
           aria-label="로그 에이전트"
           value={role}

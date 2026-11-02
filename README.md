@@ -2,9 +2,9 @@
 
 Codex CLI를 활용해 기획, 개발, 테스트 작성·실행, 독립적인 코드 리뷰, 제한된 횟수의 자동 수정을 수행하는 로컬 Python CLI입니다. 사용자 승인은 검증된 커밋을 승인 상태로 기록하며, 대상 프로젝트의 원격 Push나 Merge를 수행하지 않습니다.
 
-이 저장소는 모노레포로 관리합니다. 공통 Python 백엔드는 `src/dev_orchestra`에 있으며, React + TypeScript 앱은 `apps/web`에 있습니다. FastAPI 백엔드·독립 Worker·SSE와 연결되는 로컬 GUI를 Phase 4에서 추가했습니다.
+이 저장소는 모노레포로 관리합니다. 공통 Python 백엔드는 `src/dev_orchestra`에 있으며, React + TypeScript 앱은 `apps/web`에 있습니다. FastAPI 백엔드·독립 Worker·SSE와 연결되는 로컬 GUI와 CLI·GUI 통합 실행을 제공합니다.
 
-GUI 개발 Phase 1에서는 공통 Application Service 계층을 분리했습니다. 기존 `RunService` 인터페이스는 유지하며, `queries`는 DB 조회, `recovery`는 명시적 상태 조정, `approvals`는 검증된 후보 승인, `execution`은 독립 Worker 시작, `events`는 저장 로그와 이벤트 조회를 담당합니다. `ProjectService`는 허용 경로·Git 저장소·테스트/리뷰 정책을 검증합니다. Phase 2에서는 프로젝트 영속 관리와 인증된 REST API를 추가했습니다. Phase 3에서는 DB 스키마 4, 독립 Dispatcher·Worker의 작업 소유권과 복구, 영속 이벤트·SSE 로그 재생을 추가했습니다. Phase 4에서는 로그인·프로젝트·작업 접수·실행 상세·로그·승인 화면을 추가했습니다. 상세 결과 API와 배포 통합은 후속 단계입니다.
+GUI 개발 Phase 1에서는 공통 Application Service 계층을 분리했습니다. 기존 `RunService` 인터페이스는 유지하며, `queries`는 DB 조회, `recovery`는 명시적 상태 조정, `approvals`는 검증된 후보 승인, `execution`은 독립 Worker 시작, `events`는 저장 로그와 이벤트 조회를 담당합니다. `ProjectService`는 허용 경로·Git 저장소·테스트/리뷰 정책을 검증합니다. Phase 2에서는 프로젝트 영속 관리와 인증된 REST API를 추가했습니다. Phase 3에서는 DB 스키마 4, 독립 Dispatcher·Worker의 작업 소유권과 복구, 영속 이벤트·SSE 로그 재생을 추가했습니다. Phase 4에서는 로그인·프로젝트·작업 접수·실행 상세·로그·승인 화면을 추가했습니다. Phase 5에서는 JUnit 상세·리뷰 이슈 이력·Diff·수정 요청과 보류, 명령 접수 이력, 정적 GUI 패키징과 통합 시작·종료를 추가했습니다.
 
 공통 서비스는 FastAPI나 Typer에 의존하지 않습니다. `queries.summary()`는 PRD·설정·서버 디렉터리를 제외한 타입이 있는 요약을 반환하고, 기존 CLI 출력에 필요한 내부 전체 조회는 별도로 유지합니다. `status()`의 기존 복구 동작은 유지되며, 읽기 전용 조회는 복구나 보고서 생성을 수행하지 않습니다.
 
@@ -145,10 +145,10 @@ GUI 착수 전 감사에서 발견한 결함의 수정·검증 결과는 [수정
 - 실행 가능한 Git clean/smudge/process 필터가 설정된 저장소는 안전 정책이 마련될 때까지 실행을 거부합니다. Git LFS 등 필터를 사용하는 프로젝트도 해당할 수 있습니다.
 - 사전 점검과 잠금 대기 중에도 취소를 처리하고, 프로세스 그룹에 남은 자식을 종료합니다.
 - Worker 강제 종료 후에도 별도 관리 프로세스가 자식을 정리합니다. 중복 Worker는 기존 소유권을 덮어쓰지 않으며, 종료 확인 실패를 취소 성공으로 표시하지 않습니다.
-- CLI 기본 DB는 스키마 2를 유지하며, 웹 백엔드·큐에는 명시적으로 스키마 4로 업그레이드합니다. 기존 버전 1 데이터도 CLI의 기존 1→2 갱신 후 보존합니다. 알 수 없는 버전은 거부합니다.
+- CLI 기본 DB는 스키마 2를 유지하며, 웹 백엔드·큐에는 명시적으로 스키마 5로 업그레이드합니다. 기존 버전 1 데이터도 CLI의 기존 1→2 갱신 후 보존합니다. 알 수 없는 버전은 거부합니다.
 - 승인·무효화 후 보고서를 갱신하며, 제어·단계 이벤트와 파일별 로그 커서를 제공합니다. FastAPI·SSE·React는 공통 서비스를 사용하는 별도 어댑터로 제공합니다.
 
-## 로컬 API와 독립 Worker — Phase 3
+## 로컬 API와 독립 Worker
 
 웹 의존성은 선택 설치합니다. 아래 명령은 기존 개발 가상환경을 사용하는 예시이며 `--config`는 각 명령 앞에 지정합니다.
 
@@ -158,7 +158,7 @@ UV_CACHE_DIR="$PWD/.uv-cache" .tools/uv sync --frozen --extra web
 .venv/bin/devorchestra --config config.yaml api-start --allow-root ~/projects
 ```
 
-`database-upgrade`는 실행 중인 Worker·미확인 프로세스·실행 잠금이 있으면 중단합니다. schema 2 또는 3의 일관된 SQLite 백업과 증거 참조 manifest를 DB 옆에 저장한 뒤 트랜잭션으로 schema 4까지 업그레이드합니다. Dispatcher도 먼저 중지해야 합니다. 구버전 CLI/Worker와 혼용하지 마세요. 복원은 모든 writer를 종료한 상태에서 백업으로 수행합니다. 기존 데이터베이스는 API 시작만으로 자동 업그레이드하지 않습니다.
+`database-upgrade`는 실행 중인 Worker·미확인 프로세스·실행 잠금이 있으면 중단합니다. schema 2·3·4의 일관된 SQLite 백업과 증거 참조 manifest를 DB 옆에 저장한 뒤 트랜잭션으로 schema 5까지 업그레이드합니다. API·웹 서비스·Dispatcher도 먼저 중지해야 합니다. 구버전 CLI/Worker와 혼용하지 마세요. 복원은 모든 writer를 종료한 상태에서 백업으로 수행합니다. 기존 데이터베이스는 API 시작만으로 자동 업그레이드하지 않습니다.
 
 API는 `127.0.0.1:8000`에만 바인딩하며 세션·정확한 Origin/Host·쓰기 CSRF 검사를 적용합니다. `--allow-root` 아래의 Git 저장소만 프로젝트로 등록할 수 있습니다. 원본 저장소·브랜치를 삭제하지 않으며 프로젝트 DELETE는 등록 해제(archive)입니다.
 
@@ -169,7 +169,7 @@ API는 `127.0.0.1:8000`에만 바인딩하며 세션·정확한 Origin/Host·쓰
 
 로그인 코드는 로컬 클라이언트가 허용된 Origin에서 `POST /api/session`으로 전달합니다. 응답의 HttpOnly 세션 쿠키와 CSRF 토큰으로 후속 API를 사용합니다. 인증값을 URL query나 로그에 넣지 마세요. `/api/openapi.json`과 `/api/docs`는 인증된 OpenAPI JSON을 제공하며, 외부 CDN을 사용하는 Swagger UI는 제공하지 않습니다. 브라우저 로그인 UI는 `apps/web`에서 제공합니다.
 
-현재 API는 프로젝트 등록/조회/정책 수정/해제, PRD 업로드, 실행 preview, 멱등 실행 접수, 실행 목록/상세/단계/저장 로그/이벤트/기존 보고서 조회, 취소·일시중지·검증 후 승인·명시적 상태 조정을 제공합니다. 생성 응답은 DB에 접수된 `queued` 상태입니다. Dispatcher가 없으면 `queued_reason=dispatcher_offline`, 실행 중이면 `waiting_capacity`로 반환합니다. API 프로세스는 모델을 실행하지 않으며, 별도로 시작한 Dispatcher가 큐를 소비합니다. 재개 API를 추가했고 수정 요청·결과 상세의 전체 웹 계약은 후속 통합 단계입니다. 기존 CLI 직접 실행은 Dispatcher 없이도 유지됩니다.
+현재 API는 프로젝트 등록/조회/정책 수정/해제, PRD 업로드, 실행 preview, 멱등 실행 접수, 실행 목록/상세/단계/저장 로그/이벤트/기존 보고서 조회, 취소·일시중지·검증 후 승인·명시적 상태 조정을 제공합니다. 생성 응답은 DB에 접수된 `queued` 상태입니다. Dispatcher가 없으면 `queued_reason=dispatcher_offline`, 실행 중이면 `waiting_capacity`로 반환합니다. API 프로세스는 모델을 실행하지 않으며, 별도로 시작한 Dispatcher가 큐를 소비합니다. 재개·수정 요청·승인 보류·Worktree 정리·비차단 이슈 분류와 테스트·리뷰·Diff·artifact 조회 API를 제공합니다. 기존 CLI 직접 실행은 Dispatcher 없이도 유지됩니다.
 
 ```sh
 # 동일한 config/DB를 사용하는 독립 Dispatcher를 시작합니다.
@@ -185,7 +185,7 @@ API는 `127.0.0.1:8000`에만 바인딩하며 세션·정확한 Origin/Host·쓰
 로그는 UTF-8 줄 전체를 마스킹한 비공개 `log-views` 파일에 보존한 뒤 최대 4 KiB 구간과 해시를 DB 이벤트에 연결합니다. API는 원본 파일 경로나 인증 capability를 노출하지 않습니다. 일반 소스의 로그 레벨은 `unknown`으로 유지하고 구조가 확인된 workflow 로그만 레벨을 추출합니다. 8 MiB를 넘는 단일 줄은 안전 한도로 인덱싱 오류를 기록합니다. 소스 원본은 CLI 진단용으로 보존하므로 상태 디렉터리를 비공개로 관리해야 합니다. 모든 비밀값 형식을 자동으로 식별하지는 못합니다.
 
 
-## React GUI — Phase 4
+## React GUI와 통합 실행 — Phase 5
 
 Node 22.12 이상에서 저장소 루트의 npm workspace를 사용합니다. Python CLI는 Node나 웹 의존성 설치 없이 계속 사용할 수 있습니다.
 
@@ -197,4 +197,30 @@ npm run dev:web
 
 `http://127.0.0.1:5173`에 접속하여 `web-session`으로 발급한 코드를 입력합니다. 프로젝트 등록 → PRD 작성·업로드 → 실행 전 확인 → 작업 시작 → 로그·타임라인·보고서 → SHA 확인 후 승인 흐름을 제공합니다. 상태 제어 결과를 낙관적으로 완료 표시하지 않으며 SSE 단절 시 주기적 조회로 복구합니다.
 
-상세 설치·검증 명령은 [웹 앱 안내](apps/web/README.md)에 있습니다. JUnit 상세·리뷰 이슈 수명·Diff·수정 요청의 서버 API와 정적 배포·통합 시작 명령은 Phase 5 범위입니다. 현재 결과 탭은 미지원 사유를 표시합니다. Phase 4의 실행 방식은 별도 API·Dispatcher와 Vite 개발 서버입니다.
+개발 서버 없이 한 포트에서 실행하려면 정적 파일을 빌드한 뒤 통합 명령을 사용합니다. Node는 빌드할 때만 필요하며, GUI 산출물을 포함한 wheel을 설치한 환경에서는 Python만으로 실행합니다.
+
+```sh
+npm ci
+.venv/bin/python scripts/build_web.py
+# 실행 중인 API·웹 서비스·Dispatcher·Run Worker를 먼저 종료합니다.
+.venv/bin/devorchestra --config config.yaml database-upgrade
+.venv/bin/devorchestra --config config.yaml web start --detach --allow-root ~/projects --port 8000
+.venv/bin/devorchestra --config config.yaml web-session
+.venv/bin/devorchestra --config config.yaml web status
+.venv/bin/devorchestra --config config.yaml web stop
+```
+
+`http://127.0.0.1:8000`에서 로그인합니다. `web start`는 정적 파일의 manifest와 체크섬, 포트·실행 소유권을 확인한 후 API·Dispatcher를 시작합니다. 기존 Dispatcher는 재사용하고 해당 프로세스를 종료하지 않습니다. 일반 `web stop`은 자신이 시작한 API·Dispatcher만 종료하며 실행 중 Run Worker를 유지합니다. DB의 미완료 작업까지 취소하려면 `web stop --cancel-active`를 명시합니다. GUI 파일이 없는 CLI 패키지는 기존 CLI를 계속 제공하며 `web start`에서 빌드 필요성을 안내합니다.
+
+테스트 탭은 실제 명령별 시간·종료 코드·JUnit 실패 상세와 과거 회차를 표시합니다. 근거가 없으면 미상/사용 불가로 표시합니다. 리뷰 V2는 이전 이슈 ID마다 현재 후보 SHA와 같은 revision의 테스트를 근거로 재검증해야 해결로 인정하며, 리뷰에서 빠진 이슈를 자동 해결하지 않습니다. 차단 심각도의 이슈는 사용자 분류로 우회할 수 없습니다. Diff·JUnit·보고서는 체크섬을 검증하는 별도 산출물로 보존하여 Worktree 정리 후에도 조회합니다.
+
+수정 요청은 승인 대기에서 새 revision·지시문·Fix/Test/Review 작업을 함께 저장합니다. 변경 없는 Fix에도 새 검증이 필요하며 수정 한도는 초기화하지 않습니다. 명령은 접수/적용/사용자 확인 필요 상태로 추적하고 동일 키·본문 재요청은 같은 operation을 반환합니다. 승인 이력은 특정 SHA에만 적용되고 Push·Merge를 수행하지 않습니다. schema 5에서 CLI도 같은 결과·검증 서비스를 사용합니다. 미등록 CLI 작업은 웹에서 조회 전용입니다.
+
+```sh
+devorchestra --config config.yaml request-changes RUN_ID --instructions changes.md --detach
+devorchestra --config config.yaml defer RUN_ID --reason "추가 확인 후 승인"
+# GUI 산출물을 포함한 배포 파일 생성
+UV_CACHE_DIR="$PWD/.uv-cache" .tools/uv build --offline
+```
+
+상세 설치·검증 명령과 남은 검증 범위는 [웹 앱 안내](apps/web/README.md)에 있습니다. Phase 6 종합 검증은 별도 승인 후 진행합니다.

@@ -75,15 +75,61 @@ class RunService:
             "spec_hash": digest(spec_text.encode()),
             "config": config.model_dump(mode="json"),
             "iteration": 0,
+            "revision": 0,
             "next_role": "planner",
             "created_at": now(),
         }
+        with self.store.connection() as db:
+            data["review_contract"] = (
+                2 if db.execute("SELECT version FROM schema_version").fetchone()[0] >= 5 else 1
+            )
         write(directory / "spec.md", spec_text)
         write(directory / "config.json", data["config"])
         return data
 
     def start(self, run_id, detached=False):
         return self.execution.start(run_id, detached)
+
+    def resume_changes(self, run, answers=None, max_fixes=None):
+        if run.get("worktree_removed"):
+            raise PipelineError("worktree was cleaned; create a new Run")
+        if run.get("cleanup_requested"):
+            raise PipelineError("cleanup is in progress")
+        if run["state"] in {"completed", "cancelled", "waiting_approval"}:
+            raise PipelineError("run is not resumable")
+        ensure_stopped(Path(run["directory"]))
+        checkpoints(self.store, run)
+        changes = {}
+        if answers is not None:
+            changes["answers"] = answers
+        if max_fixes is not None:
+            if max_fixes <= run["config"]["workflow"]["max_fix_attempts"]:
+                raise PipelineError("new fix budget must increase the recorded limit")
+            config = Config.model_validate(run["config"])
+            config.workflow.max_fix_attempts = max_fixes
+            changes["config"] = config.model_dump(mode="json")
+            if run.get("next_role") == "reviewer":
+                changes |= {"next_role": "fixer", "iteration": run["iteration"] + 1}
+        if run.get("error") == "fix budget exhausted" and max_fixes is None:
+            raise PipelineError("explicitly increase max-fix-attempts to resume an exhausted run")
+        return changes
+
+    def commit_resume(self, db, run, changes, expected_version):
+        from dev_orchestra.application.queue import QueueService
+
+        queue = QueueService(self.store)
+        if (
+            queue.enabled()
+            and db.execute(
+                "SELECT 1 FROM jobs WHERE run_id=? AND state IN ('queued','claimed','running')",
+                (run["id"],),
+            ).fetchone()
+        ):
+            raise PipelineError("previous Worker is still finalizing; retry after job completion")
+        self.store.interrupt_steps(run["id"], "previous worker exited before checkpoint")
+        self.store.control(run["id"], None, expected_version)
+        self.store.update(run["id"], "queued", error=None, **changes)
+        return queue.enqueue(run["id"], connection=db) if queue.enabled() else None
 
     def resume(self, run_id, answers=None, max_fixes=None, *, expected_version=None):
         from dev_orchestra.application.queue import QueueService
@@ -94,46 +140,28 @@ class RunService:
         run = self.store.get(run_id)
         with lock(Path(run["directory"]) / "execution.lock"):
             run = self.store.get(run_id)
-            if run["state"] in {"completed", "cancelled", "waiting_approval"}:
-                raise PipelineError("run is not resumable")
-            ensure_stopped(Path(run["directory"]))
-            checkpoints(self.store, run)
-            self.store.interrupt_steps(run_id, "previous worker exited before checkpoint")
-            changes = {}
-            if answers:
-                changes["answers"] = answers.read_text()
-            if max_fixes is not None:
-                if max_fixes <= run["config"]["workflow"]["max_fix_attempts"]:
-                    raise PipelineError("new fix budget must increase the recorded limit")
-                config = Config.model_validate(run["config"])
-                config.workflow.max_fix_attempts = max_fixes
-                changes["config"] = config.model_dump(mode="json")
-                if run.get("next_role") == "reviewer":
-                    changes |= {"next_role": "fixer", "iteration": run["iteration"] + 1}
-            if run.get("error") == "fix budget exhausted" and max_fixes is None:
-                raise PipelineError(
-                    "explicitly increase max-fix-attempts to resume an exhausted run"
-                )
+            changes = self.resume_changes(run, answers.read_text() if answers else None, max_fixes)
             with self.store.transaction() as db:
-                self.store.control(
-                    run_id,
-                    None,
-                    expected_version if expected_version is not None else run["version"],
+                self.commit_resume(
+                    db,
+                    run,
+                    changes,
+                    run["version"] if expected_version is None else expected_version,
                 )
-                self.store.update(run_id, "queued", error=None, **changes)
-                if queue.enabled():
-                    queue.enqueue(run_id, connection=db)
+
+    def request_control(self, run_id, action, expected_version=None, connection=None):
+        if connection is None:
+            with self.store.transaction() as db:
+                return self.request_control(run_id, action, expected_version, db)
+        self.store.control(run_id, action, expected_version)
+        if connection.execute("SELECT 1 FROM sqlite_master WHERE name='jobs'").fetchone():
+            connection.execute(
+                "UPDATE jobs SET state='cancelled' WHERE run_id=? AND state='queued'", (run_id,)
+            )
 
     def cancel(self, run_id, pause=False, *, expected_version=None):
+        self.request_control(run_id, "pause" if pause else "cancel", expected_version)
         run = self.store.get(run_id)
-        if run["state"] in {"completed", "cancelled"}:
-            raise PipelineError("terminal run cannot be cancelled/paused")
-        with self.store.transaction() as db:
-            self.store.control(run_id, "pause" if pause else "cancel", expected_version)
-            if db.execute("SELECT 1 FROM sqlite_master WHERE name='jobs'").fetchone():
-                db.execute(
-                    "UPDATE jobs SET state='cancelled' WHERE run_id=? AND state='queued'", (run_id,)
-                )
         try:
             with lock(Path(run["directory"]) / "execution.lock"):
                 try:
@@ -146,7 +174,7 @@ class RunService:
                 self.store.update(run_id, "paused" if pause else "cancelled")
                 self.refresh_report(run_id)
         except OwnershipError:
-            pass  # The live Worker acknowledges only after guardian cleanup.
+            pass
 
     def approve(self, run_id):
         return self.approvals.approve(run_id)
@@ -156,15 +184,22 @@ class RunService:
 
         Runner(self.store, None, None).report(run_id)
 
-    def cleanup(self, run_id):
+    def cleanup(self, run_id, expected_version=None):
         run = self.store.get(run_id)
         directory = Path(run["directory"])
         with lock(directory / "execution.lock"), execution_scope(directory):
             run = self.store.get(run_id)
+            if expected_version is not None and run["version"] != expected_version:
+                raise PipelineError("concurrent state update")
             if run["state"] not in {"completed", "cancelled", "failed", "needs_input"}:
                 raise PipelineError("active run cannot be cleaned up")
             ensure_stopped(directory)
-            Git(Path(run["repo"])).remove(Path(run["worktree"]))
+            from dev_orchestra.application.results import Results
+
+            if Path(run["worktree"]).exists():
+                if run.get("current_sha"):
+                    Results(self.store).save_snapshot(run_id, run["current_sha"])
+                Git(Path(run["repo"])).remove(Path(run["worktree"]))
 
     def _finish_idle_control(self, run):
         return self.recovery._finish_idle_control(run)

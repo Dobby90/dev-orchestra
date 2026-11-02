@@ -1,13 +1,15 @@
 import { test, expect } from "@playwright/test";
 import AxeBuilder from "@axe-core/playwright";
 import { execFileSync } from "node:child_process";
-import { readFileSync, writeFileSync } from "node:fs";
+import { existsSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { dirname, join } from "node:path";
 const fixture = () =>
   JSON.parse(readFileSync("test-results/fixture.json", "utf8")) as {
     repo: string;
     database: string;
     release: string;
     python: string;
+    config: string;
     policy: unknown;
     base_sha: string;
   };
@@ -72,13 +74,11 @@ test("실제 로컬 API: 로그인 → 프로젝트 → 실행 → 재연결 →
   await expect(
     page.getByRole("button", { name: "확인하고 작업 시작" }),
   ).toHaveCount(0);
-  await page
-    .getByLabel("PRD 파일 (.md / .txt, UTF-8)")
-    .setInputFiles({
-      name: "prd.md",
-      mimeType: "text/markdown",
-      buffer: Buffer.from("기존 덧셈 기능을 테스트하고 리뷰해 주세요.", "utf8"),
-    });
+  await page.getByLabel("PRD 파일 (.md / .txt, UTF-8)").setInputFiles({
+    name: "prd.md",
+    mimeType: "text/markdown",
+    buffer: Buffer.from("기존 덧셈 기능을 테스트하고 리뷰해 주세요.", "utf8"),
+  });
   await expect(page.getByText(/PRD 저장됨/)).toBeVisible();
   await page.getByRole("button", { name: "실행 전 확인" }).click();
   await expect(
@@ -147,12 +147,78 @@ test("실제 로컬 API: 로그인 → 프로젝트 → 실행 → 재연결 →
   });
   await page.getByRole("tab", { name: "테스트", exact: true }).click();
   await expect(
-    page.getByText(/상세 결과 API를 제공하지 않습니다/),
+    page.getByRole("heading", { name: "테스트 통과", exact: true }),
   ).toBeVisible();
+  const junitDownload = page.waitForEvent("download");
+  await page.getByRole("link", { name: "보존된 JUnit" }).click();
+  const junit = await junitDownload;
+  expect(readFileSync((await junit.path())!, "utf8")).toContain("testcase");
+  await page.getByRole("tab", { name: "코드 리뷰", exact: true }).click();
+  await expect(
+    page.getByRole("heading", { name: "독립 코드 리뷰" }),
+  ).toBeVisible();
+  await page.getByRole("tab", { name: "변경 내용", exact: true }).click();
+  await expect(page.getByText("이 후보의 변경 파일이 없습니다")).toBeVisible();
+  await page.getByRole("button", { name: "보류", exact: true }).click();
+  await page.getByLabel("사유 (필수)").fill("추가 확인 뒤 승인합니다");
+  await page.getByRole("button", { name: "승인 보류 확인" }).click();
+  await expect(page.getByText("승인 대기", { exact: true })).toBeVisible();
+  await page.getByRole("button", { name: "수정 요청", exact: true }).click();
+  await page
+    .getByLabel("수정 지시사항")
+    .fill("변경 없이도 테스트와 리뷰를 다시 검증해 주세요.");
+  await page.getByRole("button", { name: "수정 요청 확인" }).click();
+  await expect(page.getByText("승인 대기", { exact: true })).toBeVisible({
+    timeout: 45000,
+  });
+  await expect(page.locator(".validation-strip")).toContainText("revision 1");
+  await page.getByRole("tab", { name: "테스트", exact: true }).click();
+  await expect(
+    page.getByRole("heading", { name: "테스트 통과", exact: true }),
+  ).toBeVisible();
+  const history = page.getByLabel("결과 회차 선택");
+  await expect(history.locator("option")).toHaveCount(3);
+  await history.selectOption(
+    (await history.locator("option").nth(1).getAttribute("value")) ?? "",
+  );
+  await expect(page.getByText(/이전 revision 0의 결과입니다/)).toBeVisible();
+  await history.selectOption("");
+  const snapshot = execFileSync(
+    f.python,
+    [
+      "-c",
+      "import sqlite3,json,sys;c=sqlite3.connect(sys.argv[1]);print(json.loads(c.execute('SELECT data FROM runs').fetchone()[0])['revision']);print(c.execute(\"SELECT count(*) FROM steps WHERE role='tester' AND status='completed'\").fetchone()[0])",
+      f.database,
+    ],
+    { encoding: "utf8" },
+  );
+  expect(snapshot.trim()).toBe("1\n2");
   await page.getByRole("tab", { name: "최종 보고서" }).click();
   await expect(
     page.getByRole("heading", { name: "DevOrchestra report" }),
   ).toBeVisible();
+  const rid = new URL(page.url()).pathname.split("/").at(-1)!;
+  const cli = join(dirname(f.python), "devorchestra");
+  const cliList = JSON.parse(
+    execFileSync(cli, ["--config", f.config, "list"], { encoding: "utf8" }),
+  );
+  expect(cliList.some((run: { id: string }) => run.id === rid)).toBe(true);
+  await expect
+    .poll(
+      () =>
+        JSON.parse(
+          execFileSync(cli, ["--config", f.config, "status", rid], {
+            encoding: "utf8",
+          }),
+        ).state,
+    )
+    .toBe("waiting_approval");
+  await expect(page.getByText("승인 대기", { exact: true })).toBeVisible();
+  const cliLogs = execFileSync(cli, ["--config", f.config, "logs", rid], {
+    encoding: "utf8",
+  });
+  expect(cliLogs).toContain("GUI 실시간 한글 로그");
+  expect(cliLogs).not.toContain("CANARY");
   await page.getByRole("button", { name: "최종 승인", exact: true }).click();
   await expect(
     page.getByRole("button", { name: "최종 승인 확인" }),
@@ -171,6 +237,42 @@ test("실제 로컬 API: 로그인 → 프로젝트 → 실행 → 재연결 →
       encoding: "utf8",
     }).trim(),
   ).toBe("");
+  await page
+    .getByRole("button", { name: "Worktree 정리", exact: true })
+    .click();
+  await page.getByRole("button", { name: "Worktree 정리 확인" }).click();
+  // Real pytest leaves untracked outputs. Cleanup must refuse instead of forcing removal.
+  await expect(
+    page.getByRole("status").filter({ hasText: "수동 확인 필요" }),
+  ).toBeVisible();
+  const worktree = execFileSync(
+    f.python,
+    [
+      "-c",
+      "import sqlite3,json,sys;print(json.loads(sqlite3.connect(sys.argv[1]).execute('SELECT data FROM runs WHERE id=?',(sys.argv[2],)).fetchone()[0])['worktree'])",
+      f.database,
+      rid,
+    ],
+    { encoding: "utf8" },
+  ).trim();
+  expect(existsSync(worktree)).toBe(true);
+  // The test owns this temporary fixture: simulate the user removing only its known outputs.
+  expect(worktree.startsWith(dirname(f.database) + "/worktrees/")).toBe(true);
+  for (const name of ["build", ".pytest_cache"])
+    rmSync(join(worktree, name), { recursive: true });
+  await page
+    .getByRole("button", { name: "Worktree 정리", exact: true })
+    .click();
+  await page.getByRole("button", { name: "Worktree 정리 확인" }).click();
+  await expect(
+    page.getByRole("status").filter({ hasText: "적용됨" }),
+  ).toBeVisible();
+  await expect.poll(() => existsSync(worktree)).toBe(false);
+  await expect(
+    page.getByRole("button", { name: "Worktree 정리", exact: true }),
+  ).toHaveCount(0);
+  await page.getByRole("tab", { name: "변경 내용", exact: true }).click();
+  await expect(page.getByText("이 후보의 변경 파일이 없습니다")).toBeVisible();
   await page.screenshot({
     path: "test-results/run-completed.png",
     fullPage: true,
@@ -205,10 +307,14 @@ test("실제 로컬 API: 로그인 → 프로젝트 → 실행 → 재연결 →
 test("개발 서버가 검사 산출물과 Python 소스를 제공하지 않는다", async ({
   request,
 }) => {
-  expect((await request.get("/test-results/fixture.json")).status()).toBe(403);
+  expect((await request.get("/test-results/fixture.json")).status()).toBe(
+    process.env.E2E_BUNDLED ? 404 : 403,
+  );
   const source = new URL(
     "../../../src/dev_orchestra/api/security.py",
     import.meta.url,
   ).pathname;
-  expect((await request.get(`/@fs${source}`)).status()).toBe(403);
+  expect((await request.get(`/@fs${source}`)).status()).toBe(
+    process.env.E2E_BUNDLED ? 404 : 403,
+  );
 });

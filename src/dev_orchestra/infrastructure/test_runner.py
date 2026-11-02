@@ -3,13 +3,14 @@
 import platform
 import shutil
 import tempfile
+import time
 import uuid
 import xml.etree.ElementTree as ET
 from pathlib import Path
 
-from dev_orchestra.domain.models import PipelineError
-from dev_orchestra.infrastructure.files import contained
-from dev_orchestra.infrastructure.process import environment, execute, execution_directory
+from dev_orchestra.domain.models import PipelineError, StopRequested
+from dev_orchestra.infrastructure.files import contained, digest, write
+from dev_orchestra.infrastructure.process import environment, execute, execution_directory, sanitize
 
 
 def sandbox_command(worktree, outputs, scratch, argv):
@@ -53,6 +54,8 @@ def sandbox_command(worktree, outputs, scratch, argv):
 
 def parse_junit(path):
     try:
+        if path.stat().st_size > 8 * 1048576:
+            raise ValueError("JUnit exceeds safety limit")
         content = path.read_text()
         if "<!DOCTYPE" in content or "<!ENTITY" in content:
             raise ValueError("XML declarations denied")
@@ -79,6 +82,27 @@ def parse_junit(path):
             "failed": len(failures),
             "skipped": skipped,
             "failures": failures,
+            "failure_details": [
+                {
+                    "name": c.attrib.get("name", "unknown"),
+                    "classname": c.attrib.get("classname"),
+                    "file": c.attrib.get("file"),
+                    "line": c.attrib.get("line"),
+                    "message": sanitize(
+                        (
+                            c.find("failure") if c.find("failure") is not None else c.find("error")
+                        ).attrib.get("message", "")
+                    )[:16000],
+                    "details": sanitize(
+                        (
+                            c.find("failure") if c.find("failure") is not None else c.find("error")
+                        ).text
+                        or ""
+                    )[:16000],
+                }
+                for c in cases
+                if c.find("failure") is not None or c.find("error") is not None
+            ],
         }
     except (OSError, ET.ParseError, ValueError) as error:
         raise PipelineError(f"invalid or absent JUnit test evidence: {error}") from error
@@ -126,31 +150,76 @@ class TestRunner:
             for p in outputs:
                 p.mkdir(parents=True, exist_ok=True)
             report.unlink(missing_ok=True)
-            with tempfile.TemporaryDirectory(prefix="devorchestra-test-") as temp:
-                scratch = Path(temp).resolve()
-                env = environment() | {
-                    "HOME": str(scratch),
-                    "TMPDIR": str(scratch),
-                    "TMP": str(scratch),
-                    "TEMP": str(scratch),
-                }
-                argv = sandbox_command(worktree, outputs, scratch, command.argv)
-                rc, _ = execute(
-                    argv,
-                    worktree,
-                    command.timeout_seconds,
-                    directory / f"{command_id}.log",
-                    stop=stop,
-                    env=env,
+            started = time.monotonic()
+            result = {
+                "command_id": command_id,
+                "argv": command.argv,
+                "exit_code": None,
+                "status": "unavailable",
+                "total": None,
+                "failed": None,
+                "skipped": None,
+                "failures": [],
+                "failure_details": [],
+                "passed": False,
+                "junit_path": None,
+                "junit_hash": None,
+                "error": None,
+            }
+            try:
+                with tempfile.TemporaryDirectory(prefix="devorchestra-test-") as temp:
+                    scratch = Path(temp).resolve()
+                    env = environment() | {
+                        "HOME": str(scratch),
+                        "TMPDIR": str(scratch),
+                        "TMP": str(scratch),
+                        "TEMP": str(scratch),
+                    }
+                    argv = sandbox_command(worktree, outputs, scratch, command.argv)
+                    rc, _ = execute(
+                        argv,
+                        worktree,
+                        command.timeout_seconds,
+                        directory / f"{command_id}.log",
+                        stop=stop,
+                        env=env,
+                    )
+                result["exit_code"] = rc
+                result["status"] = "parse_error"
+                counts = parse_junit(report)
+                result.update(
+                    counts,
+                    passed=rc == 0 and counts["failed"] == 0,
+                    status="passed" if rc == 0 and counts["failed"] == 0 else "failed",
                 )
-            counts = parse_junit(report)
-            results.append(
-                {
-                    "command_id": command_id,
-                    "argv": command.argv,
-                    "exit_code": rc,
-                    **counts,
-                    "passed": rc == 0 and counts["failed"] == 0,
-                }
-            )
-        return {"passed": all(r["passed"] for r in results), "commands": results}
+                # Retain a redacted, valid XML copy for this command attempt.
+                tree = ET.fromstring(report.read_text())
+                for element in tree.iter():
+                    element.attrib = {key: sanitize(value) for key, value in element.attrib.items()}
+                    element.text = sanitize(element.text)
+                    element.tail = sanitize(element.tail)
+                copy = directory / f"{command_id}.junit.xml"
+                write(copy, ET.tostring(tree, encoding="unicode"))
+                result.update(junit_path=str(copy), junit_hash=digest(copy.read_bytes()))
+            except StopRequested:
+                raise
+            except (PipelineError, OSError) as error:
+                result.update(
+                    error=sanitize(str(error)),
+                    status="timeout" if "timeout" in str(error) else result["status"],
+                )
+            result["duration_seconds"] = time.monotonic() - started
+            results.append(result)
+        statuses = {r["status"] for r in results}
+        status = next(
+            (s for s in ["timeout", "unavailable", "parse_error", "failed"] if s in statuses),
+            "passed",
+        )
+        return sanitize(
+            {
+                "passed": all(r["passed"] for r in results),
+                "status": status,
+                "duration_seconds": sum(r["duration_seconds"] for r in results),
+                "commands": results,
+            }
+        )

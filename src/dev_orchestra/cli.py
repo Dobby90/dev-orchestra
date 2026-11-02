@@ -181,7 +181,7 @@ def web_session(ctx: typer.Context):
     from dev_orchestra.api.security import bootstrap
 
     with ctx.obj.store.connection() as db:
-        if db.execute("SELECT version FROM schema_version").fetchone()[0] != 4:
+        if db.execute("SELECT version FROM schema_version").fetchone()[0] != 5:
             raise PipelineError("run database-upgrade first")
     typer.echo(bootstrap(ctx.obj.store))
 
@@ -270,3 +270,74 @@ def worker_stop(ctx: typer.Context):
     with ctx.obj.store.connection() as db:
         db.execute("UPDATE dispatchers SET stop_requested=1 WHERE slot=1")
     typer.echo("Dispatcher stop requested; active Workers continue")
+
+
+web_app = typer.Typer(help="로컬 GUI·API·Dispatcher 관리")
+app.add_typer(web_app, name="web")
+
+
+@web_app.command("start")
+@guarded
+def web_start(
+    ctx: typer.Context,
+    allow_root: list[Path] = typer.Option([], "--allow-root"),
+    port: int = typer.Option(8000, min=1024, max=65535),
+    detach: bool = False,
+    assets: Path | None = typer.Option(None),
+):
+    from dev_orchestra.application.web_runtime import WebRuntime
+
+    typer.echo(json.dumps(WebRuntime(ctx.obj).start(allow_root, port, detach, assets)))
+
+
+@web_app.command("status")
+@guarded
+def web_status(ctx: typer.Context):
+    from dev_orchestra.application.web_runtime import WebRuntime
+
+    typer.echo(json.dumps(WebRuntime(ctx.obj).status()))
+
+
+@web_app.command("stop")
+@guarded
+def web_stop(ctx: typer.Context, cancel_active: bool = False):
+    from dev_orchestra.application.web_runtime import WebRuntime
+
+    typer.echo(json.dumps(WebRuntime(ctx.obj).stop(cancel_active)))
+
+
+@app.command("request-changes")
+@guarded
+def request_changes(
+    ctx: typer.Context,
+    run_id: str,
+    instructions: Path = typer.Option(...),
+    new_max_fix_attempts: int | None = typer.Option(None, min=1),
+    detach: bool = False,
+):
+    from dev_orchestra.application.commands import Commands
+
+    run = ctx.obj.store.get(run_id)
+    result = Commands(ctx.obj).execute(
+        run_id,
+        "request-changes",
+        run["version"],
+        {
+            "expected_sha": run.get("final_sha"),
+            "instructions": instructions.read_text(),
+            "new_max_fix_attempts": new_max_fix_attempts,
+        },
+    )
+    typer.echo(json.dumps(result))
+    ctx.obj.start(run_id, detached=detach)
+
+
+@app.command("defer")
+@guarded
+def defer(ctx: typer.Context, run_id: str, reason: str = typer.Option(...)):
+    from dev_orchestra.application.commands import Commands
+
+    run = ctx.obj.store.get(run_id)
+    typer.echo(
+        json.dumps(Commands(ctx.obj).execute(run_id, "defer", run["version"], {"reason": reason}))
+    )

@@ -26,3 +26,11 @@ node_modules/
 /apps/web/playwright-report/
 /apps/web/test-results/
 /apps/web/coverage/
+
+/src/dev_orchestra/_web/
+*.web-runtime.json
+*.web-stop.json
+*.web-config.json
+
+*.web.log
+*.web.lock

@@ -10,21 +10,28 @@ from pathlib import Path
 
 from fastapi import FastAPI, File, Header, HTTPException, Query, Request, Response, UploadFile
 from fastapi.exceptions import RequestValidationError
-from fastapi.responses import JSONResponse
+from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from starlette.concurrency import run_in_threadpool
 
 from dev_orchestra.api.security import COOKIE, Security, digest, runtime_key
 from dev_orchestra.application.backend import BackendService
-from dev_orchestra.application.contracts import ApprovalCommand, RunSummary
+from dev_orchestra.application.commands import Commands
 from dev_orchestra.application.errors import ApplicationError
+from dev_orchestra.application.results import Results
 from dev_orchestra.application.service import RunService
 from dev_orchestra.application.web_contracts import (
     ApprovalInput,
     BranchPage,
-    ControlResult,
+    ChangeInput,
+    ChangesView,
+    CleanupInput,
     DashboardView,
+    DeferInput,
+    DiffView,
+    DispositionInput,
     EventPage,
     LogPage,
+    OperationView,
     PreviewView,
     ProjectCreate,
     ProjectPage,
@@ -34,7 +41,7 @@ from dev_orchestra.application.web_contracts import (
     Reason,
     ReportView,
     ResumeInput,
-    ResumeView,
+    ReviewResultView,
     RunCreate,
     RunDetail,
     RunPage,
@@ -44,14 +51,14 @@ from dev_orchestra.application.web_contracts import (
     SpecView,
     StepPage,
     SubmissionView,
+    TestResultView,
 )
 from dev_orchestra.config import load_config
 from dev_orchestra.domain.models import PipelineError
 from dev_orchestra.infrastructure.migrations import upgrade
-from dev_orchestra.infrastructure.process import sanitize
 
 
-def create_app(config=None, allowed_roots=None, port=8000):
+def create_app(config=None, allowed_roots=None, port=8000, static_directory=None):
     config = config or load_config(
         Path(os.environ["DEVORCHESTRA_CONFIG"]) if "DEVORCHESTRA_CONFIG" in os.environ else None
     )
@@ -60,7 +67,7 @@ def create_app(config=None, allowed_roots=None, port=8000):
     if new:
         upgrade(runs.store.path)
     with runs.store.connection() as db:
-        if db.execute("SELECT version FROM schema_version").fetchone()[0] != 4:
+        if db.execute("SELECT version FROM schema_version").fetchone()[0] != 5:
             raise PipelineError("run devorchestra database-upgrade before starting API")
     roots = (
         allowed_roots
@@ -132,6 +139,7 @@ def create_app(config=None, allowed_roots=None, port=8000):
 
     @app.middleware("http")
     async def protection(request, call_next):
+        path = request.scope["path"]
         try:
             if not request.client or not ipaddress.ip_address(request.client.host).is_loopback:
                 return error("CLIENT_DENIED", "loopback client required", 403)
@@ -142,7 +150,17 @@ def create_app(config=None, allowed_roots=None, port=8000):
         origin = request.headers.get("origin")
         if origin and origin not in origins:
             return error("ORIGIN_DENIED", "origin denied", 403)
-        if request.url.path != "/api/health":
+        if not (path == "/api" or path.startswith("/api/")):
+            if request.method not in {"GET", "HEAD"}:
+                return error("METHOD_DENIED", "read-only GUI files", 405)
+            response = await call_next(request)
+            from dev_orchestra.api.static import CSP
+
+            response.headers["Content-Security-Policy"] = CSP
+            response.headers["X-Content-Type-Options"] = "nosniff"
+            response.headers["Referrer-Policy"] = "no-referrer"
+            return response
+        if path != "/api/health":
             if not origin and request.headers.get("sec-fetch-site") != "same-origin":
                 return error("ORIGIN_DENIED", "browser origin required", 403)
             if request.method == "OPTIONS":
@@ -155,7 +173,7 @@ def create_app(config=None, allowed_roots=None, port=8000):
                         "Access-Control-Allow-Headers": "Content-Type,X-CSRF-Token,If-Match,Idempotency-Key",
                     },
                 )
-            if request.url.path != "/api/session" or request.method != "POST":
+            if path != "/api/session" or request.method != "POST":
                 try:
                     await run_in_threadpool(security.authenticate, request.cookies.get(COOKIE))
                 except ApplicationError:
@@ -173,7 +191,7 @@ def create_app(config=None, allowed_roots=None, port=8000):
                 if (
                     not (request.method == "DELETE" and not request.headers.get("content-type"))
                     and kind != "application/json"
-                    and not (request.url.path == "/api/specs" and kind == "multipart/form-data")
+                    and not (path == "/api/specs" and kind == "multipart/form-data")
                 ):
                     return error("CONTENT_TYPE_DENIED", "JSON required", 415)
                 count = 0
@@ -335,61 +353,93 @@ def create_app(config=None, allowed_roots=None, port=8000):
         response.headers["ETag"] = f'"run:{rid}:v{value["version"]}"'
         return value
 
-    @app.post("/api/runs/{rid}/cancel", status_code=202, response_model=ControlResult)
-    def cancel(rid: str, request: Request, body: Reason):
-        check_run(request, rid)
-        runs.cancel(rid, expected_version=version(request, rid))
-        with runs.store.connection() as db:
-            db.execute(
-                "UPDATE jobs SET state='cancelled' WHERE run_id=? AND state='queued'", (rid,)
-            )
-        return {"state": runs.queries.get(rid)["state"]}
+    commands = Commands(runs)
+    results = Results(runs.store)
 
-    @app.post("/api/runs/{rid}/pause", status_code=202, response_model=ControlResult)
-    def pause(rid: str, request: Request, body: Reason):
-        check_run(request, rid)
-        runs.cancel(rid, pause=True, expected_version=version(request, rid))
-        with runs.store.connection() as db:
-            db.execute(
-                "UPDATE jobs SET state='cancelled' WHERE run_id=? AND state='queued'", (rid,)
-            )
-        return {"state": runs.queries.get(rid)["state"]}
-
-    @app.post("/api/runs/{rid}/resume", status_code=202, response_model=ResumeView)
-    def resume(rid: str, request: Request, body: ResumeInput):
-        run = check_run(request, rid)
-        if run["state"] not in {"failed", "paused", "needs_input"}:
-            raise ApplicationError("INVALID_STATE", "run is not resumable")
-        import tempfile
-
-        with tempfile.TemporaryDirectory(prefix="devorchestra-answers-") as temp:
-            answers = Path(temp) / "answers.md" if body.answers_text is not None else None
-            if answers:
-                answers.write_text(body.answers_text)
-            runs.resume(
-                rid, answers, body.new_max_fix_attempts, expected_version=version(request, rid)
-            )
-        with runs.store.connection() as db:
-            job = db.execute(
-                "SELECT id FROM jobs WHERE run_id=? ORDER BY rowid DESC LIMIT 1", (rid,)
-            ).fetchone()
-        return {"run_id": rid, "job_id": job["id"], "status": "queued"}
-
-    @app.post("/api/runs/{rid}/approve", response_model=RunSummary)
-    def approve(rid: str, request: Request, body: ApprovalInput):
-        check_run(request, rid)
-        runs.approvals.approve_command(
-            ApprovalCommand(
-                run_id=rid, expected_version=version(request, rid), expected_sha=body.expected_sha
-            )
+    def command(rid, request, kind, body):
+        backend.registered_run(rid)
+        return commands.execute(
+            rid, kind, version(request, rid), body, request.headers.get("idempotency-key")
         )
-        return runs.queries.summary(rid).model_dump(mode="json")
 
-    @app.post("/api/runs/{rid}/reconcile", response_model=RunSummary)
+    @app.post("/api/runs/{rid}/cancel", status_code=202, response_model=OperationView)
+    def cancel(rid: str, request: Request, body: Reason):
+        return command(rid, request, "cancel", body.model_dump())
+
+    @app.post("/api/runs/{rid}/pause", status_code=202, response_model=OperationView)
+    def pause(rid: str, request: Request, body: Reason):
+        return command(rid, request, "pause", body.model_dump())
+
+    @app.post("/api/runs/{rid}/resume", status_code=202, response_model=OperationView)
+    def resume(rid: str, request: Request, body: ResumeInput):
+        return command(rid, request, "resume", body.model_dump())
+
+    @app.post("/api/runs/{rid}/approve", response_model=OperationView)
+    def approve(rid: str, request: Request, body: ApprovalInput):
+        return command(rid, request, "approve", body.model_dump())
+
+    @app.post("/api/runs/{rid}/reconcile", response_model=OperationView)
     def reconcile(rid: str, request: Request):
-        check_run(request, rid)
-        runs.status(rid)
-        return runs.queries.summary(rid).model_dump(mode="json")
+        return command(rid, request, "reconcile", {})
+
+    @app.post("/api/runs/{rid}/request-changes", status_code=202, response_model=OperationView)
+    def request_changes(rid: str, request: Request, body: ChangeInput):
+        return command(rid, request, "request-changes", body.model_dump())
+
+    @app.post("/api/runs/{rid}/defer", response_model=OperationView)
+    def defer(rid: str, request: Request, body: DeferInput):
+        return command(rid, request, "defer", body.model_dump())
+
+    @app.post("/api/runs/{rid}/cleanup", status_code=202, response_model=OperationView)
+    def cleanup(rid: str, request: Request, body: CleanupInput):
+        return command(rid, request, "cleanup", body.model_dump())
+
+    @app.post("/api/runs/{rid}/issues/{issue_id}/disposition", response_model=OperationView)
+    def disposition(rid: str, issue_id: str, request: Request, body: DispositionInput):
+        return command(
+            rid, request, "issue-disposition", body.model_dump() | {"issue_id": issue_id}
+        )
+
+    @app.get("/api/operations/{op_id}", response_model=OperationView)
+    def operation(op_id: str):
+        return commands.get(op_id)
+
+    @app.get("/api/runs/{rid}/tests", response_model=TestResultView)
+    def test_results(rid: str, step_id: int | None = Query(None, ge=1)):
+        return results.tests(rid, step_id)
+
+    @app.get("/api/runs/{rid}/reviews", response_model=ReviewResultView)
+    def review_results(rid: str, step_id: int | None = Query(None, ge=1)):
+        return results.reviews(rid, step_id)
+
+    @app.get("/api/runs/{rid}/changes", response_model=ChangesView)
+    def changed_files(
+        rid: str, candidate_sha: str | None = None, revision: int | None = Query(None, ge=0)
+    ):
+        return results.changes(rid, candidate_sha, revision)
+
+    @app.get("/api/runs/{rid}/diff", response_model=DiffView)
+    def file_diff(rid: str, file_id: str, candidate_sha: str, revision: int = Query(0, ge=0)):
+        return results.diff(rid, file_id, candidate_sha, revision)
+
+    @app.get("/api/runs/{rid}/artifacts/{aid}")
+    def artifact(rid: str, aid: str):
+        path, row = results.artifact(rid, aid)
+        kind = row["kind"]
+        suffix = (
+            "xml"
+            if kind == "junit"
+            else "json"
+            if kind == "changes"
+            else "md"
+            if kind == "report"
+            else "diff"
+        )
+        return FileResponse(
+            path,
+            media_type="application/xml" if kind == "junit" else "text/plain; charset=utf-8",
+            filename=aid + "." + suffix,
+        )
 
     @app.get("/api/runs/{rid}/steps", response_model=StepPage)
     def steps(rid: str):
@@ -425,12 +475,37 @@ def create_app(config=None, allowed_roots=None, port=8000):
 
     @app.get("/api/runs/{rid}/report", response_model=ReportView)
     def report(rid: str):
-        path = Path(runs.queries.get(rid)["directory"]) / "final-report.md"
-        if not path.is_file():
-            raise HTTPException(404, "report not available")
-        return {"markdown": sanitize(path.read_text())}
+        return results.report(rid)
+
+    @app.get("/api/runs/{rid}/logs/download")
+    def logs_download(rid: str):
+        runs.queries.get(rid)
+
+        def chunks():
+            cursor = 0
+            while True:
+                page = runs.events.stream_page(rid, cursor)
+                for event in page["items"]:
+                    if event["kind"] == "log.appended":
+                        yield (
+                            "[" + event["data"]["source"] + "] " + event["data"]["text"]
+                        ).encode()
+                    elif event["kind"] == "log.unavailable":
+                        yield b"[unavailable log span]\n"
+                if not page["has_more"]:
+                    break
+                cursor = page["next_cursor"]
+
+        return StreamingResponse(
+            chunks(),
+            media_type="text/plain; charset=utf-8",
+            headers={"Content-Disposition": 'attachment; filename="devorchestra-logs.txt"'},
+        )
 
     from dev_orchestra.api.stream import routes
 
     app.include_router(routes(runs, security))
+    from dev_orchestra.api.static import attach
+
+    attach(app, static_directory)
     return app

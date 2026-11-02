@@ -42,7 +42,10 @@ class RecoveryService:
 
     def _reconcile_worker(self, run):
         with self.store.connection() as db:
-            queued_execution = db.execute("SELECT version FROM schema_version").fetchone()[0] == 4
+            queued_execution = db.execute("SELECT version FROM schema_version").fetchone()[0] in {
+                4,
+                5,
+            }
         if queued_execution:
             from dev_orchestra.application.queue import QueueService
 

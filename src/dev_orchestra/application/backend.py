@@ -316,8 +316,20 @@ class BackendService:
                 (job, data["id"], now()),
             )
             db.execute(
-                "INSERT INTO operations VALUES(?,?,?,?,?,?,?)",
-                (op, scope, key_hash, request_hash, "applied", canonical(result), now()),
+                "INSERT INTO operations(id,scope,key_hash,request_hash,status,result,created_at,run_id,kind,accepted_version,applied_at) VALUES(?,?,?,?,?,?,?,?,?,?,?)",
+                (
+                    op,
+                    scope,
+                    key_hash,
+                    request_hash,
+                    "applied",
+                    canonical(result),
+                    now(),
+                    data["id"],
+                    "submit",
+                    0,
+                    now(),
+                ),
             )
             self.store._event(db, data["id"], "run.submitted", {"job_id": job})
         return result

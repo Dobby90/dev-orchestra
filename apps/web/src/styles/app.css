@@ -1328,3 +1328,135 @@ dd {
     transition: none !important;
   }
 }
+.validation-strip {
+  display: flex;
+  gap: 12px;
+  padding: 16px 20px;
+  margin: 18px 0;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  font-size: 12px;
+}
+.validation-strip > svg {
+  color: var(--green);
+  flex-shrink: 0;
+  margin-top: 2px;
+}
+.validation-strip .help {
+  margin: 3px 0;
+}
+.result-detail {
+  font-size: 12px;
+}
+.result-detail > .panel-heading {
+  padding: 0 0 20px;
+  flex-wrap: wrap;
+}
+.result-counts {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 12px;
+  margin: 20px 0;
+}
+.result-counts > div {
+  display: grid;
+  gap: 10px;
+  padding: 16px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+}
+.result-counts span {
+  font-size: 11px;
+  color: var(--muted);
+}
+.result-counts strong {
+  font-size: 24px;
+}
+.command-result,
+.review-issue {
+  margin: 18px 0;
+  padding: 18px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+}
+.command-result header,
+.review-issue header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+.command-result pre,
+.failure pre {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  padding: 12px;
+  background: var(--input);
+  border-radius: 5px;
+  font-size: 11px;
+  margin: 12px 0;
+}
+.failure {
+  margin-top: 15px;
+  padding: 10px;
+  border-top: 1px solid var(--border);
+}
+.failure summary {
+  cursor: pointer;
+  color: var(--red);
+}
+.review-issue h3 {
+  margin: 13px 0;
+}
+.review-issue > p {
+  margin: 8px 0;
+}
+.diff-grid {
+  display: grid;
+  grid-template-columns: minmax(160px, 1fr) minmax(0, 3fr);
+  gap: 15px;
+  margin-top: 20px;
+}
+.diff-grid nav {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+.diff-grid nav button {
+  text-align: left;
+  padding: 12px;
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  background: var(--input);
+  color: var(--text);
+  overflow-wrap: anywhere;
+  font-size: 11px;
+  display: grid;
+  gap: 7px;
+}
+.diff-grid nav button[aria-pressed="true"] {
+  border-color: var(--accent);
+}
+.diff-text {
+  max-height: 600px;
+  overflow: auto;
+  white-space: pre;
+  font-size: 11px;
+  line-height: 1.7;
+  background: var(--input);
+  padding: 15px;
+  border: 1px solid var(--border);
+  border-radius: 5px;
+}
+.diff-grid section {
+  min-width: 0;
+}
+@media (max-width: 650px) {
+  .diff-grid {
+    grid-template-columns: 1fr;
+  }
+  .result-counts {
+    grid-template-columns: repeat(2, 1fr);
+  }
+}

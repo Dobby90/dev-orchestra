@@ -13,6 +13,13 @@ export type Log = {
 export type Connection = "connecting" | "live" | "reconnecting";
 const kinds = [
   "state.changed",
+  "issue.assessed",
+  "issue.disposition",
+  "changes.requested",
+  "approval.deferred",
+  "operation.accepted",
+  "operation.applied",
+  "step.interrupted",
   "control.requested",
   "step.started",
   "step.completed",
@@ -111,6 +118,9 @@ export function useRunEvents(rid: string) {
               client.invalidateQueries({ queryKey: ["steps", rid] });
               client.invalidateQueries({ queryKey: ["runs"] });
               client.invalidateQueries({ queryKey: ["dashboard"] });
+              ["tests", "reviews", "changes", "report"].forEach((key) =>
+                client.invalidateQueries({ queryKey: [key, rid] }),
+              );
             }
           }, 200);
       }

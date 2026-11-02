@@ -38,3 +38,20 @@ def verified_candidate(store, run, sha):
     blocking = run["config"]["review"]["blocking_severities"]
     if any(i["severity"] in blocking for i in review["issues"]):
         raise PipelineError("blocking review findings remain")
+
+    if run.get("review_contract") == 2:
+        revision = run.get("revision", 0)
+        if any(p.get("revision", 0) != revision for p in [tests, review]):
+            raise PipelineError("candidate revision has stale evidence")
+        if review.get("schema_version") != 2 or "issue_states" not in review:
+            raise PipelineError("missing explicit review assessments")
+        if any(
+            i["severity"] in blocking and i["status"] == "unresolved"
+            for i in review["issue_states"]
+        ):
+            raise PipelineError("unresolved blocking review findings remain")
+
+        from dev_orchestra.application.reviews import Reviews
+
+        if any(i["severity"] in blocking for i in Reviews(store).open(run["id"])):
+            raise PipelineError("open blocking issue ledger differs from review evidence")

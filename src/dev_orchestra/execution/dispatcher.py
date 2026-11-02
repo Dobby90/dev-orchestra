@@ -42,6 +42,12 @@ class Dispatcher:
                 from dev_orchestra.infrastructure.process import redact
 
                 print(redact(str(error)), file=sys.stderr, flush=True)
+        if self.stopped:
+            return
+        with self.store.connection() as db:
+            stopped = db.execute("SELECT stop_requested FROM dispatchers WHERE slot=1").fetchone()
+            if stopped and stopped[0]:
+                return
         job = self.queue.reserve()
         if job:
             from dev_orchestra.application.service import RunService

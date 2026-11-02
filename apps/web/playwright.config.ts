@@ -4,12 +4,14 @@ export default defineConfig({
   testMatch: "**/*.spec.ts",
   fullyParallel: false,
   workers: 1,
-  timeout: 90000,
+  timeout: 120000,
   expect: { timeout: 15000 },
   retries: 0,
   reporter: [["list"], ["html", { open: "never" }]],
   use: {
-    baseURL: "http://127.0.0.1:5173",
+    baseURL: process.env.E2E_BUNDLED
+      ? "http://127.0.0.1:18080"
+      : "http://127.0.0.1:5173",
     trace: "retain-on-failure",
     screenshot: "only-on-failure",
   },
@@ -31,13 +33,17 @@ export default defineConfig({
       env: { DEVORCHESTRA_TEST_SANDBOX: "1" },
       gracefulShutdown: { signal: "SIGTERM", timeout: 15000 },
     },
-    {
-      command: "npm run dev",
-      url: "http://127.0.0.1:5173",
-      reuseExistingServer: false,
-      timeout: 30000,
-      env: { DEVORCHESTRA_API_PORT: "18080" },
-      gracefulShutdown: { signal: "SIGTERM", timeout: 5000 },
-    },
+    ...(!process.env.E2E_BUNDLED
+      ? [
+          {
+            command: "npm run dev",
+            url: "http://127.0.0.1:5173",
+            reuseExistingServer: false,
+            timeout: 30000,
+            env: { DEVORCHESTRA_API_PORT: "18080" },
+            gracefulShutdown: { signal: "SIGTERM" as const, timeout: 5000 },
+          },
+        ]
+      : []),
   ],
 });

@@ -1,4 +1,4 @@
-# DevOrchestra 웹 화면 — Phase 4
+# DevOrchestra 웹 화면 — Phase 5
 
 React + TypeScript + Vite 기반 로컬 작업 공간입니다. Python 공통 서비스·SQLite·독립 Worker를 기존 API로 사용하며, 프론트엔드가 Codex나 Git을 직접 실행하지 않습니다.
 
@@ -31,11 +31,30 @@ npm run dev:web
 - 실행 전 preview·브랜치/SHA/정책 확인, 접수 응답 유실 시 동일 멱등 키 재시도
 - 단계별 타임라인, 역할·레벨·검색·자동 스크롤·화면 로그 저장
 - 일시중지·취소·질문 답변/한도 상향 재개·SHA 입력 후 최종 승인·명시적 상태 조정
-- 요구사항·기존 보고서 표시, 다크/라이트 모드·모바일·키보드 확인 대화상자
+- 테스트 시간·종료 코드·실패 상세·JUnit 다운로드·과거 회차, 리뷰 이슈 ID·해결 근거·비차단 이슈 분류
+- 보존된 후보 Diff·변경 파일·바이너리/잘림 안내, 보고서의 생성 version·최신성 표시
+- 수정 요청·한도 상향·승인 보류·Worktree 정리, 멱등 명령의 접수/적용 상태
+- 요구사항·보고서 표시, 다크/라이트 모드·모바일·키보드 확인 대화상자
 
-로그는 최근 최대 1,000개 구간·1 MiB를 화면에 보관하고 가상 목록으로 렌더링합니다. 다운로드는 현재 필터·현재 보관 구간이며 전체 서버 로그 다운로드와 구분합니다. SSE는 영속 event ID로 중복·역순을 제거하고 단절 중 3초마다 이력을 조회합니다. 연결 해제는 실행 제어 요청을 보내지 않습니다.
+로그는 최근 최대 1,000개 구간·1 MiB를 화면에 보관하고 가상 목록으로 렌더링합니다. 화면 저장은 현재 필터·현재 보관 구간이며, 별도의 전체 저장 로그 링크는 서버에 인덱싱한 마스킹 로그를 내려받습니다. SSE는 영속 event ID로 중복·역순을 제거하고 단절 중 3초마다 이력을 조회합니다. 연결 해제는 실행 제어 요청을 보내지 않습니다.
 
-현재 백엔드에 없는 JUnit 상세·리뷰 이슈 수명·Diff·수정 요청 API는 후속 통합 범위입니다. 해당 결과 탭은 사용 불가를 표시하며 테스트 성공·이슈 0건으로 가장하지 않습니다. 미등록 CLI 작업은 조회 전용입니다. 정적 파일 Python 패키징과 통합 `web start`는 Phase 5에서 연결합니다.
+미실행·실행 중·근거 없음·파싱 오류·시간 초과는 성공이나 0건으로 채우지 않습니다. 이전 revision의 결과는 따로 표시합니다. 이슈 해결은 같은 후보 SHA·revision의 새 테스트와 Reviewer V2의 명시적 재검증 근거가 필요합니다. 비차단 이슈의 사용자 분류는 모델의 해결과 구분하며 차단 이슈에는 허용하지 않습니다. 미등록 CLI 작업은 조회 전용입니다.
+
+## 정적 GUI와 통합 시작
+
+```sh
+.venv/bin/python scripts/build_web.py
+# 기존 API·Dispatcher·웹 서비스·Run Worker를 종료한 상태에서 실행
+.venv/bin/devorchestra --config config.yaml database-upgrade
+.venv/bin/devorchestra --config config.yaml web start --detach --allow-root /Users/me/projects --port 8000
+.venv/bin/devorchestra --config config.yaml web-session
+.venv/bin/devorchestra --config config.yaml web status
+.venv/bin/devorchestra --config config.yaml web stop
+```
+
+이 방식은 `http://127.0.0.1:8000`에서 API와 GUI를 함께 제공합니다. `src/dev_orchestra/_web`는 생성물이며 Git에서 제외합니다. 빌드 후 `uv build`로 만든 wheel에는 체크섬 manifest와 GUI 파일을 포함하므로 설치 환경에 Node가 필요하지 않습니다. GUI 파일이 없는 CLI 전용 배포도 지원합니다. 임의 파일이나 API의 404를 SPA 화면으로 반환하지 않습니다.
+
+일반 종료는 소유한 API·Dispatcher만 종료하고 실행 중 Run Worker를 유지합니다. 기존 Dispatcher를 재사용하면 종료하지 않습니다. `web stop --cancel-active`는 같은 DB의 미완료 작업 취소를 명시적으로 요청합니다. 중복 시작·포트 충돌은 기존 프로세스를 종료하지 않고 실패합니다. 업그레이드는 모든 writer를 중지한 상태에서 schema 2/3/4→5 백업·마이그레이션을 수행하며 구버전 실행 파일과 혼용하지 마세요.
 
 ## 검증 및 타입 갱신
 
@@ -54,8 +73,12 @@ npm run generate:api --workspace apps/web
 # 실제 브라우저 + 임시 Git·SQLite·Mock Codex·실제 pytest
 PLAYWRIGHT_BROWSERS_PATH=/private/tmp/devorchestra-pw-browsers npx playwright install chromium --only-shell
 PLAYWRIGHT_BROWSERS_PATH=/private/tmp/devorchestra-pw-browsers npm run test:e2e --workspace apps/web
+# Python이 제공하는 실제 빌드 GUI + CSP 경로로 같은 검사를 실행
+E2E_BUNDLED=1 PLAYWRIGHT_BROWSERS_PATH=/private/tmp/devorchestra-pw-browsers npm run test:e2e --workspace apps/web
 ```
 
 브라우저 검사는 5173/18080 포트를 사용하며 포트가 이미 사용 중이면 실패합니다. 다른 서버를 종료하거나 재사용하지 않습니다. 임시 Git 저장소를 만들고 실행 파일 Mock Codex로 별도 Worker를 구동하므로 모델 요금은 발생하지 않습니다. 상태 DB·프로젝트·정책은 사용자 기본 설정을 사용하지 않습니다. 검사 결과·스크린샷은 `test-results`, 실패 trace는 같은 폴더에 보관하며 Git에서 제외합니다. trace에는 테스트용 세션 정보가 포함될 수 있으므로 외부 공유 전 확인하세요.
 
 현재 온라인 `npm audit`에는 개발 전용 타입 생성기의 minimatch 경로 Moderate 3건이 남아 있습니다. 배포 의존성 감사(`npm audit --omit=dev`)는 0건입니다. 생성기 입력은 저장소 코드에서 내보낸 로컬 OpenAPI로 제한하며 외부에서 받은 schema를 사용하지 않습니다. 상위 도구의 호환 패치가 나오면 갱신합니다.
+
+Phase 5에서는 CLI 회귀·화면 단위·개발 서버 및 정적 GUI E2E와 Node 없는 wheel 실행을 검증합니다. 실제 유료 Codex V2 재검증·Linux 배포·다중 브라우저·장시간 부하는 이번 단계에서 통과로 판정하지 않습니다. Phase 6 종합 검증은 사용자 승인 후 진행합니다.

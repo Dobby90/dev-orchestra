@@ -73,3 +73,15 @@ class PipelineError(RuntimeError):
 
 class StopRequested(PipelineError):
     pass
+
+
+class ReviewAssessment(Model):
+    issue_id: str
+    status: Literal["resolved", "unresolved"]
+    candidate_sha: str = Field(pattern=r"^(?:[0-9a-f]{40}|[0-9a-f]{64})$")
+    evidence: str = Field(min_length=1)
+
+
+class ReviewResultV2(AgentResult):
+    schema_version: Literal[2] = 2
+    assessments: list[ReviewAssessment] = Field(default_factory=list)

@@ -24,33 +24,28 @@ class ApprovalService:
         run = self.store.get(run_id)
         with lock(Path(run["directory"]) / "execution.lock"):
             run = self.store.get(run_id)
-            if expected_version is not None and run["version"] != expected_version:
-                raise ApplicationError(
-                    "VERSION_CONFLICT", "run version changed; refresh before approving"
-                )
-            if expected_sha is not None and run.get("final_sha") != expected_sha:
-                raise ApplicationError(
-                    "CANDIDATE_CHANGED", "candidate SHA changed; refresh before approving"
-                )
-            git = Git(
-                Path(run["worktree"]), Config.model_validate(run["config"]).tests.output_paths
-            )
-            if (
-                run["state"] != "waiting_approval"
-                or git.dirty()
-                or git.sha() != run.get("final_sha")
-            ):
-                raise PipelineError(
-                    "approval requires unchanged verified HEAD and a clean worktree"
-                )
-            if run.get("next_role") != "done" or not run["test_result"]["execution"]["passed"]:
-                raise PipelineError("missing successful validation evidence")
-            sha = git.sha()
-            verified_candidate(self.store, run, sha)
-            if git.sha() != sha or git.dirty():
-                raise PipelineError("candidate changed during approval")
-            self.store.approve(
-                run_id, sha, digest(json.dumps(run["test_result"], sort_keys=True).encode())
-            )
+            sha, evidence = self.verify_locked(run_id, expected_version, expected_sha)
+            self.store.approve(run_id, sha, evidence, expected_version=run["version"])
 
         self.refresh_report(run_id)
+
+    def verify_locked(self, run_id, expected_version=None, expected_sha=None):
+        run = self.store.get(run_id)
+        if expected_version is not None and run["version"] != expected_version:
+            raise ApplicationError(
+                "VERSION_CONFLICT", "run version changed; refresh before approving"
+            )
+        if expected_sha is not None and run.get("final_sha") != expected_sha:
+            raise ApplicationError(
+                "CANDIDATE_CHANGED", "candidate SHA changed; refresh before approving"
+            )
+        git = Git(Path(run["worktree"]), Config.model_validate(run["config"]).tests.output_paths)
+        if run["state"] != "waiting_approval" or git.dirty() or git.sha() != run.get("final_sha"):
+            raise PipelineError("approval requires unchanged verified HEAD and a clean worktree")
+        if run.get("next_role") != "done" or not run["test_result"]["execution"]["passed"]:
+            raise PipelineError("missing successful validation evidence")
+        sha = git.sha()
+        verified_candidate(self.store, run, sha)
+        if git.sha() != sha or git.dirty():
+            raise PipelineError("candidate changed during approval")
+        return sha, digest(json.dumps(run["test_result"], sort_keys=True).encode())

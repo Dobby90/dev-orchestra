@@ -3,6 +3,7 @@
 import json
 import logging
 import os
+from contextlib import nullcontext
 from pathlib import Path
 
 from dev_orchestra.agents.policy import apply_patch
@@ -160,6 +161,9 @@ class Runner:
             if role == "done":
                 candidate = git.sha()
                 verified_candidate(self.store, run, candidate)
+                from dev_orchestra.application.results import Results
+
+                Results(self.store).save_snapshot(run_id, candidate)
                 self.store.update(run_id, "reporting")
                 self.report(run_id)
                 if git.dirty() or git.sha() != candidate:
@@ -175,7 +179,10 @@ class Runner:
             completed = [
                 s
                 for s in self.store.steps(run_id)
-                if s["role"] == role and s["iteration"] == iteration and s["status"] == "completed"
+                if s["role"] == role
+                and s["iteration"] == iteration
+                and s.get("revision", 0) == run.get("revision", 0)
+                and s["status"] == "completed"
             ]
             if completed:
                 step = completed[-1]
@@ -193,6 +200,8 @@ class Runner:
                 context = {
                     "prd": run["spec"],
                     "answers": run.get("answers", ""),
+                    "directives": run.get("directives", []),
+                    "review_contract": run.get("review_contract", 1),
                     "base_sha": run["base_sha"],
                     "test_paths": config.tests.write_paths,
                     "test_commands": {k: v.model_dump() for k, v in config.tests.commands.items()},
@@ -202,6 +211,10 @@ class Runner:
                 if role == "reviewer":
                     context["diff"] = git.diff(run["base_sha"], sha)
                     context["candidate_sha"] = sha
+                    if run.get("review_contract") == 2:
+                        from dev_orchestra.application.reviews import Reviews
+
+                        context["open_issues"] = Reviews(self.store).open(run_id)
                 request = AgentRequest(
                     run_id=run_id,
                     role=role,
@@ -239,7 +252,7 @@ class Runner:
                 apply_patch(worktree, result.patch, role, config.tests.write_paths)
                 out_sha = git.commit(f"자동 개발: {run_id} {role} 회차 {iteration} 단계 {step_id}")
                 self.store.update(run_id, current_sha=out_sha)
-                payload = result.model_dump() | {"sha": out_sha}
+                payload = result.model_dump() | {"sha": out_sha, "revision": run.get("revision", 0)}
                 if role == "tester":
                     ids = set(config.tests.commands)
                     if set(result.command_ids) != ids:
@@ -261,11 +274,47 @@ class Runner:
 
                 payload = sanitize(payload)
                 artifact = step_dir / "result.json"
-                checksum = write(artifact, payload)
-                write(directory / FILES[role], payload)
-                self.store.finish_step(
-                    step_id, out_sha, {"artifact": str(artifact), "hash": checksum}
+                from dev_orchestra.application.results import Results
+
+                results = Results(self.store)
+                failed_test = role == "tester" and payload.get("execution", {}).get("status") in {
+                    "parse_error",
+                    "unavailable",
+                    "timeout",
+                }
+                atomic_result = results.enabled() and (
+                    role == "tester" or (role == "reviewer" and run.get("review_contract") == 2)
                 )
+                with self.store.transaction() if atomic_result else nullcontext():
+                    if role == "reviewer" and run.get("review_contract") == 2:
+                        from dev_orchestra.application.reviews import Reviews
+                        from dev_orchestra.domain.models import ReviewResultV2
+
+                        if not isinstance(result, ReviewResultV2):
+                            raise PipelineError("reviewer must return contract V2")
+                        payload["issue_states"] = Reviews(self.store).apply(run, step_id, payload)
+                    if role == "tester" and results.enabled():
+                        for command in payload["execution"].get("commands", []):
+                            if command.get("junit_path"):
+                                command["junit_artifact_id"] = results.register(
+                                    run_id, Path(command["junit_path"]), "junit", step_id
+                                )
+                            command.pop("junit_path", None)
+                    checksum = write(artifact, payload)
+                    evidence = {"artifact": str(artifact), "hash": checksum}
+                    if failed_test:
+                        self.store.finish_step(step_id, out_sha, evidence, status="failed")
+                    else:
+                        self.store.finish_step(step_id, out_sha, evidence)
+                write(directory / FILES[role], payload)
+                if failed_test:
+                    self.store.update(
+                        run_id,
+                        "needs_input",
+                        error="test evidence unavailable; inspect command results",
+                        next_role="tester",
+                    )
+                    return
                 self.store.update(run_id, current_sha=out_sha)
             self.advance(run_id, role, payload, config)
             if self.store.get(run_id)["state"] == "needs_input":
@@ -297,6 +346,9 @@ class Runner:
             write(directory / "review-result.md", review_md)
             blocking = any(
                 i["severity"] in config.review.blocking_severities for i in payload["issues"]
+            ) or any(
+                i["severity"] in config.review.blocking_severities and i["status"] == "unresolved"
+                for i in payload.get("issue_states", [])
             )
             passed = run["test_result"]["execution"]["passed"] and not blocking
             changes = {"review_result": payload}
@@ -323,6 +375,7 @@ class Runner:
                 "current_sha",
                 "state",
                 "iteration",
+                "revision",
                 "error",
                 "questions",
             ]
@@ -331,6 +384,8 @@ class Runner:
             f"- **{k}**: {v}" for k, v in summary.items()
         )
         content += "\n\n## Requirements\n\n" + run["spec"]
+        if run.get("directives"):
+            content += "\n\n## User change requests\n\n" + "\n\n".join(run["directives"])
         content += "\n\n## Implementation and verification history\n\n"
         for step in steps:
             content += f"- {step['role']} iteration={step['iteration']} attempt={step['attempt']} {step['status']} SHA={step['output_sha']}\n"
@@ -354,3 +409,6 @@ class Runner:
         content = redact(content)
         write(Path(run["directory"]) / "metadata.json", summary)
         write(Path(run["directory"]) / "final-report.md", content)
+        from dev_orchestra.application.results import Results
+
+        Results(self.store).save_report(run_id, content, run["version"])

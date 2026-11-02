@@ -32,6 +32,8 @@ const p: Project = {
 };
 const detail: Schema["RunDetail"] = {
   schema_version: 1,
+  revision: 0,
+  validation: { status: "valid", revision: 0 },
   id: "r1",
   state: "waiting_approval",
   version: 4,
@@ -63,7 +65,35 @@ class Stream {
   addEventListener() {}
   close() {}
 }
+const operation: Schema["OperationView"] = {
+  id: "op-1",
+  run_id: "r1",
+  kind: "approve",
+  status: "applied",
+  state: "waiting_approval",
+  result: {},
+  created_at: "2026-11-02",
+  applied_at: "2026-11-02",
+  error: null,
+};
+const emptyTests: Schema["TestResultView"] = {
+  status: "not_run",
+  step_id: null,
+  sha: null,
+  revision: null,
+  duration_seconds: null,
+  total: null,
+  passed: null,
+  failed: null,
+  skipped: null,
+  commands: [],
+  failures: [],
+  history: [],
+  legacy_incomplete: true,
+};
 function setupDetail() {
+  vi.spyOn(api, "operation").mockResolvedValue(operation);
+  vi.spyOn(api, "tests").mockResolvedValue(emptyTests);
   vi.stubGlobal("EventSource", Stream);
   vi.spyOn(api, "run").mockResolvedValue(detail);
   vi.spyOn(api, "steps").mockResolvedValue({ items: [] });
@@ -144,7 +174,7 @@ describe("화면·위험 명령", () => {
   });
   it("SHA 전체 확인과 현재 버전으로만 승인 요청을 보낸다", async () => {
     setupDetail();
-    const control = vi.spyOn(api, "control").mockResolvedValue({});
+    const control = vi.spyOn(api, "control").mockResolvedValue(operation);
     wrap(
       <Routes>
         <Route path="/runs/:id" element={<RunDetailPage />} />
@@ -164,9 +194,15 @@ describe("화면·위험 명령", () => {
     );
     await userEvent.click(confirm);
     await waitFor(() =>
-      expect(control).toHaveBeenCalledWith("r1", 4, "approve", {
-        expected_sha: "a".repeat(40),
-      }),
+      expect(control).toHaveBeenCalledWith(
+        "r1",
+        4,
+        "approve",
+        {
+          expected_sha: "a".repeat(40),
+        },
+        expect.any(String),
+      ),
     );
   });
   it("승인 대화상자를 연 뒤 version이 바뀌면 확인을 차단한다", async () => {
@@ -211,7 +247,7 @@ describe("화면·위험 명령", () => {
         control: "cancel",
         version: 5,
       });
-      return {};
+      return operation;
     });
     wrap(
       <Routes>
@@ -227,7 +263,7 @@ describe("화면·위험 명령", () => {
     expect(screen.getByText("개발 중")).toBeVisible();
     expect(screen.queryByText("취소됨")).not.toBeInTheDocument();
   });
-  it("CLI 미등록 작업은 조회 전용이며 미구현 결과를 통과로 표시하지 않는다", async () => {
+  it("CLI 미등록 작업은 조회 전용이며 증거 없는 결과를 통과로 표시하지 않는다", async () => {
     setupDetail();
     vi.mocked(api.run).mockResolvedValue({ ...detail, project_id: null });
     wrap(
@@ -240,13 +276,12 @@ describe("화면·위험 명령", () => {
     expect(
       screen.queryByRole("button", { name: "최종 승인" }),
     ).not.toBeInTheDocument();
-    expect(
-      await screen.findByText(/백엔드는 이 상세 결과 API를 제공하지 않습니다/),
-    ).toBeVisible();
+    expect(await screen.findByText(/아직 실행되지 않음/)).toBeVisible();
   });
   it("보고서 HTML·스크립트·외부 이미지를 실행하지 않는다", async () => {
     setupDetail();
     vi.spyOn(api, "report").mockResolvedValue({
+      stale: true,
       markdown:
         "# 결과\n<script>window.CANARY=true</script>\n![외부](https://external.invalid/x)\n[링크](javascript:alert(1))",
     });

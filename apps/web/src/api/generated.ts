@@ -265,6 +265,176 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/runs/{rid}/request-changes": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Request Changes */
+        post: operations["request_changes_api_runs__rid__request_changes_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/runs/{rid}/defer": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Defer */
+        post: operations["defer_api_runs__rid__defer_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/runs/{rid}/cleanup": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Cleanup */
+        post: operations["cleanup_api_runs__rid__cleanup_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/runs/{rid}/issues/{issue_id}/disposition": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Disposition */
+        post: operations["disposition_api_runs__rid__issues__issue_id__disposition_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/operations/{op_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Operation */
+        get: operations["operation_api_operations__op_id__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/runs/{rid}/tests": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Test Results */
+        get: operations["test_results_api_runs__rid__tests_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/runs/{rid}/reviews": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Review Results */
+        get: operations["review_results_api_runs__rid__reviews_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/runs/{rid}/changes": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Changed Files */
+        get: operations["changed_files_api_runs__rid__changes_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/runs/{rid}/diff": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** File Diff */
+        get: operations["file_diff_api_runs__rid__diff_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/runs/{rid}/artifacts/{aid}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Artifact */
+        get: operations["artifact_api_runs__rid__artifacts__aid__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/runs/{rid}/steps": {
         parameters: {
             query?: never;
@@ -350,6 +520,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/runs/{rid}/logs/download": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Logs Download */
+        get: operations["logs_download_api_runs__rid__logs_download_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/runs/{rid}/events": {
         parameters: {
             query?: never;
@@ -386,9 +573,90 @@ export interface components {
             /** Items */
             items: string[];
         };
-        /** ControlResult */
-        ControlResult: {
-            state: components["schemas"]["State"];
+        /** ChangeInput */
+        ChangeInput: {
+            /** Expected Sha */
+            expected_sha: string;
+            /** Instructions */
+            instructions: string;
+            /** New Max Fix Attempts */
+            new_max_fix_attempts?: number | null;
+        };
+        /** ChangedFile */
+        ChangedFile: {
+            /** File Id */
+            file_id: string;
+            /** Path */
+            path: string;
+            /** Status */
+            status: string;
+            /** Binary */
+            binary: boolean;
+            /** Truncated */
+            truncated: boolean;
+            /** Additions */
+            additions: number | null;
+            /** Deletions */
+            deletions: number | null;
+            /** Artifact Id */
+            artifact_id: string;
+        };
+        /** ChangesView */
+        ChangesView: {
+            /** Available */
+            available: boolean;
+            /** Revision */
+            revision: number;
+            /** Base Sha */
+            base_sha: string | null;
+            /** Merge Base Sha */
+            merge_base_sha: string | null;
+            /** Candidate Sha */
+            candidate_sha: string | null;
+            /** Files */
+            files: components["schemas"]["ChangedFile"][];
+            /** History */
+            history: components["schemas"]["SnapshotStamp"][];
+        };
+        /** CleanupInput */
+        CleanupInput: {
+            /**
+             * Confirm
+             * @constant
+             */
+            confirm: true;
+        };
+        /** CommandView */
+        CommandView: {
+            /** Command Id */
+            command_id?: string | null;
+            /** Argv */
+            argv?: string[] | null;
+            /**
+             * Status
+             * @default unknown
+             */
+            status: string;
+            /** Exit Code */
+            exit_code?: number | null;
+            /** Duration Seconds */
+            duration_seconds?: number | null;
+            /** Total */
+            total?: number | null;
+            /** Failed */
+            failed?: number | null;
+            /** Skipped */
+            skipped?: number | null;
+            /** Passed */
+            passed?: boolean | null;
+            /** Failures */
+            failures?: string[];
+            /** Failure Details */
+            failure_details?: components["schemas"]["FailureView"][];
+            /** Junit Artifact Id */
+            junit_artifact_id?: string | null;
+            /** Error */
+            error?: string | null;
         };
         /** DashboardView */
         DashboardView: {
@@ -398,6 +666,46 @@ export interface components {
             };
             /** Project Count */
             project_count: number;
+        };
+        /** DeferInput */
+        DeferInput: {
+            /** Reason */
+            reason: string;
+        };
+        /** DiffView */
+        DiffView: {
+            /** File Id */
+            file_id: string;
+            /** Path */
+            path: string;
+            /** Status */
+            status: string;
+            /** Binary */
+            binary: boolean;
+            /** Truncated */
+            truncated: boolean;
+            /** Additions */
+            additions: number | null;
+            /** Deletions */
+            deletions: number | null;
+            /** Artifact Id */
+            artifact_id: string;
+            /** Base Sha */
+            base_sha: string;
+            /** Candidate Sha */
+            candidate_sha: string;
+            /** Text */
+            text: string;
+        };
+        /** DispositionInput */
+        DispositionInput: {
+            /** Reason */
+            reason: string;
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "unresolved" | "dismissed";
         };
         /** EventEnvelope */
         EventEnvelope: {
@@ -429,6 +737,51 @@ export interface components {
             /** Has More */
             has_more: boolean;
         };
+        /** ExecutionView */
+        ExecutionView: {
+            /** Job State */
+            job_state?: string | null;
+            /**
+             * Worker Liveness
+             * @default unknown
+             * @enum {string}
+             */
+            worker_liveness: "alive" | "stopped" | "lost" | "unresponsive" | "unknown";
+            /** Heartbeat At */
+            heartbeat_at?: string | null;
+            /**
+             * Cleanup
+             * @default unknown
+             * @enum {string}
+             */
+            cleanup: "confirmed" | "pending" | "manual_required" | "unknown";
+            /**
+             * Worktree Removed
+             * @default false
+             */
+            worktree_removed: boolean;
+        };
+        /** FailureView */
+        FailureView: {
+            /** Name */
+            name: string;
+            /** Classname */
+            classname?: string | null;
+            /** File */
+            file?: string | null;
+            /** Line */
+            line?: string | number | null;
+            /**
+             * Message
+             * @default
+             */
+            message: string;
+            /**
+             * Details
+             * @default
+             */
+            details: string;
+        };
         /** HTTPValidationError */
         HTTPValidationError: {
             /** Detail */
@@ -448,6 +801,31 @@ export interface components {
              * @constant
              */
             schema_version: 2;
+        };
+        /** OperationView */
+        OperationView: {
+            /** Id */
+            id: string;
+            /** Run Id */
+            run_id: string | null;
+            /** Kind */
+            kind: string;
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "accepted" | "applied" | "rejected" | "needs_input";
+            state: components["schemas"]["State"];
+            /** Result */
+            result: {
+                [key: string]: unknown;
+            };
+            /** Created At */
+            created_at: string;
+            /** Applied At */
+            applied_at: string | null;
+            /** Error */
+            error: string | null;
         };
         /** Policy */
         Policy: {
@@ -577,6 +955,17 @@ export interface components {
         ReportView: {
             /** Markdown */
             markdown: string;
+            /** Artifact Id */
+            artifact_id?: string | null;
+            /** Generated Version */
+            generated_version?: number | null;
+            /** Current Version */
+            current_version?: number | null;
+            /**
+             * Stale
+             * @default true
+             */
+            stale: boolean;
         };
         /** ResumeInput */
         ResumeInput: {
@@ -585,17 +974,66 @@ export interface components {
             /** New Max Fix Attempts */
             new_max_fix_attempts?: number | null;
         };
-        /** ResumeView */
-        ResumeView: {
-            /** Run Id */
-            run_id: string;
-            /** Job Id */
-            job_id: string;
+        /** ReviewIssueView */
+        ReviewIssueView: {
+            /** Issue Id */
+            issue_id: string;
+            /** Id */
+            id: string;
+            /**
+             * Severity
+             * @enum {string}
+             */
+            severity: "critical" | "high" | "medium" | "low";
+            /** File */
+            file: string;
+            /** Line */
+            line: number;
+            /** Description */
+            description: string;
+            /** Evidence */
+            evidence: string;
+            /** Suggestion */
+            suggestion: string;
             /**
              * Status
-             * @constant
+             * @enum {string}
              */
-            status: "queued";
+            status: "unresolved" | "resolved" | "dismissed";
+            /** Source Sha */
+            source_sha: string;
+            /** Resolution Evidence */
+            resolution_evidence: string | null;
+            /** Status Note */
+            status_note?: string | null;
+            /** Assessed Sha */
+            assessed_sha?: string | null;
+            /** Assessed Step Id */
+            assessed_step_id?: number | null;
+        };
+        /** ReviewResultView */
+        ReviewResultView: {
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "not_run" | "running" | "available" | "unavailable";
+            /** Step Id */
+            step_id: number | null;
+            /** Sha */
+            sha: string | null;
+            /** Revision */
+            revision: number | null;
+            /** Summary */
+            summary: string;
+            /** Issues */
+            issues: components["schemas"]["ReviewIssueView"][];
+            /** History */
+            history: components["schemas"]["StepStamp"][];
+            /** Legacy Incomplete */
+            legacy_incomplete: boolean;
+            /** Blocking Severities */
+            blocking_severities: string[];
         };
         /** RunCreate */
         RunCreate: {
@@ -659,6 +1097,15 @@ export interface components {
             current_role?: string | null;
             /** Control */
             control?: ("cancel" | "pause") | null;
+            /**
+             * Revision
+             * @default 0
+             */
+            revision: number;
+            execution?: components["schemas"]["ExecutionView"];
+            validation?: components["schemas"]["ValidationView"];
+            /** Allowed Actions */
+            allowed_actions?: string[];
             /** Event Cursor */
             event_cursor: number;
             /** Project Id */
@@ -735,6 +1182,13 @@ export interface components {
             /** Csrf Token */
             csrf_token: string;
         };
+        /** SnapshotStamp */
+        SnapshotStamp: {
+            /** Revision */
+            revision: number;
+            /** Candidate Sha */
+            candidate_sha: string;
+        };
         /** SpecContent */
         SpecContent: {
             /** Text */
@@ -761,6 +1215,25 @@ export interface components {
             /** Items */
             items: components["schemas"]["StepView"][];
         };
+        /** StepStamp */
+        StepStamp: {
+            /** Id */
+            id: number;
+            /** Revision */
+            revision: number | null;
+            /** Iteration */
+            iteration: number;
+            /** Attempt */
+            attempt: number;
+            /** Status */
+            status: string;
+            /** Output Sha */
+            output_sha: string | null;
+            /** Started At */
+            started_at: string | null;
+            /** Finished At */
+            finished_at: string | null;
+        };
         /** StepView */
         StepView: {
             /** Id */
@@ -779,6 +1252,15 @@ export interface components {
             output_sha: string | null;
             /** Status */
             status: string;
+            /**
+             * Revision
+             * @default 0
+             */
+            revision: number;
+            /** Started At */
+            started_at?: string | null;
+            /** Finished At */
+            finished_at?: string | null;
         };
         /** StoredSpec */
         StoredSpec: {
@@ -829,6 +1311,38 @@ export interface components {
             /** Junit Report */
             junit_report: string;
         };
+        /** TestResultView */
+        TestResultView: {
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "not_run" | "running" | "passed" | "failed" | "unavailable" | "parse_error" | "timeout" | "unknown";
+            /** Step Id */
+            step_id: number | null;
+            /** Sha */
+            sha: string | null;
+            /** Revision */
+            revision: number | null;
+            /** Duration Seconds */
+            duration_seconds: number | null;
+            /** Total */
+            total: number | null;
+            /** Passed */
+            passed: number | null;
+            /** Failed */
+            failed: number | null;
+            /** Skipped */
+            skipped: number | null;
+            /** Commands */
+            commands: components["schemas"]["CommandView"][];
+            /** Failures */
+            failures: components["schemas"]["FailureView"][];
+            /** History */
+            history: components["schemas"]["StepStamp"][];
+            /** Legacy Incomplete */
+            legacy_incomplete: boolean;
+        };
         /** Tests */
         Tests: {
             /** Commands */
@@ -862,6 +1376,30 @@ export interface components {
             input?: unknown;
             /** Context */
             ctx?: Record<string, never>;
+        };
+        /** ValidationView */
+        ValidationView: {
+            /**
+             * Status
+             * @default unknown
+             * @enum {string}
+             */
+            status: "pending" | "valid" | "invalid" | "unknown";
+            /**
+             * Revision
+             * @default 0
+             */
+            revision: number;
+            /** Candidate Sha */
+            candidate_sha?: string | null;
+            /** Test Sha */
+            test_sha?: string | null;
+            /** Review Sha */
+            review_sha?: string | null;
+            /** Checked At */
+            checked_at?: string | null;
+            /** Reason */
+            reason?: string | null;
         };
     };
     responses: never;
@@ -1366,7 +1904,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["ControlResult"];
+                    "application/json": components["schemas"]["OperationView"];
                 };
             };
             /** @description Validation Error */
@@ -1401,7 +1939,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["ControlResult"];
+                    "application/json": components["schemas"]["OperationView"];
                 };
             };
             /** @description Validation Error */
@@ -1436,7 +1974,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["ResumeView"];
+                    "application/json": components["schemas"]["OperationView"];
                 };
             };
             /** @description Validation Error */
@@ -1471,7 +2009,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["RunSummary"];
+                    "application/json": components["schemas"]["OperationView"];
                 };
             };
             /** @description Validation Error */
@@ -1502,7 +2040,346 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["RunSummary"];
+                    "application/json": components["schemas"]["OperationView"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    request_changes_api_runs__rid__request_changes_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                rid: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ChangeInput"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["OperationView"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    defer_api_runs__rid__defer_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                rid: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["DeferInput"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["OperationView"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    cleanup_api_runs__rid__cleanup_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                rid: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CleanupInput"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["OperationView"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    disposition_api_runs__rid__issues__issue_id__disposition_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                rid: string;
+                issue_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["DispositionInput"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["OperationView"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    operation_api_operations__op_id__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                op_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["OperationView"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    test_results_api_runs__rid__tests_get: {
+        parameters: {
+            query?: {
+                step_id?: number | null;
+            };
+            header?: never;
+            path: {
+                rid: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TestResultView"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    review_results_api_runs__rid__reviews_get: {
+        parameters: {
+            query?: {
+                step_id?: number | null;
+            };
+            header?: never;
+            path: {
+                rid: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ReviewResultView"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    changed_files_api_runs__rid__changes_get: {
+        parameters: {
+            query?: {
+                candidate_sha?: string | null;
+                revision?: number | null;
+            };
+            header?: never;
+            path: {
+                rid: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ChangesView"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    file_diff_api_runs__rid__diff_get: {
+        parameters: {
+            query: {
+                file_id: string;
+                candidate_sha: string;
+                revision?: number;
+            };
+            header?: never;
+            path: {
+                rid: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DiffView"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    artifact_api_runs__rid__artifacts__aid__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                rid: string;
+                aid: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
                 };
             };
             /** @description Validation Error */
@@ -1665,6 +2542,37 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ReportView"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    logs_download_api_runs__rid__logs_download_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                rid: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
                 };
             };
             /** @description Validation Error */
