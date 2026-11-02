@@ -1,0 +1,68 @@
+"""Transport-independent workflow contracts."""
+from enum import StrEnum
+from typing import Literal
+from pydantic import BaseModel, ConfigDict, Field
+
+
+class Model(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+
+class State(StrEnum):
+    QUEUED = "queued"
+    PREPARING = "preparing"
+    PLANNING = "planning"
+    DEVELOPING = "developing"
+    TESTING = "testing"
+    REVIEWING = "reviewing"
+    FIXING = "fixing"
+    REPORTING = "reporting"
+    WAITING_APPROVAL = "waiting_approval"
+    COMPLETED = "completed"
+    FAILED = "failed"
+    NEEDS_INPUT = "needs_input"
+    PAUSED = "paused"
+    CANCELLED = "cancelled"
+
+
+class Criterion(Model):
+    id: str = Field(min_length=1)
+    description: str = Field(min_length=1)
+
+
+class Issue(Model):
+    id: str
+    severity: Literal["critical", "high", "medium", "low"]
+    file: str
+    line: int = Field(ge=1)
+    description: str
+    evidence: str
+    suggestion: str
+
+
+class AgentResult(Model):
+    summary: str
+    questions: list[str] = Field(default_factory=list)
+    plan: str = ""
+    criteria: list[Criterion] = Field(default_factory=list)
+    patch: str = ""
+    command_ids: list[str] = Field(default_factory=list)
+    coverage: dict[str, list[str]] = Field(default_factory=dict)
+    issues: list[Issue] = Field(default_factory=list)
+
+
+class AgentRequest(Model):
+    run_id: str
+    role: Literal["planner", "developer", "tester", "reviewer", "fixer"]
+    worktree: str
+    iteration: int
+    input_sha: str
+    context: dict
+
+
+class PipelineError(RuntimeError):
+    """Safe, user-facing workflow failure."""
+
+
+class StopRequested(PipelineError):
+    pass
