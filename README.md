@@ -32,7 +32,7 @@ UV_CACHE_DIR="$PWD/.uv-cache" .tools/uv sync --frozen
 
 Codex 인증은 `codex login`으로 별도 설정합니다. 인증과 사용 요금은 설치된 Codex의 설정 및 계정을 따릅니다. 일반 테스트에서는 모델을 호출하지 않습니다.
 
-## 반복 기동 스크립트
+## 기동·종료 스크립트
 
 처음 Python 웹 환경을 준비한 뒤에는 저장소 루트의 실행 가능한 `start.sh`로 기동합니다.
 
@@ -46,20 +46,22 @@ SQLite를 처음 준비하고 GUI·API·Dispatcher를 시작한 뒤 접속 주�
 - `--allow-root`의 기본값은 이 저장소의 상위 디렉터리이며 여러 번 지정할 수 있습니다.
 - `--port 8001`로 포트를 변경합니다. 기본값은8000입니다.
 - `--config /절대경로/config.yaml`로 CLI와 동일한 설정/DB를 사용합니다. 상대 경로는 명령을 실행한 디렉터리를 기준으로 해석합니다.
-- 기존 GUI 빌드는 재사용합니다. GUI 변경을 반영하려면 서비스를 종료한 뒤 `./start.sh --rebuild --allow-root /프로젝트/상위경로`로 다시 빌드합니다.
-- GUI 빌드가 없거나 `--rebuild`를 지정하면 Node22.12 이상·npm으로 `npm ci`와 GUI 빌드를 수행합니다. 빌드가 있으면 매번 npm 설치/빌드를 하지 않습니다.
+- 서비스를 새로 기동할 때는 최신 React GUI 소스를 항상 빌드합니다. GUI 변경을 반영하려면 `./stop.sh`로 종료한 뒤 `./start.sh`를 실행하세요. 실행 중인 서비스를 재사용할 때는 빌드하지 않습니다.
+- GUI 빌드에는 Node 22.12 이상·npm이 필요합니다. `node_modules`가 없거나 `--rebuild`를 지정하면 `npm ci`로 의존성도 재설치합니다.
 - Python 환경은 `.venv`를 사용합니다. 없거나 웹 의존성이 빠져 있으면 `.tools/uv sync --frozen --extra web` 준비 명령을 안내하고 중단합니다.
 - 구버전 DB 업그레이드는 기존 안전 검사·백업을 적용합니다. 현재 스키마는 불필요한 업그레이드를 하지 않으므로 실행 중 Worker를 유지한 웹 재기동도 가능합니다.
 
 종료 명령은 스크립트 출력에도 표시됩니다. 기본 설정에서는 다음과 같습니다.
 
 ```sh
-.venv/bin/devorchestra web stop
+./stop.sh
 # 미완료 작업 취소까지 명시할 때
-.venv/bin/devorchestra web stop --cancel-active
+./stop.sh --cancel-active
+# 별도 설정 파일로 기동한 경우
+./stop.sh --config /절대경로/config.yaml
 ```
 
-설정 파일을 지정해 기동했다면 종료에도 동일한 `--config`를 하위 명령 앞에 지정하세요. 서비스는 백그라운드로 실행하며 브라우저를 자동으로 열지 않습니다. Mac은 작업 중 실행 가능한 상태를 유지하세요.
+`stop.sh`는 기존 `devorchestra web stop`을 호출합니다. 일반 종료는 해당 서비스가 시작한 API·Dispatcher만 종료하며 실행 중 작업은 유지합니다. 설정 파일을 지정해 기동했다면 종료에도 동일한 `--config`를 지정하세요. 상대 설정 경로는 명령을 실행한 디렉터리를 기준으로 해석합니다. 서비스는 백그라운드로 실행하며 브라우저를 자동으로 열지 않습니다. Mac은 작업 중 실행 가능한 상태를 유지하세요.
 
 ## 설정
 

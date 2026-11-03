@@ -16,10 +16,11 @@ usage() {
                     기본값: DevOrchestra 저장소의 상위 디렉터리
   --port 포트        기본값: 8000 (1024~65535)
   --config 파일      모든 명령에 동일하게 적용할 YAML 설정 파일
-  --rebuild          GUI 의존성 재설치 및 재빌드 (서비스 종료 후 사용)
+  --rebuild          GUI 의존성도 재설치 (서비스 종료 후 사용)
   -h, --help         도움말
 
 이미 실행 중이면 기존 서비스 주소와 새 일회용 로그인 코드를 표시합니다.
+서비스를 새로 기동할 때는 React GUI를 항상 빌드합니다.
 SQLite는 처음에 자동 준비합니다. Colima나 별도 DB 서버는 사용하지 않습니다.
 HELP
 }
@@ -81,29 +82,30 @@ show_access() {
   printf '일회용 로그인 코드 (5분 이내 사용):\n'
   run_cli web-session
   printf '\n종료 명령: '
-  printf '%q ' "$cli"
+  printf '%q ' "$repo_dir/stop.sh"
   if [ -n "$config_file" ]; then printf '%q ' --config "$config_file"; fi
-  printf '%q ' web stop
   printf '\n일반 종료 후에도 실행 중 작업은 계속됩니다. 전체 취소는 --cancel-active를 명시하세요.\n'
 }
 
 status_json="$(run_cli web status)"
 existing_port="$(printf '%s' "$status_json" | "$python" -c 'import json,sys; s=json.load(sys.stdin); print(s["port"] if s["alive"] else "")')"
 if [ -n "$existing_port" ]; then
-  [ "$rebuild" -eq 0 ] || fail '이미 실행 중입니다. web stop으로 종료한 뒤 --rebuild를 사용하세요.'
+  [ "$rebuild" -eq 0 ] || fail '이미 실행 중입니다. stop.sh로 종료한 뒤 --rebuild를 사용하세요.'
   printf '이미 실행 중인 서비스를 사용합니다. 포트·허용 경로 변경은 종료 후 기동해야 반영됩니다.\n'
+  printf 'GUI 소스 변경을 반영하려면 stop.sh로 종료한 뒤 start.sh로 다시 기동하세요.\n'
   show_access "$existing_port"
   exit 0
 fi
 
-if [ "$rebuild" -eq 1 ] || [ ! -f src/dev_orchestra/_web/manifest.json ]; then
-  command -v npm >/dev/null 2>&1 || fail 'GUI 빌드에 Node 22.12 이상과 npm이 필요합니다.'
-  command -v node >/dev/null 2>&1 || fail 'GUI 빌드에 Node 22.12 이상이 필요합니다.'
-  node -e 'const [m,n]=process.versions.node.split(".").map(Number); if(m<22 || (m===22 && n<12)) process.exit(1)' || fail 'Node 22.12 이상으로 GUI를 빌드하세요.'
-  printf 'GUI 의존성을 설치하고 빌드합니다.\n'
+command -v npm >/dev/null 2>&1 || fail 'GUI 빌드에 Node 22.12 이상과 npm이 필요합니다.'
+command -v node >/dev/null 2>&1 || fail 'GUI 빌드에 Node 22.12 이상이 필요합니다.'
+node -e 'const [m,n]=process.versions.node.split(".").map(Number); if(m<22 || (m===22 && n<12)) process.exit(1)' || fail 'Node 22.12 이상으로 GUI를 빌드하세요.'
+if [ "$rebuild" -eq 1 ] || [ ! -d node_modules ]; then
+  printf 'GUI 의존성을 설치합니다.\n'
   npm ci
-  "$python" scripts/build_web.py
 fi
+printf '최신 GUI 소스를 빌드합니다.\n'
+"$python" scripts/build_web.py
 
 # 현재 스키마면 실행 중 Worker의 유지보수 잠금을 건드리지 않습니다.
 needs_upgrade="$("$python" - "$config_file" <<'PY'

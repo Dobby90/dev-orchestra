@@ -77,7 +77,7 @@ export function ProjectDetailPage() {
             />
             {save.isSuccess && (
               <p role="status" className="text-green">
-                変更を保存しました。
+                변경 사항을 저장했습니다.
               </p>
             )}
           </section>
@@ -88,7 +88,7 @@ export function ProjectDetailPage() {
             </p>
             <Button variant="danger" onClick={() => setArchive(true)}>
               <Archive size={15} />
-              登録解除
+              등록 해제
             </Button>
           </aside>
         </div>

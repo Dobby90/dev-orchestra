@@ -18,6 +18,49 @@ from dev_orchestra.infrastructure.locking import lock
 
 ROOT = Path(__file__).resolve().parents[1]
 SCRIPT = ROOT / "start.sh"
+STOP_SCRIPT = ROOT / "stop.sh"
+
+
+@pytest.mark.parametrize("args", [["--config"], ["--config", "missing.yaml"], ["--unknown"]])
+def test_invalid_stop_options_do_not_touch_state(args, tmp_path):
+    result = subprocess.run([str(STOP_SCRIPT), *args], cwd=tmp_path, capture_output=True, text=True)
+    assert result.returncode == 1 and "오류:" in result.stderr
+    assert not list(tmp_path.iterdir())
+
+
+@pytest.mark.parametrize("cancel_active", [False, True])
+def test_stop_forwards_config_options_and_exit_status(tmp_path, cancel_active):
+    root = tmp_path / "app with spaces"
+    root.mkdir()
+    script = root / "stop.sh"
+    script.write_bytes(STOP_SCRIPT.read_bytes())
+    script.chmod(0o755)
+    bin_dir = root / ".venv/bin"
+    bin_dir.mkdir(parents=True)
+    cli = bin_dir / "devorchestra"
+    cli.write_text(f"""#!{sys.executable}
+import json, sys
+print(json.dumps(sys.argv[1:]))
+raise SystemExit(7)
+""")
+    cli.chmod(0o755)
+    config_file = tmp_path / "settings with spaces.yaml"
+    config_file.write_text("{}")
+    options = ["--cancel-active"] if cancel_active else []
+    result = subprocess.run(
+        [str(script), *options, "--config", config_file.name],
+        cwd=tmp_path,
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode == 7
+    assert json.loads(result.stdout) == [
+        "--config",
+        str(config_file),
+        "web",
+        "stop",
+        *options,
+    ]
 
 
 @pytest.mark.parametrize("args", [["--port", "bad"], ["--port", "0"], ["--port"], ["--unknown"]])
@@ -81,6 +124,7 @@ def test_native_start_relative_config_repeat_and_rebuild_guard(tmp_path):
         svc = RunService(config)
         runtime = WebRuntime(svc)
         assert first.returncode == 0, first.stderr
+        assert "최신 GUI 소스를 빌드합니다." in first.stdout
         assert f"http://127.0.0.1:{port}" in first.stdout
         owner = runtime.status()
         assert owner["alive"] and httpx.get(f"http://127.0.0.1:{port}/").status_code == 200
@@ -91,6 +135,7 @@ def test_native_start_relative_config_repeat_and_rebuild_guard(tmp_path):
             args[:-1] + ["8001"], cwd=tmp_path, capture_output=True, text=True, timeout=15
         )
         assert second.returncode == 0 and "이미 실행 중" in second.stdout
+        assert "최신 GUI 소스를 빌드합니다." not in second.stdout
         assert f"http://127.0.0.1:{port}" in second.stdout
         assert runtime.status()["pid"] == owner["pid"]
         with svc.store.connection() as db:
@@ -103,7 +148,15 @@ def test_native_start_relative_config_repeat_and_rebuild_guard(tmp_path):
         )
         assert refused.returncode == 1 and "종료한 뒤" in refused.stderr
         assert manifest.read_bytes() == before and runtime.status()["pid"] == owner["pid"]
-        runtime.stop()
+        stopped = subprocess.run(
+            [str(STOP_SCRIPT), "--config", config_file.name],
+            cwd=tmp_path,
+            capture_output=True,
+            text=True,
+            timeout=20,
+        )
+        assert stopped.returncode == 0, stopped.stderr
+        assert json.loads(stopped.stdout)["stop_requested"]
         deadline = time.monotonic() + 15
         while runtime.status()["alive"] and time.monotonic() < deadline:
             time.sleep(0.1)
@@ -114,6 +167,7 @@ def test_native_start_relative_config_repeat_and_rebuild_guard(tmp_path):
                 args, cwd=tmp_path, capture_output=True, text=True, timeout=30
             )
             assert restarted.returncode == 0, restarted.stderr
+            assert "최신 GUI 소스를 빌드합니다." in restarted.stdout
             assert runtime.status()["alive"]
     finally:
         if runtime:
