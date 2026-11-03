@@ -3,13 +3,122 @@
 import json
 import platform
 import re
+import shlex
 from pathlib import Path, PurePosixPath
 
 from dev_orchestra.application.errors import ApplicationError
 from dev_orchestra.application.web_contracts import ValidationCandidate, ValidationDetection
 from dev_orchestra.config import TestCommand
+from dev_orchestra.domain.models import PipelineError
 from dev_orchestra.infrastructure.files import relative_path
 from dev_orchestra.infrastructure.git import Git
+
+
+def script_tokens(value):
+    """Only analyze a single literal command; never interpret shell expressions."""
+    if re.search(r"[;&|<>`$\n\r]", value):
+        return []
+    try:
+        return shlex.split(value)
+    except ValueError:
+        return []
+
+
+def flag_values(tokens, flag):
+    values = []
+    for index, token in enumerate(tokens):
+        if token == flag:
+            values.append(tokens[index + 1] if index + 1 < len(tokens) else "")
+        elif token.startswith(flag + "="):
+            values.append(token.partition("=")[2])
+    return values
+
+
+def node_junit_report(tokens):
+    # Node stops option parsing at the first test file (or --). Reporter-looking
+    # arguments after that point are filenames, not report configuration.
+    value_flags = {
+        "--test-reporter",
+        "--test-reporter-destination",
+        "--import",
+        "--require",
+        "-r",
+        "--loader",
+        "--experimental-loader",
+        "--test-name-pattern",
+        "--test-skip-pattern",
+        "--test-concurrency",
+        "--test-timeout",
+        "--conditions",
+        "-C",
+        "--inspect-port",
+    }
+    index = 1 if tokens and Path(tokens[0]).name == "node" else 0
+    while index < len(tokens):
+        token = tokens[index]
+        if token == "--" or not token.startswith("-"):
+            tokens = tokens[:index]
+            break
+        index += 2 if token in value_flags else 1
+    reporters = flag_values(tokens, "--test-reporter")
+    destinations = flag_values(tokens, "--test-reporter-destination")
+    if len(reporters) != len(destinations) or reporters.count("junit") != 1:
+        return None
+    destination = destinations[reporters.index("junit")]
+    if destination in {"stdout", "stderr"} or not destination:
+        return None
+    try:
+        path = relative_path(destination)
+    except PipelineError:
+        return None
+    if any(c in path for c in "*?[") or any(
+        part.startswith(".") for part in PurePosixPath(path).parts
+    ):
+        return None
+    return path
+
+
+def npm_node_options(report):
+    return (
+        "--node-options=--test-reporter=spec --test-reporter-destination=stdout "
+        "--test-reporter=junit --test-reporter-destination=" + report
+    )
+
+
+def configure_node_test(item, tokens, manager, script, scripts, prefix, files):
+    """Use npm's lifecycle option, not trailing Node flags interpreted as test files."""
+    report = node_junit_report(tokens)
+    if report:
+        item.command.junit_report = prefix + report
+        output = str(PurePosixPath(prefix + report).parent)
+        if output != "." and not any(p == output or p.startswith(output + "/") for p in files):
+            item.output_paths = list(dict.fromkeys([*item.output_paths, output]))
+            item.warnings = []
+        else:
+            item.warnings = [
+                "설정된 JUnit 경로의 상위 디렉터리에 추적 소스가 없어야 합니다. 별도 출력 디렉터리를 지정하세요."
+            ]
+        return
+    local_report = item.command.junit_report.removeprefix(prefix)
+    # Existing reporter settings, npm configuration and test lifecycle hooks may
+    # override NODE_OPTIONS. Do not guess or replace their behavior.
+    ancestors = PurePosixPath(prefix or ".").parents
+    npmrc_paths = {prefix + ".npmrc", ".npmrc", *(str(p / ".npmrc") for p in ancestors)}
+    hooks = [scripts.get("pre" + script), scripts.get("post" + script)]
+    if (
+        manager == "npm"
+        and not any(t.startswith(("--test-reporter", "--watch")) for t in tokens)
+        and not any(n in files for n in npmrc_paths)
+        and not any(hooks)
+    ):
+        item.command.argv = [manager, npm_node_options(local_report), "run", script]
+        item.warnings = []
+        return
+    item.warnings = [
+        f"Node 내장 테스트의 JUnit 파일 출력을 자동 확정할 수 없습니다. {script} 스크립트에서 "
+        f"테스트 파일 경로 앞에 --test-reporter=junit --test-reporter-destination={local_report}를 "
+        f"설정하고 수집 경로 {item.command.junit_report}와 일치시키세요. 기존 reporter·생명주기 훅·패키지 관리자 설정은 유지합니다."
+    ]
 
 
 def candidate(tool, directory=".", *, argv=None, evidence=(), label=None):
@@ -215,7 +324,8 @@ def detect_validation(info):
                     elif script == "test" or script.startswith(("test:", "test-")):
                         argv = [pm, "run", script]
                         separator = ["--"] if pm == "npm" else []
-                        if "playwright" in value:
+                        tokens = script_tokens(value)
+                        if tokens and tokens[0] == "playwright":
                             item = add(
                                 "playwright",
                                 path,
@@ -230,7 +340,7 @@ def detect_validation(info):
                                 "node-test", path, argv=argv, label=f"{directory} · {script}"
                             )
                             # Only append runner-specific flags when the script invokes that runner.
-                            if re.search(r"\bvitest\b", value) and "vitest" in dependencies:
+                            if tokens and tokens[0] == "vitest" and "vitest" in dependencies:
                                 item.command.argv += separator + [
                                     "--run",
                                     "--reporter=junit",
@@ -246,6 +356,10 @@ def detect_validation(info):
                             item.warnings = [
                                 w.replace("build/unit.xml", report) for w in item.warnings
                             ]
+                            if tokens and tokens[0] == "node" and "--test" in tokens:
+                                configure_node_test(
+                                    item, tokens, pm, script, scripts, prefix, files
+                                )
             except (ValueError, TypeError, AttributeError):
                 warnings.append(f"{path}: package.json 형식을 확인해 주세요.")
         elif name == "pom.xml":
@@ -351,6 +465,66 @@ def detect_validation(info):
     return ValidationDetection(base_sha=info.base_sha, candidates=found, warnings=warnings)
 
 
+def script_identity(argv):
+    if not argv or Path(argv[0]).name not in {"npm", "pnpm", "yarn"}:
+        return None
+    manager = Path(argv[0]).name
+    tail = argv[1:]
+    if tail == ["test"]:
+        return manager, "test"
+    if tail and tail[0].startswith("--node-options="):
+        tail = tail[1:]
+    if len(tail) >= 2 and tail[0] == "run":
+        return manager, tail[1]
+    return None
+
+
+def report_warning(command, candidates):
+    """Return only a statically known mismatch, or an explicit uncertainty notice."""
+    prefix = "" if command.working_directory == "." else command.working_directory + "/"
+    report = None
+    known = False
+    if Path(command.argv[0]).name == "node" and "--test" in command.argv:
+        report = node_junit_report(command.argv)
+        known = True
+    else:
+        identity = script_identity(command.argv)
+        if not identity:
+            return None
+        for item in candidates:
+            if (
+                item.command.kind != "test"
+                or item.command.working_directory != command.working_directory
+                or script_identity(item.command.argv) != identity
+            ):
+                continue
+            if item.id.startswith("node-test") and item.warnings:
+                return " ".join(item.warnings)
+            node_options = flag_values(item.command.argv, "--node-options")
+            if node_options:
+                saved = flag_values(command.argv, "--node-options")
+                report = node_junit_report(script_tokens(saved[0])) if len(saved) == 1 else None
+            elif item.id.startswith("playwright"):
+                if "junit" not in flag_values(command.argv, "--reporter"):
+                    return "Playwright의 JUnit reporter와 파일 출력 설정을 확인하세요."
+                report = command.env.get("PLAYWRIGHT_JUNIT_OUTPUT_FILE")
+            elif command.argv != item.command.argv:
+                # Vitest/user-defined scripts may configure reporters in files;
+                # do not claim an exact output path from unrelated CLI arguments.
+                return None
+            else:
+                report = item.command.junit_report.removeprefix(prefix)
+            known = True
+            break
+    if known:
+        if not report:
+            return f"현재 명령은 JUnit 파일을 생성하도록 설정되지 않았지만 {command.junit_report} 수집을 요구합니다."
+        actual = prefix + report
+        if PurePosixPath(actual) != PurePosixPath(command.junit_report):
+            return f"명령이 생성하는 JUnit 경로 {actual}와 수집 경로 {command.junit_report}가 다릅니다."
+    return None
+
+
 def policy_warnings(config, info):
     """Explain known tooling mismatches without replacing the saved host policy."""
     try:
@@ -372,7 +546,7 @@ def policy_warnings(config, info):
             else "gradle"
             if executable in {"gradle", "gradlew"}
             else "node"
-            if executable in {"npm", "pnpm", "yarn"}
+            if executable in {"node", "npm", "pnpm", "yarn"}
             else None
         )
         if available and tool and tool not in available:
@@ -380,4 +554,19 @@ def policy_warnings(config, info):
                 f"저장된 검증 {key}는 {tool} 명령이지만 기준 브랜치에서 해당 도구를 감지하지 못했습니다. "
                 "프로젝트 검증 설정에서 자동 감지·선택 후 새 작업을 만드세요. 이 작업의 재개 답변으로 명령은 변경되지 않습니다."
             )
+        if command.kind == "test":
+            mismatch = report_warning(command, detected.candidates)
+            if mismatch:
+                warnings.append(
+                    f"저장된 검증 {key}: {mismatch} 프로젝트 검증 설정에서 명령·JUnit 경로를 확인하고 새 작업을 만드세요. "
+                    "기존 작업의 재개 답변으로 검증 정책은 변경되지 않습니다."
+                )
+            report = command.junit_report
+            if not any(c in report for c in "*?[") and not any(
+                PurePosixPath(report).is_relative_to(PurePosixPath(p))
+                for p in config.tests.output_paths
+            ):
+                warnings.append(
+                    f"저장된 검증 {key}: JUnit 수집 경로 {report}를 포함하는 테스트 출력 경로를 설정하세요."
+                )
     return warnings
