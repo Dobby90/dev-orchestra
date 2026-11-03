@@ -13,7 +13,7 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from starlette.concurrency import run_in_threadpool
 
-from dev_orchestra.api.security import COOKIE, Security, digest, runtime_key
+from dev_orchestra.api.security import COOKIE, SESSION_TTL_SECONDS, Security, digest, runtime_key
 from dev_orchestra.application.backend import BackendService
 from dev_orchestra.application.commands import Commands
 from dev_orchestra.application.errors import ApplicationError
@@ -244,7 +244,12 @@ def create_app(config=None, allowed_roots=None, port=8000, static_directory=None
     def session(body: SessionCreate, response: Response):
         token, expires = security.exchange(body.bootstrap_code)
         response.set_cookie(
-            COOKIE, token, httponly=True, samesite="strict", path="/api", max_age=28800
+            COOKIE,
+            token,
+            httponly=True,
+            samesite="strict",
+            path="/api",
+            max_age=SESSION_TTL_SECONDS,
         )
         return {"authenticated": True, "expires_at": expires, "csrf_token": security.csrf(token)}
 

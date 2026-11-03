@@ -34,10 +34,24 @@ test("실제 로컬 API: 로그인 → 프로젝트 → 실행 → 재연결 →
   await page.goto("/");
   await expect(page.getByLabel("일회용 로그인 코드")).toBeVisible();
   await page.getByLabel("일회용 로그인 코드").fill(bootstrap());
+  const loginStarted = Date.now() / 1000;
   await page.getByRole("button", { name: "작업 공간 열기" }).click();
   await expect(
     page.getByRole("heading", { name: "개발의 흐름을 한눈에" }),
   ).toBeVisible();
+  const sessionCookie = (await page.context().cookies()).find(
+    (cookie) => cookie.name === "devorchestra_session",
+  );
+  expect(sessionCookie).toBeDefined();
+  expect(sessionCookie!.httpOnly).toBe(true);
+  expect(sessionCookie!.sameSite).toBe("Strict");
+  expect(sessionCookie!.path).toBe("/api");
+  expect(sessionCookie!.expires).toBeGreaterThanOrEqual(
+    loginStarted + 172800 - 5,
+  );
+  expect(sessionCookie!.expires).toBeLessThanOrEqual(
+    Date.now() / 1000 + 172800 + 5,
+  );
   await page.screenshot({
     path: "test-results/dashboard-dark.png",
     fullPage: true,

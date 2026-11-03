@@ -20,7 +20,7 @@ UV_CACHE_DIR="$PWD/.uv-cache" .tools/uv sync --frozen --extra web
 npm run dev:web
 ```
 
-`http://127.0.0.1:5173`에 접속하고 `devorchestra --config config.yaml web-session`으로 발급한 일회용 코드를 입력합니다. 원격 주소나 `localhost`로 바꾸지 마세요. 로그인 코드·세션 쿠키·CSRF는 URL이나 localStorage에 저장하지 않습니다. 테마 선택만 localStorage에 보관합니다.
+`http://127.0.0.1:5173`에 접속하고 `devorchestra --config config.yaml web-session`으로 발급한 일회용 코드를 입력합니다. 원격 주소나 `localhost`로 바꾸지 마세요. 일회용 코드는5분간 유효하며 세션은 로그인부터2일간 유지됩니다. 로그인 코드·세션 쿠키·CSRF는 URL이나 localStorage에 저장하지 않습니다. 테마 선택만 localStorage에 보관합니다.
 
 기본 API는 `127.0.0.1:8000`입니다. 다른 로컬 포트로 API를 시작한 경우 `DEVORCHESTRA_API_PORT=포트 npm run dev:web`으로 지정합니다. Vite는 프론트엔드·node_modules만 파일로 제공하고 검사 산출물·환경 파일·Python 소스를 차단합니다. 이 개발 서버를 외부에 공개하지 마세요.
 

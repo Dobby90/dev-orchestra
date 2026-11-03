@@ -52,7 +52,8 @@ export function LoginPage({
           <p className="help">
             같은 설정의 터미널에서{" "}
             <code>devorchestra --config config.yaml web-session</code>으로
-            발급합니다. 코드는 60초 동안 유효합니다.
+            발급합니다. 코드는 5분 동안 유효하며, 로그인 후 세션은 2일간
+            유지됩니다.
           </p>
           {login.error && <ErrorNotice error={login.error} />}
           <Button type="submit" disabled={login.isPending}>

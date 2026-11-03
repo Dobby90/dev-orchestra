@@ -41,7 +41,7 @@ cd /Users/hycho-office/dev/workspace/tools/dev-orchestra
 ./start.sh --allow-root /Users/hycho-office/dev/workspace
 ```
 
-SQLite를 처음 준비하고 GUI·API·Dispatcher를 시작한 뒤 접속 주소와 60초 유효 일회용 로그인 코드를 표시합니다. Colima나 별도 DB 서버는 필요하지 않습니다. 이미 실행 중이면 기존 프로세스와 포트를 재사용하고 새 로그인 코드만 발급합니다. 포트·허용 경로를 바꾸려면 기존 서비스를 종료하고 다시 시작하세요. 이 명령은 대기 중인 기존 작업이 있으면 Dispatcher가 실행할 수 있습니다.
+SQLite를 처음 준비하고 GUI·API·Dispatcher를 시작한 뒤 접속 주소와 5분 유효 일회용 로그인 코드를 표시합니다. Colima나 별도 DB 서버는 필요하지 않습니다. 이미 실행 중이면 기존 프로세스와 포트를 재사용하고 새 로그인 코드만 발급합니다. 포트·허용 경로를 바꾸려면 기존 서비스를 종료하고 다시 시작하세요. 이 명령은 대기 중인 기존 작업이 있으면 Dispatcher가 실행할 수 있습니다.
 
 - `--allow-root`의 기본값은 이 저장소의 상위 디렉터리이며 여러 번 지정할 수 있습니다.
 - `--port 8001`로 포트를 변경합니다. 기본값은8000입니다.
@@ -192,7 +192,7 @@ UV_CACHE_DIR="$PWD/.uv-cache" .tools/uv sync --frozen --extra web
 API는 `127.0.0.1:8000`에만 바인딩하며 세션·정확한 Origin/Host·쓰기 CSRF 검사를 적용합니다. `--allow-root` 아래의 Git 저장소만 프로젝트로 등록할 수 있습니다. 원본 저장소·브랜치를 삭제하지 않으며 프로젝트 DELETE는 등록 해제(archive)입니다.
 
 ```sh
-# 같은 DB에 60초 유효·일회용 로그인 코드를 발급합니다.
+# 같은 DB에 5분 유효·일회용 로그인 코드를 발급합니다.
 .venv/bin/devorchestra --config config.yaml web-session
 ```
 
@@ -291,3 +291,5 @@ wheel을 설치한 독립 환경 두 개를 준비했다면 다음 검사기로 
 배포 의존성 감사는 0건이고, 개발 전용 타입 생성기의 Moderate 3건과 TestClient의 httpx 전환 경고는 남아 있습니다. 장시간 메모리/부하·Linux bwrap·Firefox/WebKit·OS 재부팅/디스크 고장 검증은 완료로 간주하지 않습니다. 악성 저장소에 대한 완전한 호스트 읽기 격리, 원격/다중 사용자 운용은 지원 범위에 포함하지 않습니다. 상세 결과는 로컬 [Phase 6 검증 기록](docs/gui-phase6-results.md)과 [GUI MVP 최종 판정](docs/gui-mvp-readiness-report.md)에 보존합니다.
 
 장시간 무인 검사는 컴퓨터가 실행 가능한 상태를 유지해야 합니다. macOS에서 검사를 실행하는 동안만 유휴 절전을 방지하려면 `/usr/bin/caffeinate -i env E2E_BUNDLED=1 PLAYWRIGHT_BROWSERS_PATH=/private/tmp/devorchestra-pw-browsers npm run test:e2e --workspace apps/web`을 사용할 수 있습니다. 영구 전원 설정은 변경하지 않으며 명시적 절전·잠금·세션 중단 전체를 방지하는 기능은 아닙니다.
+
+로그인 코드는 발급 후5분간 한 번 사용할 수 있습니다. 새 로그인 세션과 브라우저 쿠키의 수명은 로그인 시점부터48시간(2일)이며 요청마다 연장하지 않습니다. 로그아웃하면 즉시 무효화합니다. 시간 정책 변경 전에 발급된 코드·세션의 기존 만료 기록은 소급 변경하지 않으므로, 실행 중 서비스를 재시작하고 새 코드로 다시 로그인하면 새 정책이 적용됩니다.

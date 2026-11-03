@@ -204,6 +204,104 @@ def test_session_replay_and_expiry(web):
     assert c.get("/api/runs").status_code == 401
 
 
+def freeze_auth_clock(monkeypatch):
+    import time
+    from types import SimpleNamespace
+
+    from dev_orchestra.api import security
+
+    clock = SimpleNamespace(now=2_000_000_000.0)
+    monkeypatch.setattr(
+        security, "time", SimpleNamespace(time=lambda: clock.now, monotonic=time.monotonic)
+    )
+    return clock
+
+
+def test_bootstrap_five_minute_boundary_and_single_use(web, monkeypatch):
+    from dev_orchestra.api.security import digest
+
+    c, svc, _, _, _ = web
+    clock = freeze_auth_clock(monkeypatch)
+    issued_at = clock.now
+    valid, expired = bootstrap(svc.store), bootstrap(svc.store)
+    with svc.store.connection() as db:
+        assert (
+            db.execute(
+                "SELECT expires_at FROM web_bootstrap_codes WHERE code_hash=?", (digest(valid),)
+            ).fetchone()[0]
+            == issued_at + 300
+        )
+    clock.now = issued_at + 299
+    assert c.post("/api/session", json={"bootstrap_code": valid}).status_code == 201
+    assert c.post("/api/session", json={"bootstrap_code": valid}).status_code == 401
+    clock.now = issued_at + 300
+    assert c.post("/api/session", json={"bootstrap_code": expired}).status_code == 401
+
+
+def test_session_cookie_and_server_expire_after_two_days_without_sliding(web, monkeypatch):
+    from datetime import datetime
+    from http.cookies import SimpleCookie
+
+    from dev_orchestra.api.security import COOKIE, digest
+
+    c, svc, _, _, _ = web
+    clock = freeze_auth_clock(monkeypatch)
+    issued_at = clock.now
+    response = c.post("/api/session", json={"bootstrap_code": bootstrap(svc.store)})
+    assert response.status_code == 201
+    cookie = SimpleCookie(response.headers["set-cookie"])[COOKIE]
+    assert cookie["max-age"] == "172800"
+    assert cookie["httponly"] and cookie["samesite"] == "strict" and cookie["path"] == "/api"
+    assert not cookie["domain"]
+    token = c.cookies.get(COOKIE)
+    expires = response.json()["expires_at"]
+    assert datetime.fromisoformat(expires.replace("Z", "+00:00")).timestamp() == issued_at + 172800
+    for elapsed in (9 * 3600, 172799):
+        clock.now = issued_at + elapsed
+        checked = c.get("/api/session")
+        assert checked.status_code == 200
+        assert checked.json()["expires_at"] == expires
+    clock.now = issued_at + 172800
+    assert c.get("/api/session").status_code == 401
+    # The test client still sends its cookie: rejection is enforced by the server.
+    assert c.cookies.get(COOKIE) == token
+    with svc.store.connection() as db:
+        assert (
+            db.execute(
+                "SELECT expires_at FROM web_sessions WHERE session_hash=?", (digest(token),)
+            ).fetchone()[0]
+            == issued_at + 172800
+        )
+
+
+def test_two_day_session_survives_restart_but_logout_revokes_it(web, monkeypatch):
+    from dev_orchestra.api.security import COOKIE, digest
+
+    c, svc, _, repo, _ = web
+    clock = freeze_auth_clock(monkeypatch)
+    response = c.post("/api/session", json={"bootstrap_code": bootstrap(svc.store)})
+    assert response.status_code == 201
+    token = c.cookies.get(COOKIE)
+    clock.now += 9 * 3600
+    with TestClient(
+        create_app(svc.config, [repo.parent.resolve()]),
+        base_url="http://127.0.0.1:8000",
+        client=("127.0.0.1", 50000),
+        headers={"Origin": "http://127.0.0.1:8000", "X-CSRF-Token": response.json()["csrf_token"]},
+        cookies=c.cookies,
+    ) as restarted:
+        assert restarted.get("/api/session").status_code == 200
+        logout = restarted.delete("/api/session")
+        assert logout.status_code == 204 and "Max-Age=0" in logout.headers["set-cookie"]
+        assert (
+            restarted.get("/api/runs", headers={"Cookie": f"{COOKIE}={token}"}).status_code == 401
+        )
+    with svc.store.connection() as db:
+        assert not db.execute(
+            "SELECT 1 FROM web_sessions WHERE session_hash=?", (digest(token),)
+        ).fetchone()
+
+
 def test_upload_and_validation_errors_do_not_echo_input(web):
     c, _, _, _, _ = web
     assert (

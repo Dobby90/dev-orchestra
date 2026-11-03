@@ -78,7 +78,7 @@ run_cli() {
 show_access() {
   local actual_port="$1"
   printf '\n접속 주소: http://127.0.0.1:%s\n' "$actual_port"
-  printf '일회용 로그인 코드 (60초 이내 사용):\n'
+  printf '일회용 로그인 코드 (5분 이내 사용):\n'
   run_cli web-session
   printf '\n종료 명령: '
   printf '%q ' "$cli"

@@ -12,6 +12,8 @@ from threading import Lock
 from dev_orchestra.application.errors import ApplicationError
 
 COOKIE = "devorchestra_session"
+BOOTSTRAP_TTL_SECONDS = 5 * 60
+SESSION_TTL_SECONDS = 2 * 24 * 60 * 60
 
 
 def digest(value):
@@ -39,7 +41,10 @@ def runtime_key(path: Path):
 def bootstrap(store):
     code = secrets.token_urlsafe(32)
     with store.connection() as db:
-        db.execute("INSERT INTO web_bootstrap_codes VALUES(?,?)", (digest(code), time.time() + 60))
+        db.execute(
+            "INSERT INTO web_bootstrap_codes VALUES(?,?)",
+            (digest(code), time.time() + BOOTSTRAP_TTL_SECONDS),
+        )
     return code
 
 
@@ -60,7 +65,7 @@ class Security:
                 raise ApplicationError("LOCAL_RATE_LIMIT", "too many session attempts")
             self.attempts.append(stamp)
         token = secrets.token_urlsafe(32)
-        expires = time.time() + 28800
+        expires = time.time() + SESSION_TTL_SECONDS
         with self.store.transaction() as db:
             row = db.execute(
                 "DELETE FROM web_bootstrap_codes WHERE code_hash=? AND expires_at>? RETURNING code_hash",
