@@ -33,7 +33,7 @@ def environment():
     return {
         k: v
         for k, v in os.environ.items()
-        if k in {"PATH", "HOME", "LANG", "TMPDIR", "SYSTEMROOT", "SSL_CERT_FILE"}
+        if k in {"PATH", "HOME", "LANG", "TMPDIR", "SYSTEMROOT", "SSL_CERT_FILE", "JAVA_HOME"}
     } | {"PYTHONDONTWRITEBYTECODE": "1"}
 
 

@@ -96,6 +96,7 @@ test("실제 로컬 API: 로그인 → 프로젝트 → 실행 → 재연결 →
     .click();
   await page.getByLabel("프로젝트 이름").fill("GUI 임시 프로젝트");
   await page.getByLabel("저장소 절대 경로").fill(f.repo);
+  await page.getByText("고급 설정 · 정책 JSON 직접 편집").click();
   await page
     .getByLabel("테스트·리뷰 정책 (JSON)")
     .fill(JSON.stringify(f.policy, null, 2));
@@ -414,7 +415,7 @@ test("CLI 시작·브라우저 종료·재접속·CLI 승인과 GUI 생성 교�
   await page.goto(`/runs/${rid}`);
   await page.getByLabel("일회용 로그인 코드").fill(bootstrap());
   await page.getByRole("button", { name: "작업 공간 열기" }).click();
-  await page.goto(`/runs/${rid}`);
+  await expect(page.getByLabel("일회용 로그인 코드")).toBeHidden();
   await expect(
     page.getByText(
       "CLI 작업 · 조회 전용입니다. 실행 제어는 CLI에서 진행해 주세요.",
@@ -447,6 +448,7 @@ test("CLI 시작·브라우저 종료·재접속·CLI 승인과 GUI 생성 교�
     .click();
   await reopened.getByLabel("프로젝트 이름").fill("독립 교차 프로젝트");
   await reopened.getByLabel("저장소 절대 경로").fill(repo);
+  await reopened.getByText("고급 설정 · 정책 JSON 직접 편집").click();
   await reopened
     .getByLabel("테스트·리뷰 정책 (JSON)")
     .fill(JSON.stringify(f.policy));
@@ -483,4 +485,72 @@ test("CLI 시작·브라우저 종료·재접속·CLI 승인과 GUI 생성 교�
       encoding: "utf8",
     }).trim(),
   ).toBe(f.base_sha);
+});
+
+test("검증 자동 감지: Node·Java 후보를 JSON 편집 없이 선택·저장한다", async ({
+  page,
+}) => {
+  const f = fixture();
+  const repo = join(dirname(f.repo), "validation-repository");
+  execFileSync(f.python, [
+    "-c",
+    `
+import json,subprocess,sys
+from pathlib import Path
+repo=Path(sys.argv[1]);repo.mkdir()
+(repo/'package.json').write_text(json.dumps({'scripts':{'test':'vitest run','build':'vite build','test:browser':'playwright test'},'devDependencies':{'vitest':'*'}}))
+(repo/'service').mkdir();(repo/'service/pom.xml').write_text('<project/>')
+for args in [('init','-b','main'),('config','user.name','GUI 검사'),('config','user.email','test@example.invalid'),('add','.'),('commit','-m','검증 감지 기준선')]:
+ subprocess.run(['git','-C',str(repo),*args],check=True,capture_output=True)
+`,
+    repo,
+  ]);
+  await page.goto("/projects");
+  const login = page.getByLabel("일회용 로그인 코드");
+  if (await login.isVisible()) {
+    await login.fill(bootstrap());
+    await page.getByRole("button", { name: "작업 공간 열기" }).click();
+  }
+  await page
+    .getByRole("button", { name: "프로젝트 등록", exact: true })
+    .click();
+  await page.getByLabel("프로젝트 이름").fill("자동 감지 프로젝트");
+  await page.getByLabel("저장소 절대 경로").fill(repo);
+  await page.getByRole("button", { name: "검증 자동 감지" }).click();
+  await expect(
+    page.getByRole("heading", { name: "감지된 검증 후보" }),
+  ).toBeVisible();
+  await expect(
+    page.getByLabel("service · Maven 테스트", { exact: true }),
+  ).toBeChecked();
+  await expect(
+    page.getByLabel(". · test:browser (Playwright)", { exact: true }),
+  ).toBeChecked();
+  await page.getByRole("button", { name: "선택한 검증 적용" }).click();
+  await expect(page.getByText("고급 설정 · 정책 JSON 직접 편집")).toBeVisible();
+  expect(
+    await page
+      .getByText("고급 설정 · 정책 JSON 직접 편집")
+      .locator("..")
+      .getAttribute("open"),
+  ).toBeNull();
+  const audit = await new AxeBuilder({ page }).analyze();
+  expect(audit.violations).toEqual([]);
+  await page.screenshot({
+    path: "test-results/validation-selection.png",
+    fullPage: true,
+  });
+  await page
+    .getByRole("button", { name: "프로젝트 등록", exact: true })
+    .last()
+    .click();
+  await expect(
+    page.getByRole("heading", { name: "자동 감지 프로젝트" }),
+  ).toBeVisible();
+  await page.getByRole("link", { name: /자동 감지 프로젝트/ }).click();
+  await page.getByRole("link", { name: "이 프로젝트에서 실행" }).click();
+  await expect(
+    page.getByRole("heading", { name: "실행할 검증 명령" }),
+  ).toBeVisible();
+  await expect(page.getByText(/maven-build/).first()).toBeVisible();
 });

@@ -40,6 +40,40 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/validation-profiles": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Validation Profiles */
+        get: operations["validation_profiles_api_validation_profiles_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/project-validation/detect": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Detect Validation */
+        post: operations["detect_validation_api_project_validation_detect_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/projects": {
         parameters: {
             query?: never;
@@ -776,6 +810,10 @@ export interface components {
         CommandView: {
             /** Command Id */
             command_id?: string | null;
+            /** Kind */
+            kind?: ("test" | "check") | null;
+            /** Working Directory */
+            working_directory?: string | null;
             /** Argv */
             argv?: string[] | null;
             /**
@@ -1007,6 +1045,8 @@ export interface components {
             preview_token: string;
             /** Spec Sha256 */
             spec_sha256: string;
+            /** Validation Warnings */
+            validation_warnings?: string[];
         };
         /** ProjectCreate */
         ProjectCreate: {
@@ -1457,6 +1497,12 @@ export interface components {
         };
         /** TestCommand */
         TestCommand: {
+            /**
+             * Kind
+             * @default test
+             * @enum {string}
+             */
+            kind: "test" | "check";
             /** Argv */
             argv: string[];
             /**
@@ -1464,8 +1510,23 @@ export interface components {
              * @default 600
              */
             timeout_seconds: number;
+            /**
+             * Working Directory
+             * @default .
+             */
+            working_directory: string;
             /** Junit Report */
-            junit_report: string;
+            junit_report?: string | null;
+            /** Env */
+            env?: {
+                [key: string]: string;
+            };
+            /**
+             * Network
+             * @default none
+             * @enum {string}
+             */
+            network: "none" | "loopback";
         };
         /** TestResultView */
         TestResultView: {
@@ -1528,6 +1589,41 @@ export interface components {
             cached_input_tokens: number;
             /** Output Tokens */
             output_tokens: number;
+        };
+        /** ValidationCandidate */
+        ValidationCandidate: {
+            /** Id */
+            id: string;
+            /** Label */
+            label: string;
+            /** Evidence */
+            evidence?: string[];
+            /** Warnings */
+            warnings?: string[];
+            command: components["schemas"]["TestCommand"];
+            /** Write Paths */
+            write_paths: string[];
+            /** Output Paths */
+            output_paths: string[];
+        };
+        /** ValidationDetectInput */
+        ValidationDetectInput: {
+            /** Repository Path */
+            repository_path: string;
+            /**
+             * Base Branch
+             * @default main
+             */
+            base_branch: string;
+        };
+        /** ValidationDetection */
+        ValidationDetection: {
+            /** Base Sha */
+            base_sha: string;
+            /** Candidates */
+            candidates: components["schemas"]["ValidationCandidate"][];
+            /** Warnings */
+            warnings: string[];
         };
         /** ValidationError */
         ValidationError: {
@@ -1663,6 +1759,59 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content?: never;
+            };
+        };
+    };
+    validation_profiles_api_validation_profiles_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ValidationCandidate"][];
+                };
+            };
+        };
+    };
+    detect_validation_api_project_validation_detect_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ValidationDetectInput"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ValidationDetection"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
             };
         };
     };

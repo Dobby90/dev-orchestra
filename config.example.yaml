@@ -26,11 +26,15 @@ storage:
   runs_directory: ~/.devorchestra/runs
   worktrees_directory: ~/.devorchestra/worktrees
 tests:
-  # Commands are trusted host configuration. Use the target project's interpreter.
-  # Every command must execute tests and produce a fresh JUnit XML report.
+  # 명령은 호스트 정책입니다. 대상 프로젝트의 실행 환경을 지정하세요.
+  # kind: test(기본값)는 새 JUnit이 필수이며 TEST-*.xml glob도 지원합니다.
+  # kind: check는 빌드·타입 검사를 종료 코드로 판정하며 테스트를 대신하지 않습니다.
+  # GUI에서는 자동 감지·도구 선택과 폼으로 같은 정책을 구성할 수 있습니다.
   commands:
     unit:
       argv: [/absolute/path/to/project/.venv/bin/python, -m, pytest, tests, --junitxml=build/junit.xml, -q]
+      kind: test
+      working_directory: .
       timeout_seconds: 600
       junit_report: build/junit.xml
   write_paths: [tests]

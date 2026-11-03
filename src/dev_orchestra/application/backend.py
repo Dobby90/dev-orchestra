@@ -195,6 +195,8 @@ class BackendService:
         ):
             raise ApplicationError("BRANCH_CONFLICT", "feature branch exists")
         text = self.spec_text(proposal.spec)
+        from dev_orchestra.application.validation import policy_warnings
+
         value = {
             "run_id": rid,
             "branch": branch,
@@ -212,6 +214,7 @@ class BackendService:
             **value,
             "preview_token": token,
             "spec_sha256": hashlib.sha256(text.encode()).hexdigest(),
+            "validation_warnings": policy_warnings(config, info),
         }
 
     def submit(self, command, idem_key):

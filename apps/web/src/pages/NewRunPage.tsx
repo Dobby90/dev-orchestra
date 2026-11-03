@@ -318,6 +318,37 @@ export function NewRunPage() {
           <section className="panel panel-body policy-summary">
             <p className="eyebrow">EXECUTION POLICY</p>
             <h2>검증을 포함하는 개발 흐름</h2>
+            {selected.data && (
+              <section>
+                <h3>실행할 검증 명령</h3>
+                {Object.entries(selected.data.policy.tests.commands ?? {}).map(
+                  ([id, command]) => (
+                    <div key={id}>
+                      <strong>
+                        {id} ·{" "}
+                        {(command.kind ?? "test") === "test"
+                          ? "테스트"
+                          : "빌드·정적 검사"}
+                      </strong>
+                      <pre>{command.argv.join(" ")}</pre>
+                      <p className="help">
+                        작업 경로: {command.working_directory ?? "."}
+                        {command.junit_report
+                          ? ` · JUnit: ${command.junit_report}`
+                          : ""}
+                      </p>
+                    </div>
+                  ),
+                )}
+                <Link to={`/projects/${selected.data.id}`}>
+                  프로젝트 검증 설정 열기
+                </Link>
+                <p className="help">
+                  기준 브랜치의 도구와 명령이 맞는지 확인하세요. 작업 생성 시
+                  정책을 고정합니다.
+                </p>
+              </section>
+            )}
             <ol className="workflow-list">
               {[
                 "Planning",
@@ -369,6 +400,13 @@ export function NewRunPage() {
                   ).toLocaleTimeString("ko-KR")}
                 </dd>
               </dl>
+              {(preview.data.receipt.validation_warnings ?? []).map(
+                (warning, index) => (
+                  <p className="notice" key={index}>
+                    {warning}
+                  </p>
+                ),
+              )}
               <p className="help">
                 접수 후 작업 큐에서 실행 순서를 기다립니다.
               </p>

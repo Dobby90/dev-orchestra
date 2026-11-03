@@ -87,9 +87,18 @@ uv sync --frozen --extra web
 cp config.example.yaml config.yaml
 ```
 
-설정의 `tests.commands`를 대상 프로젝트에 맞게 수정한 뒤 실행합니다. 별도 설정 파일을 전달하지 않은 내장 기본값에는 테스트 명령이 없으므로 작업 실행 전에 설정이 필요합니다.
+GUI의 프로젝트 등록·설정에서 **검증 자동 감지**를 누르면 기준 브랜치에 커밋된 설정을 읽어 Python pytest, Node scripts·Playwright, Java Maven·Gradle 검증 후보를 표시합니다. 실제 명령과 감지 근거를 확인하고 필요한 검증을 선택해 적용한 뒤 저장하세요. 감지는 명령 실행이나 의존성 설치를 하지 않으며 미커밋 설정은 사용하지 않습니다. 여러 언어·하위 프로젝트도 각각 작업 경로를 표시합니다. 감지가 어려우면 **도구 직접 선택**으로 시작하고 실행 파일·인자·JUnit·시간·허용 경로를 폼에서 수정할 수 있습니다. JSON은 고급 설정에 있습니다.
 
-- `tests.commands`: 호스트가 신뢰하는 명령 ID와 `argv` 인자 배열, 제한 시간, `junit_report` 경로를 지정합니다. 대상 프로젝트의 인터프리터를 사용하고 매번 새 JUnit XML을 생성해야 합니다.
+실행 미리보기는 저장된 pytest·Node·Maven·Gradle 정책과 감지된 도구가 다르면 설정 변경 위치를 안내합니다. 사용자 정의 명령의 의미까지 자동 판별하지는 않습니다.
+
+Node는 실제 등록된 scripts만 추천하며 npm·pnpm·Yarn을 구분합니다. Vitest 스크립트에는 단발 실행·JUnit 인자를 제안하고 Playwright에는 JUnit 출력 파일을 지정합니다. 다른 Node 도구는 해당 스크립트에서 JUnit을 생성하도록 준비해야 합니다. Java는 Wrapper가 있으면 우선 사용하며 Maven Surefire·Gradle의 파일별 `TEST-*.xml` 보고서를 수집합니다. 사용자 정의 테스트 태스크·멀티모듈 설정은 실제 명령과 출력 경로를 확인하세요.
+
+CLI에서는 설정의 `tests.commands`를 대상 프로젝트에 맞게 수정한 뒤 실행합니다. 별도 설정 파일을 전달하지 않은 내장 기본값에는 테스트 명령이 없으므로 작업 실행 전에 설정이 필요합니다.
+
+- `tests.commands`: 호스트가 신뢰하는 명령 ID와 `argv` 인자 배열, 제한 시간을 지정합니다. `kind: test`(기본값)는 단일 파일 또는 glob인 `junit_report`에 매번 새 JUnit XML을 생성해야 합니다. `kind: check`는 빌드·타입·정적 검사를 종료 코드로 판정하며 JUnit을 지정하지 않습니다. 테스트 명령은 반드시 하나 이상 있어야 하고 모든 선택 명령이 통과해야 합니다.
+- `working_directory`: 명령을 실행할 저장소 기준 상대 경로이며 기본값은 `.`입니다. `junit_report`, `tests.write_paths`, `tests.output_paths`는 작업 경로와 관계없이 저장소 루트를 기준으로 지정합니다.
+- `network`: 기본값 `none`은 네트워크를 차단합니다. macOS의 `loopback`은 브라우저 검사·Gradle 내부 통신에 필요한 localhost 통신을 허용하고 외부 네트워크는 차단합니다. 서버 주소는 `127.0.0.1`을 사용하세요. Linux의 loopback 모드는 모델 호출 전에 실행을 거부하며 일반 오프라인 검증은 기존 격리를 유지합니다.
+- `env`: 명령별 `JAVA_HOME`, `PLAYWRIGHT_JUNIT_OUTPUT_FILE`, `PLAYWRIGHT_BROWSERS_PATH`만 지정할 수 있습니다. JDK·의존성·브라우저는 미리 준비하세요. Java 예시는 Worktree의 `.devorchestra-cache`를 사용하며 Wrapper 배포본·오프라인 캐시도 필요합니다.
 - `tests.write_paths`: Test Agent가 새 테스트 파일을 추가할 수 있는 경로입니다. 기존 테스트 파일 수정은 허용하지 않습니다.
 - `tests.output_paths`: 테스트 격리 중 쓰기를 허용하는 빌드·보고서 경로입니다. Git이 추적하는 소스 파일이 포함된 디렉터리는 허용하지 않습니다.
 - `storage`: 기본 위치는 저장소 외부의 `~/.devorchestra`입니다. DB·실행 산출물·Worktree를 대상 저장소 내부에 두면 실행을 거부합니다. 상대 저장 경로는 YAML 파일 위치를 기준으로 해석합니다.
@@ -100,6 +109,8 @@ GUI의 **설정 → 에이전트 모델 설정**에서 **모델 목록 불러오
 UI에서 저장한 설정은 DB 옆의 `.agents.json` 확장자 파일에 보관하고 같은 DB를 쓰는 GUI·CLI의 새 실행에 적용합니다. YAML의 Codex 명령·제한 시간은 유지합니다. 저장 전에는 YAML의 모델 설정을 사용하며, 저장 후에는 UI 설정이 우선합니다. 진행 중이거나 과거 실행은 생성 당시 스냅샷을 유지합니다. 미리보기 후 모델 설정이 바뀌면 실행 전 확인을 다시 해야 합니다.
 
 실행 상세의 **에이전트·사용량** 탭은 역할별 설정 모델·추론 강도, 각 시도의 입력·캐시 입력·출력 토큰과 Codex 소요 시간을 표시합니다. 실패·재시도도 합계에 포함합니다. 캐시 입력은 입력 토큰의 일부이며 중복 합산하지 않습니다. 중단·구버전 실행 등으로 기록이 없는 수치는 `0` 대신 미확인으로 표시하며 일부만 수집되면 일부 집계로 표시합니다. 표시한 모델은 요청 설정이며 실제 서버 라우팅 결과를 보장하지 않습니다. 계정 전체의 잔여 사용 한도·요금은 이 집계에 포함하지 않습니다.
+
+저장한 정책은 **새 작업**에 적용됩니다. 기존 작업은 생성 당시의 검증 계약을 보존하며, 재개 답변으로 명령이 바뀌지 않습니다. 정책 불일치가 있으면 작업 화면의 **프로젝트 검증 설정 열기**에서 수정한 뒤 **수정한 정책으로 새 작업 만들기**를 사용하세요. 이전 작업의 변경 내용과 이력은 보존되며 새 작업으로 자동 이전하지 않습니다.
 
 테스트는 셸 없이 실행하고 외부 네트워크를 차단합니다. 필요한 의존성은 실행 전에 오프라인에서 사용할 수 있도록 준비하세요. Maven·Gradle·JavaScript 도구도 JUnit XML을 생성하면 사용할 수 있지만, 프로젝트별 캐시·출력 경로 설정이 필요할 수 있습니다. 대상 프로젝트 의존성을 자동 설치하지 않습니다. 테스트 0건, 전체 건너뛰기, 보고서 누락·형식 오류를 통과로 처리하지 않습니다.
 
@@ -232,6 +243,9 @@ npm run check:api --workspace apps/web
 
 # 실제 OS 샌드박스 검사와 로그 재생 벤치마크
 DEVORCHESTRA_TEST_SANDBOX=1 .venv/bin/python -m pytest tests/test_security.py -q
+
+# macOS: 설치된 Chromium으로 실제 브라우저 격리·JUnit 수집 검사 (선택)
+DEVORCHESTRA_TEST_BROWSER_SANDBOX=1 .venv/bin/python -m pytest tests/test_validation_policy.py -k actual_playwright -q
 .venv/bin/python scripts/benchmark_logs.py
 ```
 

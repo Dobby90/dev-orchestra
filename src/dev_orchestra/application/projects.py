@@ -30,6 +30,12 @@ class ProjectService:
             base_sha=git.baseline(base_branch),
         )
 
+    def detect_validation(self, path: Path, base_branch: str):
+        from dev_orchestra.application.validation import detect_validation
+
+        info = self.validate_repository(path, base_branch)
+        return detect_validation(info)
+
     def validate_policy(self, config: Config) -> Config:
         snapshot = Config.model_validate(config.model_dump())
         if not snapshot.tests.commands:

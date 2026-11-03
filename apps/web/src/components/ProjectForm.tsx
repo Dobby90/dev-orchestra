@@ -2,10 +2,14 @@ import { useState, type FormEvent } from "react";
 import type { Project, Schema } from "../api/types";
 import { Button } from "./ui/button";
 import { Modal } from "./ui/dialog";
+import { ValidationEditor } from "./ValidationEditor";
 export const initialPolicy = {
   tests: {
     commands: {
       unit: {
+        kind: "test" as const,
+        working_directory: ".",
+        network: "none" as const,
         argv: [
           "python",
           "-m",
@@ -24,6 +28,45 @@ export const initialPolicy = {
   max_fix_attempts: 3,
   blocking_severities: ["critical", "high"],
 };
+function editablePolicy(value: unknown): value is Schema["Policy"] {
+  if (!value || typeof value !== "object") return false;
+  const p = value as Record<string, unknown>;
+  if (
+    !p.tests ||
+    typeof p.tests !== "object" ||
+    !Array.isArray(p.blocking_severities)
+  )
+    return false;
+  const tests = p.tests as Record<string, unknown>;
+  const strings = (v: unknown) =>
+    v === undefined ||
+    (Array.isArray(v) && v.every((x) => typeof x === "string"));
+  if (
+    !strings(tests.write_paths) ||
+    !strings(tests.output_paths) ||
+    !strings(p.blocking_severities)
+  )
+    return false;
+  if (tests.commands === undefined) return true;
+  if (
+    !tests.commands ||
+    typeof tests.commands !== "object" ||
+    Array.isArray(tests.commands)
+  )
+    return false;
+  return Object.values(tests.commands).every((value) => {
+    if (!value || typeof value !== "object") return false;
+    const c = value as Record<string, unknown>;
+    return (
+      Array.isArray(c.argv) &&
+      c.argv.every((arg) => typeof arg === "string") &&
+      (c.env === undefined ||
+        (!!c.env &&
+          typeof c.env === "object" &&
+          Object.values(c.env).every((v) => typeof v === "string")))
+    );
+  });
+}
 export function ProjectForm({
   project,
   pending,
@@ -38,20 +81,46 @@ export function ProjectForm({
     [path, setPath] = useState(project?.repository_path ?? ""),
     [base, setBase] = useState(project?.default_base_branch ?? "main"),
     [policy, setPolicy] = useState(
-      JSON.stringify(project?.policy ?? initialPolicy, null, 2),
+      JSON.stringify(
+        project?.policy ?? {
+          ...initialPolicy,
+          tests: { commands: {}, write_paths: [], output_paths: [] },
+        },
+        null,
+        2,
+      ),
     ),
     [error, setError] = useState("");
+  let parsed: Schema["Policy"] | null = null;
+  try {
+    const value: unknown = JSON.parse(policy);
+    if (editablePolicy(value)) parsed = value;
+  } catch {
+    /* JSON errors are shown at submit. */
+  }
+  function changePolicy(patch: Partial<Schema["Policy"]>) {
+    if (parsed) setPolicy(JSON.stringify({ ...parsed, ...patch }, null, 2));
+  }
   function submit(event: FormEvent) {
     event.preventDefault();
     try {
       const value = JSON.parse(policy);
+      if (!editablePolicy(value)) throw new Error();
       if (
-        !value ||
-        typeof value !== "object" ||
-        !value.tests ||
-        !Array.isArray(value.blocking_severities)
-      )
-        throw new Error();
+        !Object.values(value.tests.commands ?? {}).some(
+          (c) => ((c as Schema["TestCommand"]).kind ?? "test") === "test",
+        )
+      ) {
+        setError(
+          "테스트 검증을 하나 이상 선택해 주세요. 빌드 검사만으로는 실행할 수 없습니다.",
+        );
+        return;
+      }
+      for (const command of Object.values(value.tests.commands ?? {})) {
+        command.argv = command.argv.filter(
+          (arg, index) => index === 0 || arg !== "",
+        );
+      }
       setError("");
       onSubmit({
         name,
@@ -83,7 +152,7 @@ export function ProjectForm({
           readOnly={!!project}
           value={path}
           maxLength={4096}
-          placeholder="/Users/me/projects/my-app"
+          placeholder="/absolute/path/to/project"
           onChange={(e) => setPath(e.target.value)}
         />
       </label>
@@ -95,17 +164,69 @@ export function ProjectForm({
           onChange={(e) => setBase(e.target.value)}
         />
       </label>
-      <label>
-        테스트·리뷰 정책 (JSON)
-        <textarea
-          className="mono"
-          rows={16}
-          required
-          value={policy}
-          spellCheck={false}
-          onChange={(e) => setPolicy(e.target.value)}
-        />
-      </label>
+      {parsed?.tests && (
+        <>
+          <ValidationEditor
+            key={`${path}\0${base}`}
+            path={path}
+            base={base}
+            value={parsed.tests}
+            onChange={(tests) => changePolicy({ tests })}
+          />
+          <label>
+            자동 수정 최대 횟수
+            <input
+              type="number"
+              min={0}
+              max={20}
+              value={parsed.max_fix_attempts ?? 3}
+              onChange={(e) =>
+                changePolicy({ max_fix_attempts: Number(e.target.value) })
+              }
+            />
+          </label>
+          <fieldset>
+            <legend>리뷰 차단 심각도</legend>
+            {(["critical", "high", "medium", "low"] as const).map(
+              (severity) => (
+                <label className="check-row" key={severity}>
+                  <input
+                    type="checkbox"
+                    disabled={severity === "critical" || severity === "high"}
+                    checked={
+                      parsed!.blocking_severities?.includes(severity) ?? false
+                    }
+                    onChange={(e) =>
+                      changePolicy({
+                        blocking_severities: e.target.checked
+                          ? [...(parsed!.blocking_severities ?? []), severity]
+                          : parsed!.blocking_severities!.filter(
+                              (s) => s !== severity,
+                            ),
+                      })
+                    }
+                  />
+                  {severity}
+                </label>
+              ),
+            )}
+          </fieldset>
+        </>
+      )}
+      <details>
+        <summary>고급 설정 · 정책 JSON 직접 편집</summary>
+        <label>
+          테스트·리뷰 정책 (JSON)
+          <textarea
+            className="mono"
+            rows={16}
+            required
+            value={policy}
+            spellCheck={false}
+            onChange={(e) => setPolicy(e.target.value)}
+          />
+        </label>
+      </details>
       <Modal
         trigger={
           <Button type="button" variant="secondary">
@@ -115,7 +236,7 @@ export function ProjectForm({
         open={guideOpen}
         onOpenChange={setGuideOpen}
         title="프로젝트 정책 JSON 작성 가이드"
-        description="기본 예시는 Python pytest용입니다. 대상 프로젝트의 테스트 도구와 환경에 맞게 수정하세요."
+        description="자동 감지 또는 도구 선택으로 Python·Node·Java 검증을 구성할 수 있습니다. JSON은 고급 설정에서 편집합니다."
       >
         <div className="input-guide">
           <dl>
@@ -130,7 +251,8 @@ export function ProjectForm({
             <dd>
               제한 시간은 초 단위 양수입니다. 테스트 명령은 매번 새 JUnit XML을
               생성해야 하며 junit_report에 같은 상대 경로를 지정합니다. 테스트
-              0건이나 전체 건너뛰기는 통과로 처리하지 않습니다.
+              0건이나 전체 건너뛰기는 통과로 처리하지 않습니다. kind=check인
+              빌드·타입 검사는 종료 코드로 판정하며 테스트를 대신하지 않습니다.
             </dd>
             <dt>tests.write_paths</dt>
             <dd>
@@ -163,9 +285,9 @@ export function ProjectForm({
         </div>
       </Modal>
       <p className="help">
-        테스트 실행 파일은 대상 프로젝트 환경에 맞게 설정하세요. argv는 인자
-        배열이며 JUnit 출력 경로가 필요합니다. 변경한 정책은 이후 생성하는
-        작업에 적용됩니다.
+        저장한 검증 정책은 새로 생성하는 작업에 적용됩니다. 기존 작업의 재개
+        답변으로 명령을 변경할 수 없습니다. 정책이 맞지 않으면 여기서 수정한 뒤
+        새 작업을 생성하세요.
       </p>
       {error && (
         <p role="alert" className="text-red">

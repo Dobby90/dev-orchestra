@@ -78,6 +78,8 @@ class Runner:
 
                         QueueService(self.store).running(*claim)
                         self.validate_registered_repository(run)
+                    if hasattr(self.tests, "check_policy"):
+                        self.tests.check_policy(Config.model_validate(run["config"]).tests)
                     if hasattr(self.agent, "check"):
                         self.agent.check(stop=stop)
                     if hasattr(self.tests, "check"):
@@ -205,6 +207,12 @@ class Runner:
                     "base_sha": run["base_sha"],
                     "test_paths": config.tests.write_paths,
                     "test_commands": {k: v.model_dump() for k, v in config.tests.commands.items()},
+                    "validation_policy": {
+                        "immutable_for_run": True,
+                        "change_target": "project validation settings (GUI) or tests in the CLI YAML config",
+                        "change_effect": "new runs only; resume answers cannot change command policy",
+                        "output_paths": config.tests.output_paths,
+                    },
                 }
                 for key in ["plan", "criteria", "test_result", "review_result"]:
                     context[key] = run.get(key)
@@ -273,9 +281,11 @@ class Runner:
                     if set(result.command_ids) != ids:
                         raise PipelineError("tester must select all configured test commands")
                     criteria = {c["id"] for c in run["criteria"]}
+                    test_ids = {k for k, v in config.tests.commands.items() if v.kind == "test"}
                     coverage = {c.criterion_id: c.command_ids for c in result.coverage}
                     if set(coverage) != criteria or any(
-                        not v or not set(v) <= ids for v in coverage.values()
+                        not v or not set(v) <= ids or not set(v) & test_ids
+                        for v in coverage.values()
                     ):
                         raise PipelineError("missing acceptance criterion test coverage")
                     payload["execution"] = self.tests.run(

@@ -6,7 +6,7 @@ from typing import Annotated, Any, Literal
 from pydantic import BaseModel, ConfigDict, Field
 
 from dev_orchestra.application.contracts import RunSummary
-from dev_orchestra.config import AgentOptions, AgentSettings, Tests
+from dev_orchestra.config import AgentOptions, AgentSettings, TestCommand, Tests
 from dev_orchestra.domain.models import State
 from dev_orchestra.infrastructure.agent_usage import AgentTelemetry, TokenUsage
 
@@ -58,6 +58,27 @@ class Policy(Input):
     blocking_severities: list[Literal["critical", "high", "medium", "low"]] = Field(
         default_factory=lambda: ["critical", "high"]
     )
+
+
+class ValidationDetectInput(Input):
+    repository_path: str = Field(min_length=1, max_length=4096)
+    base_branch: str = "main"
+
+
+class ValidationCandidate(BaseModel):
+    id: str
+    label: str
+    evidence: list[str] = Field(default_factory=list)
+    warnings: list[str] = Field(default_factory=list)
+    command: TestCommand
+    write_paths: list[str]
+    output_paths: list[str]
+
+
+class ValidationDetection(BaseModel):
+    base_sha: str
+    candidates: list[ValidationCandidate]
+    warnings: list[str]
 
 
 class ProjectCreate(Input):
@@ -220,6 +241,7 @@ class PreviewView(BaseModel):
     expires: int
     preview_token: str
     spec_sha256: str
+    validation_warnings: list[str] = Field(default_factory=list)
 
 
 class StepView(BaseModel):
@@ -329,6 +351,8 @@ class FailureView(BaseModel):
 
 class CommandView(BaseModel):
     command_id: str | None = None
+    kind: Literal["test", "check"] | None = None
+    working_directory: str | None = None
     argv: list[str] | None = None
     status: str = "unknown"
     exit_code: int | None = None
