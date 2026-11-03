@@ -40,6 +40,7 @@ def run():
         socket.socket() as listener,
         parent_channel() as owner_fd,
     ):
+        listener.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         listener.bind(("127.0.0.1", value["port"]))
         listener.listen(128)
         config_path = db.with_suffix(".web-config.json")

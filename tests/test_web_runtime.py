@@ -111,6 +111,26 @@ def test_port_conflict_does_not_stop_existing_listener(service, assets):
         assert not runtime.status()["alive"]
 
 
+def test_immediate_restart_with_client_keepalive_connection(service, assets):
+    svc, _, _ = service
+    upgrade(svc.store.path)
+    runtime = WebRuntime(svc)
+    with socket.socket() as sock:
+        sock.bind(("127.0.0.1", 0))
+        port = sock.getsockname()[1]
+    try:
+        with httpx.Client(base_url=f"http://127.0.0.1:{port}") as client:
+            for _ in range(2):
+                runtime.start([], port, True, assets)
+                assert client.get("/").status_code == 200
+                # Keep the client open so the server actively closes the connection.
+                runtime.stop()
+                until(lambda: not runtime.status()["alive"])
+    finally:
+        runtime.stop()
+        until(lambda: not runtime.status()["alive"])
+
+
 def test_stale_process_marker_does_not_authorize_signal(service):
     svc, _, _ = service
     runtime = WebRuntime(svc)
