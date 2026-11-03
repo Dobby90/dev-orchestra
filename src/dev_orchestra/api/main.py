@@ -52,6 +52,9 @@ from dev_orchestra.application.web_contracts import (
     StepPage,
     SubmissionView,
     TestResultView,
+    ValidationCandidate,
+    ValidationDetectInput,
+    ValidationDetection,
 )
 from dev_orchestra.config import load_config
 from dev_orchestra.domain.models import PipelineError
@@ -269,6 +272,16 @@ def create_app(config=None, allowed_roots=None, port=8000, static_directory=None
                 "DELETE FROM web_sessions WHERE session_hash=?", (digest(request.cookies[COOKIE]),)
             )
         response.delete_cookie(COOKIE, path="/api")
+
+    @app.get("/api/validation-profiles", response_model=list[ValidationCandidate])
+    def validation_profiles():
+        from dev_orchestra.application.validation import profiles
+
+        return profiles()
+
+    @app.post("/api/project-validation/detect", response_model=ValidationDetection)
+    def detect_validation(body: ValidationDetectInput):
+        return backend.projects.detect_validation(Path(body.repository_path), body.base_branch)
 
     @app.post("/api/projects", status_code=201, response_model=ProjectView)
     def project_create(body: ProjectCreate):

@@ -368,6 +368,21 @@ function RunDetailBody({ rid }: { rid: string }) {
           </p>
         )}
       {r.error && <ErrorNotice error={new Error(r.error)} />}{" "}
+      {registered && (r.state === "needs_input" || r.state === "failed") && (
+        <section className="notice validation-help">
+          <strong>검증 정책 변경이 필요한 경우</strong>
+          <p>
+            답변으로 이 작업의 검증 명령은 변경되지 않습니다. 프로젝트 검증
+            설정에서 자동 감지하거나 명령을 수정한 뒤 새 작업을 만드세요. 기존
+            작업의 변경 내용과 이력은 보존됩니다.
+          </p>
+          <Link to={`/projects/${r.project_id}`}>프로젝트 검증 설정 열기</Link>
+          {" · "}
+          <Link to={`/runs/new?project=${r.project_id}`}>
+            수정한 정책으로 새 작업 만들기
+          </Link>
+        </section>
+      )}
       {!!r.questions.length && (
         <section className="notice">
           <CircleAlert size={18} />

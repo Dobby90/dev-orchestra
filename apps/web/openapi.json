@@ -84,6 +84,66 @@
         }
       }
     },
+    "/api/validation-profiles": {
+      "get": {
+        "summary": "Validation Profiles",
+        "operationId": "validation_profiles_api_validation_profiles_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/ValidationCandidate"
+                  },
+                  "type": "array",
+                  "title": "Response Validation Profiles Api Validation Profiles Get"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/project-validation/detect": {
+      "post": {
+        "summary": "Detect Validation",
+        "operationId": "detect_validation_api_project_validation_detect_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ValidationDetectInput"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ValidationDetection"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/projects": {
       "post": {
         "summary": "Project Create",
@@ -1985,6 +2045,32 @@
             ],
             "title": "Command Id"
           },
+          "kind": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "test",
+                  "check"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Kind"
+          },
+          "working_directory": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Working Directory"
+          },
           "argv": {
             "anyOf": [
               {
@@ -2624,6 +2710,13 @@
           "spec_sha256": {
             "type": "string",
             "title": "Spec Sha256"
+          },
+          "validation_warnings": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Validation Warnings"
           }
         },
         "type": "object",
@@ -3992,6 +4085,15 @@
       },
       "TestCommand": {
         "properties": {
+          "kind": {
+            "type": "string",
+            "enum": [
+              "test",
+              "check"
+            ],
+            "title": "Kind",
+            "default": "test"
+          },
           "argv": {
             "items": {
               "type": "string"
@@ -4006,16 +4108,50 @@
             "title": "Timeout Seconds",
             "default": 600
           },
-          "junit_report": {
+          "working_directory": {
             "type": "string",
+            "title": "Working Directory",
+            "default": "."
+          },
+          "junit_report": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
             "title": "Junit Report"
+          },
+          "env": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "propertyNames": {
+              "enum": [
+                "PLAYWRIGHT_JUNIT_OUTPUT_FILE",
+                "PLAYWRIGHT_BROWSERS_PATH",
+                "JAVA_HOME"
+              ]
+            },
+            "type": "object",
+            "title": "Env"
+          },
+          "network": {
+            "type": "string",
+            "enum": [
+              "none",
+              "loopback"
+            ],
+            "title": "Network",
+            "default": "none"
           }
         },
         "additionalProperties": false,
         "type": "object",
         "required": [
-          "argv",
-          "junit_report"
+          "argv"
         ],
         "title": "TestCommand"
       },
@@ -4216,6 +4352,108 @@
           "text"
         ],
         "title": "TextSpec"
+      },
+      "ValidationCandidate": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "title": "Id"
+          },
+          "label": {
+            "type": "string",
+            "title": "Label"
+          },
+          "evidence": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Evidence"
+          },
+          "warnings": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Warnings"
+          },
+          "command": {
+            "$ref": "#/components/schemas/TestCommand"
+          },
+          "write_paths": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Write Paths"
+          },
+          "output_paths": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Output Paths"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "label",
+          "command",
+          "write_paths",
+          "output_paths"
+        ],
+        "title": "ValidationCandidate"
+      },
+      "ValidationDetectInput": {
+        "properties": {
+          "repository_path": {
+            "type": "string",
+            "maxLength": 4096,
+            "minLength": 1,
+            "title": "Repository Path"
+          },
+          "base_branch": {
+            "type": "string",
+            "title": "Base Branch",
+            "default": "main"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "repository_path"
+        ],
+        "title": "ValidationDetectInput"
+      },
+      "ValidationDetection": {
+        "properties": {
+          "base_sha": {
+            "type": "string",
+            "title": "Base Sha"
+          },
+          "candidates": {
+            "items": {
+              "$ref": "#/components/schemas/ValidationCandidate"
+            },
+            "type": "array",
+            "title": "Candidates"
+          },
+          "warnings": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Warnings"
+          }
+        },
+        "type": "object",
+        "required": [
+          "base_sha",
+          "candidates",
+          "warnings"
+        ],
+        "title": "ValidationDetection"
       },
       "ValidationError": {
         "properties": {

@@ -11,6 +11,13 @@ export const api = {
   logout: () => request<void>("/session", { method: "DELETE" }),
   health: () => request<{ status: string }>("/health"),
   dashboard: () => request<Schema["DashboardView"]>("/dashboard"),
+  validationProfiles: () =>
+    request<Schema["ValidationCandidate"][]>("/validation-profiles"),
+  detectValidation: (body: Schema["ValidationDetectInput"]) =>
+    request<Schema["ValidationDetection"]>("/project-validation/detect", {
+      method: "POST",
+      body: JSON.stringify(body),
+    }),
   projects: (cursor = "") =>
     request<Schema["ProjectPage"]>(`/projects?cursor=${id(cursor)}`),
   project: (pid: string) => request<Project>(`/projects/${id(pid)}`),

@@ -1476,3 +1476,39 @@ dd {
   overflow-x: auto;
   font-size: 12px;
 }
+
+.validation-editor .command-result {
+  margin: 0;
+}
+.validation-editor summary {
+  cursor: pointer;
+  overflow-wrap: anywhere;
+}
+.validation-command-fields {
+  display: grid;
+  gap: 14px;
+  margin-top: 14px;
+}
+.form-grid .check-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.check-row input[type="checkbox"] {
+  width: 16px;
+  height: 16px;
+  flex-shrink: 0;
+}
+.validation-candidates,
+.validation-help {
+  display: block;
+}
+.validation-candidates pre,
+.policy-summary pre {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.validation-candidates > div {
+  padding: 12px 0;
+  border-bottom: 1px solid var(--border);
+}

@@ -106,14 +106,18 @@ export function TestsPanel({
       {data.commands.map((c, index) => (
         <section className="command-result" key={c.command_id ?? index}>
           <header>
-            <h3>{c.command_id ?? "과거 명령"}</h3>
+            <h3>
+              {c.command_id ?? "과거 명령"}
+              {c.kind === "check" ? " · 빌드·정적 검사" : ""}
+            </h3>
             <span className={c.passed === true ? "text-green" : "text-amber"}>
               {statuses[c.status] ?? c.status}
             </span>
           </header>
           <pre>{c.argv?.join(" ") ?? "명령 인자 기록 없음"}</pre>
           <p className="help">
-            종료 코드 {c.exit_code ?? "미상"} ·{" "}
+            작업 경로 {c.working_directory ?? "."} · 종료 코드{" "}
+            {c.exit_code ?? "미상"} ·{" "}
             {c.duration_seconds == null
               ? "시간 미상"
               : `${c.duration_seconds.toFixed(2)}초`}
