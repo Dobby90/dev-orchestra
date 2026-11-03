@@ -19,6 +19,7 @@ from dev_orchestra.application.agent_usage import usage_view
 from dev_orchestra.application.backend import BackendService
 from dev_orchestra.application.commands import Commands
 from dev_orchestra.application.errors import ApplicationError
+from dev_orchestra.application.notifications import NotificationService
 from dev_orchestra.application.results import Results
 from dev_orchestra.application.service import RunService
 from dev_orchestra.application.web_contracts import (
@@ -37,6 +38,8 @@ from dev_orchestra.application.web_contracts import (
     DispositionInput,
     EventPage,
     LogPage,
+    NotificationPage,
+    NotificationRead,
     OperationView,
     PreviewView,
     ProjectCreate,
@@ -89,6 +92,7 @@ def create_app(config=None, allowed_roots=None, port=8000, static_directory=None
     backend = BackendService(runs, roots, key)
     security = Security(runs.store, key)
     agent_settings = AgentSettingsService(config)
+    notifications = NotificationService(runs.store)
     app = FastAPI(
         title="DevOrchestra",
         version="0.1.0",
@@ -385,6 +389,17 @@ def create_app(config=None, allowed_roots=None, port=8000, static_directory=None
         project_id: str | None = None,
     ):
         return runs.queries.page(limit, cursor, state, project_id)
+
+    @app.get("/api/notifications", response_model=NotificationPage)
+    def notification_list(
+        before: int | None = Query(None, ge=1), limit: int = Query(50, ge=1, le=100)
+    ):
+        return notifications.page(before, limit)
+
+    @app.post("/api/notifications/read", status_code=204)
+    def notification_read(body: NotificationRead):
+        notifications.mark_read(body.ids, body.through)
+        return Response(status_code=204)
 
     @app.get("/api/dashboard", response_model=DashboardView)
     def dashboard():

@@ -236,7 +236,7 @@ function RunDetailBody({ rid }: { rid: string }) {
         작업 목록으로
       </Link>
       <Heading eyebrow="WORKSPACE / RUN DETAIL" title={rid}>
-        <Status state={r.state} />
+        <Status state={r.state} large />
       </Heading>
       <div className="run-overview panel">
         <div>

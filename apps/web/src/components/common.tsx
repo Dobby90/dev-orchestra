@@ -46,7 +46,13 @@ export function active(state: State) {
     "reporting",
   ].includes(state);
 }
-export function Status({ state }: { state: State }) {
+export function Status({
+  state,
+  large = false,
+}: {
+  state: State;
+  large?: boolean;
+}) {
   const { label, tone } = states[state];
   const Icon =
     state === "completed"
@@ -61,8 +67,8 @@ export function Status({ state }: { state: State }) {
               ? LoaderCircle
               : Circle;
   return (
-    <span className={`status status-${tone}`}>
-      <Icon size={13} className={tone === "blue" ? "spin" : ""} />
+    <span className={`status status-${tone}${large ? " status-large" : ""}`}>
+      <Icon size={large ? 18 : 13} className={tone === "blue" ? "spin" : ""} />
       {label}
     </span>
   );

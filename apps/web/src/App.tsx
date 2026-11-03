@@ -25,6 +25,7 @@ import {
   Sun,
   X,
 } from "lucide-react";
+import { NotificationCenter } from "./components/NotificationCenter";
 import { SessionProvider } from "./hooks/session";
 import { api } from "./api/resources";
 import { setCsrf } from "./api/client";
@@ -215,6 +216,7 @@ function Shell() {
             </strong>
           </div>
           <div className="topbar-actions">
+            <NotificationCenter />
             <span className="local-pill">
               <span className="local-dot" />
               로컬 전용

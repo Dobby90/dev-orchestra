@@ -445,3 +445,25 @@ class DiffView(ChangedFile):
     base_sha: str
     candidate_sha: str
     text: str
+
+
+class NotificationView(BaseModel):
+    id: int
+    run_id: str
+    occurred_at: str
+    state: Literal["needs_input", "paused", "waiting_approval", "failed"]
+    read: bool
+
+
+class NotificationPage(BaseModel):
+    items: list[NotificationView]
+    unread_count: int
+    cursor: int
+    next_cursor: int | None
+
+
+class NotificationRead(Input):
+    ids: list[Annotated[int, Field(ge=1, strict=True)]] = Field(
+        default_factory=list, max_length=100
+    )
+    through: int | None = Field(default=None, ge=0, strict=True)

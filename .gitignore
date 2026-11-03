@@ -34,3 +34,6 @@ node_modules/
 
 *.web.log
 *.web.lock
+
+*.notifications.json
+*.notifications.lock

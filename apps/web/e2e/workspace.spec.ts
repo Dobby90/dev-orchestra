@@ -28,6 +28,12 @@ function bootstrap() {
 test("실제 로컬 API: 로그인 → 프로젝트 → 실행 → 재연결 → 승인", async ({
   page,
 }) => {
+  const alerts: string[] = [];
+  page.on("dialog", async (dialog) => {
+    expect(dialog.type()).toBe("alert");
+    alerts.push(dialog.message());
+    await dialog.accept();
+  });
   const errors: string[] = [];
   page.on("pageerror", (e) => errors.push(e.message));
   const f = fixture();
@@ -186,6 +192,43 @@ test("실제 로컬 API: 로그인 → 프로젝트 → 실행 → 재연결 →
       ).trim(),
     )
     .toBe("0");
+  await expect
+    .poll(() => alerts.some((message) => message.includes("일시중지")))
+    .toBe(true);
+  await expect(page.locator(".page-heading .status")).toHaveClass(
+    /status-large/,
+  );
+  await expect(page.locator(".page-heading .status")).toHaveCSS(
+    "font-size",
+    "14px",
+  );
+  await expect(page.locator(".page-heading .status svg")).toHaveAttribute(
+    "width",
+    "18",
+  );
+  await page.getByRole("button", { name: /알림, 읽지 않음/ }).click();
+  await expect(page.getByRole("dialog")).toContainText(
+    "작업이 일시중지되었습니다",
+  );
+  expect((await new AxeBuilder({ page }).analyze()).violations).toEqual([]);
+  await page.screenshot({
+    path: "test-results/notifications.png",
+    fullPage: true,
+  });
+  await page.getByRole("button", { name: "모두 읽음", exact: true }).click();
+  await expect(page.getByRole("dialog")).toContainText("읽지 않은 알림 0개");
+  await page.getByRole("button", { name: "대화상자 닫기" }).click();
+  await page.reload();
+  await expect(
+    page.getByRole("button", { name: "알림, 읽지 않음 0 개" }),
+  ).toBeVisible();
+  expect(alerts.filter((message) => message.includes("일시중지"))).toHaveLength(
+    1,
+  );
+  await page.getByRole("link", { name: "프로젝트", exact: true }).click();
+  await page.getByRole("button", { name: "알림, 읽지 않음 0 개" }).click();
+  await page.getByRole("dialog").getByRole("link").first().click();
+  await expect(page).toHaveURL(runUrl);
   writeFileSync(f.release, "");
   await page.getByRole("button", { name: "재개", exact: true }).click();
   await page.getByRole("button", { name: "작업 재개 확인" }).click();

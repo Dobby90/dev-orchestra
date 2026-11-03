@@ -28,6 +28,15 @@ export const api = {
     }),
   agentUsage: (rid: string) =>
     request<Schema["AgentUsageView"]>(`/runs/${id(rid)}/agent-usage`),
+  notifications: (before?: number) =>
+    request<Schema["NotificationPage"]>(
+      `/notifications${before ? `?before=${before}` : ""}`,
+    ),
+  readNotifications: (body: Schema["NotificationRead"]) =>
+    request<void>("/notifications/read", {
+      method: "POST",
+      body: JSON.stringify(body),
+    }),
   dashboard: () => request<Schema["DashboardView"]>("/dashboard"),
   validationProfiles: () =>
     request<Schema["ValidationCandidate"][]>("/validation-profiles"),

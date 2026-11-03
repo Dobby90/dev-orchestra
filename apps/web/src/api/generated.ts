@@ -215,6 +215,40 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/notifications": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Notification List */
+        get: operations["notification_list_api_notifications_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/notifications/read": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Notification Read */
+        post: operations["notification_read_api_notifications_read_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/dashboard": {
         parameters: {
             query?: never;
@@ -986,6 +1020,40 @@ export interface components {
              * @constant
              */
             schema_version: 2;
+        };
+        /** NotificationPage */
+        NotificationPage: {
+            /** Items */
+            items: components["schemas"]["NotificationView"][];
+            /** Unread Count */
+            unread_count: number;
+            /** Cursor */
+            cursor: number;
+            /** Next Cursor */
+            next_cursor: number | null;
+        };
+        /** NotificationRead */
+        NotificationRead: {
+            /** Ids */
+            ids?: number[];
+            /** Through */
+            through?: number | null;
+        };
+        /** NotificationView */
+        NotificationView: {
+            /** Id */
+            id: number;
+            /** Run Id */
+            run_id: string;
+            /** Occurred At */
+            occurred_at: string;
+            /**
+             * State
+             * @enum {string}
+             */
+            state: "needs_input" | "paused" | "waiting_approval" | "failed";
+            /** Read */
+            read: boolean;
         };
         /** OperationView */
         OperationView: {
@@ -2213,6 +2281,69 @@ export interface operations {
                 content: {
                     "application/json": components["schemas"]["SubmissionView"];
                 };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    notification_list_api_notifications_get: {
+        parameters: {
+            query?: {
+                before?: number | null;
+                limit?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["NotificationPage"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    notification_read_api_notifications_read_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["NotificationRead"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
             };
             /** @description Validation Error */
             422: {

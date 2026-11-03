@@ -531,3 +531,58 @@ def test_ui_legacy_missing_metadata_is_unknown_not_fabricated(web):
     assert value["max_fix_attempts"] is None
     assert value["project_id"] is None
     assert svc.store.events("legacy-minimal") == []
+
+
+def test_notifications_transitions_pagination_and_persistent_read(web):
+    from dev_orchestra.application.notifications import NotificationService
+
+    c, svc, rid, _, _ = web
+    svc.store.update(rid, "planning")
+    svc.store.update(rid, "needs_input", questions=["secret question"])
+    svc.store.update(rid, "needs_input", error="secret error")
+    first = c.get("/api/notifications").json()
+    assert first["unread_count"] == 1
+    assert len(first["items"]) == 1
+    item = first["items"][0]
+    assert item["state"] == "needs_input"
+    assert item["run_id"] == rid
+    assert "secret" not in str(first)
+    assert not item["read"]
+    assert not svc.store.path.with_suffix(".notifications.json").exists()
+    version = svc.store.get(rid)["version"]
+    assert c.post("/api/notifications/read", json={"ids": [item["id"]]}).status_code == 204
+    assert NotificationService(svc.store).page()["unread_count"] == 0
+    assert c.get("/api/notifications").json()["items"][0]["read"]
+    svc.store.update(rid, "queued")
+    svc.store.update(rid, "planning")
+    svc.store.update(rid, "needs_input")
+    second = c.get("/api/notifications?limit=1").json()
+    assert second["unread_count"] == 1
+    assert second["items"][0]["id"] > item["id"]
+    older = c.get(f"/api/notifications?before={second['next_cursor']}").json()
+    assert older["items"] == [item | {"read": True}]
+    # Reading an earlier snapshot must preserve later arrivals as unread.
+    assert c.post("/api/notifications/read", json={"through": first["cursor"]}).status_code == 204
+    assert c.get("/api/notifications").json()["unread_count"] == 1
+    assert c.post("/api/notifications/read", json={"through": second["cursor"]}).status_code == 204
+    assert NotificationService(svc.store).page()["unread_count"] == 0
+    assert svc.store.get(rid)["version"] == version + 3
+    assert c.post("/api/notifications/read", json={"ids": [-1]}).status_code == 422
+    assert c.get("/api/notifications?limit=101").status_code == 422
+    token = c.headers.pop("X-CSRF-Token")
+    assert c.post("/api/notifications/read", json={"through": second["cursor"]}).status_code == 403
+    c.headers["X-CSRF-Token"] = token
+
+
+def test_notifications_include_all_runs_not_only_first_page(web):
+    c, svc, rid, _, _ = web
+    for number in range(55):
+        other = f"notification-{number:03}"
+        svc.store.create({"id": other})
+        svc.store.update(other, "paused")
+    page = c.get("/api/notifications").json()
+    assert page["unread_count"] == 55
+    assert len(page["items"]) == 50
+    assert len(c.get(f"/api/notifications?before={page['next_cursor']}").json()["items"]) == 5
+    svc.store.update(rid, "failed")
+    assert c.get("/api/notifications").json()["items"][0]["run_id"] == rid

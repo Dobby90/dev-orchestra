@@ -1536,3 +1536,68 @@ dd {
   padding: 12px 0;
   border-bottom: 1px solid var(--border);
 }
+
+.status-large {
+  font-size: 14px;
+  font-weight: 600;
+  gap: 8px;
+  padding: 8px 12px;
+}
+.notification-bell {
+  position: relative;
+}
+.notification-count {
+  position: absolute;
+  top: -5px;
+  right: -8px;
+  min-width: 17px;
+  padding: 2px 4px;
+  border-radius: 10px;
+  background: var(--red);
+  color: white;
+  font-size: 10px;
+  line-height: 1.2;
+}
+.notification-toolbar,
+.notification-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+}
+.notification-toolbar {
+  margin: 18px 0;
+}
+.notification-list {
+  list-style: none;
+  padding: 0;
+  max-height: 50vh;
+  overflow-y: auto;
+}
+.notification-list li {
+  border-bottom: 1px solid var(--border);
+}
+.notification-list a {
+  display: block;
+  padding: 14px 12px;
+  border-radius: 5px;
+}
+.notification-list a:hover {
+  background: var(--panel-hover);
+}
+.notification-unread {
+  background: color-mix(in srgb, var(--blue) 8%, transparent);
+  border-left: 3px solid var(--blue);
+}
+.notification-row strong {
+  overflow-wrap: anywhere;
+  min-width: 0;
+}
+.notification-list p {
+  margin: 8px 0;
+  font-size: 13px;
+}
+.notification-list time {
+  font-size: 11px;
+  color: var(--muted);
+}
