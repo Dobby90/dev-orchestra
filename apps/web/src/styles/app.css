@@ -784,6 +784,14 @@ input:read-only {
   font-size: 20px;
   padding-right: 20px;
 }
+.test-change-patch {
+  max-height: 400px;
+  overflow: auto;
+  padding: 12px;
+  border: 1px solid var(--border);
+  font-size: 12px;
+  white-space: pre;
+}
 .modal > p {
   font-size: 12px;
   color: var(--muted);

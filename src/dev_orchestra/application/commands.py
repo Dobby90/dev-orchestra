@@ -9,6 +9,7 @@ from dev_orchestra.application.errors import ApplicationError
 from dev_orchestra.application.queue import QueueService
 from dev_orchestra.application.results import Results
 from dev_orchestra.application.reviews import Reviews
+from dev_orchestra.application.test_changes import TestChangeService
 from dev_orchestra.config import Config
 from dev_orchestra.domain.models import PipelineError
 from dev_orchestra.infrastructure.locking import lock
@@ -62,6 +63,8 @@ class Commands:
             "cleanup",
             "issue-disposition",
             "reconcile",
+            "approve-test-changes",
+            "reject-test-changes",
         }:
             raise PipelineError("unknown command")
         if kind == "cleanup" and body.get("confirm") is not True:
@@ -89,7 +92,8 @@ class Commands:
             if kind == "cleanup" and old["status"] == "accepted":
                 self.finish_cleanup(old["id"], run_id, old["accepted_version"])
             return self.get(old["id"])
-        if kind in {"resume", "request-changes"}:
+        test_decision = kind in {"approve-test-changes", "reject-test-changes"}
+        if kind in {"resume", "request-changes"} or test_decision:
             QueueService(self.store).recover()
         run = self.store.get(run_id)
         if run.get("deletion_pending"):
@@ -134,6 +138,17 @@ class Commands:
             ensure_stopped(directory)
             changes = {}
             approval = None
+            if test_decision:
+                test_changes = TestChangeService(self.store)
+                proposal = test_changes.verify(
+                    run,
+                    body["proposal_hash"],
+                    body["input_sha"],
+                    approve=kind == "approve-test-changes",
+                )
+                changes = test_changes.decision_changes(
+                    run, proposal, kind == "approve-test-changes", sanitize(body.get("reason", ""))
+                )
             if kind in {"approve", "request-changes"}:
                 approval = self.service.approvals.verify_locked(
                     run_id, expected_version, body.get("expected_sha")
@@ -206,6 +221,16 @@ class Commands:
                 if kind == "resume":
                     result["job_id"] = self.service.commit_resume(
                         db, run, changes, expected_version
+                    )
+                elif test_decision:
+                    result["job_id"] = self.service.commit_resume(
+                        db, run, changes, expected_version
+                    )
+                    self.store._event(
+                        db,
+                        run_id,
+                        "test_changes.decided",
+                        {"proposal_id": proposal["id"], "approved": kind == "approve-test-changes"},
                     )
                 elif kind == "approve":
                     self.store.approve(run_id, *approval, expected_version=expected_version)

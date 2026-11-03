@@ -6,7 +6,8 @@ import os
 from contextlib import nullcontext
 from pathlib import Path
 
-from dev_orchestra.agents.policy import apply_patch
+from dev_orchestra.agents.policy import TestChangesRequired, apply_patch
+from dev_orchestra.application.test_changes import TestChangeService
 from dev_orchestra.config import Config
 from dev_orchestra.domain.models import AgentRequest, PipelineError, StopRequested
 from dev_orchestra.infrastructure.evidence import checkpoints, verified_candidate
@@ -208,6 +209,7 @@ class Runner:
                     "base_sha": run["base_sha"],
                     "test_paths": config.tests.write_paths,
                     "test_commands": {k: v.model_dump() for k, v in config.tests.commands.items()},
+                    "approved_test_changes": run.get("test_change_approvals", []),
                     "validation_policy": {
                         "immutable_for_run": True,
                         "change_target": "project validation settings (GUI) or tests in the CLI YAML config",
@@ -234,9 +236,15 @@ class Runner:
                     input_sha=sha,
                     context=context,
                 )
-                result = self.agent.run(
-                    request, step_dir, lambda: self.store.get(run_id)["control"]
-                )
+                approval = None
+                if run.get("test_change_proposal"):
+                    result, approval = TestChangeService(self.store).approved_result(run)
+                    if sha != approval["input_sha"]:
+                        raise PipelineError("approved test change input SHA changed")
+                else:
+                    result = self.agent.run(
+                        request, step_dir, lambda: self.store.get(run_id)["control"]
+                    )
                 if git.sha() != sha or git.dirty():
                     raise PipelineError("read-only agent changed the worktree")
                 if result.questions:
@@ -266,7 +274,17 @@ class Runner:
                             raise PipelineError("review finding has invalid source location")
                         if not issue.evidence.strip():
                             raise PipelineError("review finding requires evidence")
-                patched_paths = apply_patch(worktree, result.patch, role, config.tests.write_paths)
+                try:
+                    patched_paths = apply_patch(
+                        worktree,
+                        result.patch,
+                        role,
+                        config.tests.write_paths,
+                        approved_patch_hash=approval["patch_hash"] if approval else None,
+                    )
+                except TestChangesRequired as error:
+                    TestChangeService(self.store).propose(run, result, error.paths, step_dir)
+                    return
                 out_sha = git.commit(f"자동 개발: {run_id} {role} 회차 {iteration} 단계 {step_id}")
                 if patched_paths:
                     tracked = set(
@@ -285,6 +303,8 @@ class Runner:
                     )
                 self.store.update(run_id, current_sha=out_sha)
                 payload = result.model_dump() | {"sha": out_sha, "revision": run.get("revision", 0)}
+                if approval:
+                    payload["test_change_approval"] = approval
                 if role == "tester":
                     ids = set(config.tests.commands)
                     if set(result.command_ids) != ids:
@@ -316,10 +336,14 @@ class Runner:
                     "unavailable",
                     "timeout",
                 }
-                atomic_result = results.enabled() and (
-                    role == "tester" or (role == "reviewer" and run.get("review_contract") == 2)
+                atomic_result = (
+                    bool(approval)
+                    or results.enabled()
+                    and (
+                        role == "tester" or (role == "reviewer" and run.get("review_contract") == 2)
+                    )
                 )
-                with self.store.transaction() if atomic_result else nullcontext():
+                with self.store.transaction() if atomic_result else nullcontext() as db:
                     if role == "reviewer" and run.get("review_contract") == 2:
                         from dev_orchestra.application.reviews import Reviews
                         from dev_orchestra.domain.models import ReviewResultV2
@@ -340,6 +364,14 @@ class Runner:
                         self.store.finish_step(step_id, out_sha, evidence, status="failed")
                     else:
                         self.store.finish_step(step_id, out_sha, evidence)
+                    if approval:
+                        self.store.update(run_id, test_change_proposal=None)
+                        self.store._event(
+                            db,
+                            run_id,
+                            "test_changes.applied",
+                            {"proposal_id": approval["proposal_id"], "sha": out_sha},
+                        )
                 write(directory / FILES[role], payload)
                 if failed_test:
                     self.store.update(

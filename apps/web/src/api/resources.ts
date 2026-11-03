@@ -69,6 +69,8 @@ export const api = {
   runs: (params: URLSearchParams) =>
     request<Schema["RunPage"]>(`/runs?${params}`),
   run: (rid: string) => request<Schema["RunDetail"]>(`/runs/${id(rid)}`),
+  testChanges: (rid: string) =>
+    request<Schema["TestChangeView"]>(`/runs/${id(rid)}/test-changes`),
   steps: (rid: string) => request<Schema["StepPage"]>(`/runs/${id(rid)}/steps`),
   report: (rid: string) =>
     request<Schema["ReportView"]>(`/runs/${id(rid)}/report`),
@@ -146,6 +148,8 @@ export const api = {
       | "cancel"
       | "resume"
       | "approve"
+      | "approve-test-changes"
+      | "reject-test-changes"
       | "reconcile"
       | "request-changes"
       | "defer"

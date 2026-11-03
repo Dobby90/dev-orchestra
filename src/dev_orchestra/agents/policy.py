@@ -4,7 +4,7 @@ import re
 from pathlib import Path
 
 from dev_orchestra.domain.models import PipelineError
-from dev_orchestra.infrastructure.files import contained
+from dev_orchestra.infrastructure.files import contained, digest
 from dev_orchestra.infrastructure.git import Git
 
 
@@ -12,9 +12,22 @@ def in_paths(path, roots):
     return any(path == root or path.startswith(root.rstrip("/") + "/") for root in roots)
 
 
-def apply_patch(worktree: Path, patch: str, role: str, test_paths: list[str]):
+class TestChangesRequired(PipelineError):
+    def __init__(self, paths):
+        self.paths = paths
+        super().__init__(
+            "existing tests are protected from developer/fixer changes and immutable for tester; "
+            "explicit patch approval required: " + ", ".join(paths)
+        )
+
+
+def validate_patch(
+    worktree: Path, patch: str, role: str, test_paths: list[str], *, approved_patch_hash=None
+):
     if not patch:
-        return []
+        return "", []
+    if approved_patch_hash is not None and digest(patch.encode()) != approved_patch_hash:
+        raise PipelineError("approved patch checksum mismatch")
     # Model diffs occasionally indent section headers or miscount hunks. Git recounts
     # hunk sizes; scope and Git-interpreted filenames are still validated below.
     patch = re.sub(r"(?m)^ +(?=diff --git )", "", patch).rstrip("\n") + "\n"
@@ -35,7 +48,7 @@ def apply_patch(worktree: Path, patch: str, role: str, test_paths: list[str]):
         for line in patch.splitlines()
     ):
         raise PipelineError("renames, symlinks, binary and mode changes are not allowed")
-    paths = []
+    paths, protected = [], []
     for line in patch.splitlines():
         if line.startswith(("--- ", "+++ ")):
             value = line[4:]
@@ -50,12 +63,10 @@ def apply_patch(worktree: Path, patch: str, role: str, test_paths: list[str]):
             if path.name.startswith(".env") or path.suffix in {".pem", ".key"}:
                 raise PipelineError("secret file patch denied")
             is_test = in_paths(name, test_paths)
-            if role == "tester" and is_test and path.exists():
-                raise PipelineError("existing tests are immutable; create new test files")
             if role == "tester" and not is_test:
                 raise PipelineError("test agent attempted production change")
-            if role in {"developer", "fixer"} and is_test and path.exists():
-                raise PipelineError("existing tests are protected from developer/fixer changes")
+            if is_test and path.exists() and name not in protected:
+                protected.append(name)
             if name not in paths:
                 paths.append(name)
     if not paths:
@@ -67,5 +78,17 @@ def apply_patch(worktree: Path, patch: str, role: str, test_paths: list[str]):
     actual = [line.split("\t", 2)[2] for line in stats.splitlines()]
     if set(actual) != set(paths):
         raise PipelineError("patch path interpretation mismatch")
-    git.call("apply", "--recount", "--whitespace=error", "-", input=patch)
+    if protected and approved_patch_hash is None:
+        raise TestChangesRequired(protected)
+    return patch, paths
+
+
+def apply_patch(
+    worktree: Path, patch: str, role: str, test_paths: list[str], *, approved_patch_hash=None
+):
+    patch, paths = validate_patch(
+        worktree, patch, role, test_paths, approved_patch_hash=approved_patch_hash
+    )
+    if patch:
+        Git(worktree).call("apply", "--recount", "--whitespace=error", "-", input=patch)
     return paths

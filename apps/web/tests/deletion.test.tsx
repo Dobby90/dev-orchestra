@@ -29,6 +29,7 @@ const run: RunDetail = {
   error: null,
   schema_version: 1,
   deletion_pending: false,
+  test_change_pending: false,
 };
 
 function mount(value = run) {

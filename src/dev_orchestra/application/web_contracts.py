@@ -127,6 +127,37 @@ class ApprovalInput(Input):
     expected_sha: str = Field(pattern=r"^(?:[0-9a-f]{40}|[0-9a-f]{64})$")
 
 
+class TestChangeDecisionInput(Input):
+    proposal_hash: str = Field(pattern=r"^[0-9a-f]{64}$")
+    input_sha: str = Field(pattern=r"^(?:[0-9a-f]{40}|[0-9a-f]{64})$")
+    reason: str = Field(default="", max_length=4000)
+
+
+class TestChangeExplanation(BaseModel):
+    file: str
+    criterion_ids: list[str]
+    reason: str
+
+
+class TestChangeProposalView(BaseModel):
+    id: str
+    proposal_hash: str
+    input_sha: str
+    patch_hash: str
+    role: str
+    revision: int
+    iteration: int
+    changes: list[TestChangeExplanation]
+    created_at: str
+    patch: str
+    approved: bool
+
+
+class TestChangeView(BaseModel):
+    proposal: TestChangeProposalView | None = None
+    error: str | None = None
+
+
 class Reason(Input):
     reason: str = Field(default="", max_length=4000)
 
@@ -210,6 +241,7 @@ class RunDetail(RunSummary):
     max_fix_attempts: int | None
     questions: list[str]
     error: str | None
+    test_change_pending: bool = False
 
 
 class DashboardView(BaseModel):

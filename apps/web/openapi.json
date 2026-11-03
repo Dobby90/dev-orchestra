@@ -1079,6 +1079,143 @@
         }
       }
     },
+    "/api/runs/{rid}/test-changes": {
+      "get": {
+        "summary": "Test Changes",
+        "operationId": "test_changes_api_runs__rid__test_changes_get",
+        "parameters": [
+          {
+            "name": "rid",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Rid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TestChangeView"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/runs/{rid}/approve-test-changes": {
+      "post": {
+        "summary": "Approve Test Changes",
+        "operationId": "approve_test_changes_api_runs__rid__approve_test_changes_post",
+        "parameters": [
+          {
+            "name": "rid",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Rid"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/TestChangeDecisionInput"
+              }
+            }
+          }
+        },
+        "responses": {
+          "202": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OperationView"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/runs/{rid}/reject-test-changes": {
+      "post": {
+        "summary": "Reject Test Changes",
+        "operationId": "reject_test_changes_api_runs__rid__reject_test_changes_post",
+        "parameters": [
+          {
+            "name": "rid",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Rid"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/TestChangeDecisionInput"
+              }
+            }
+          }
+        },
+        "responses": {
+          "202": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OperationView"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/runs/{rid}/reconcile": {
       "post": {
         "summary": "Reconcile",
@@ -4343,6 +4480,11 @@
               }
             ],
             "title": "Error"
+          },
+          "test_change_pending": {
+            "type": "boolean",
+            "title": "Test Change Pending",
+            "default": false
           }
         },
         "additionalProperties": false,
@@ -4861,6 +5003,152 @@
           "run_version"
         ],
         "title": "SubmissionView"
+      },
+      "TestChangeDecisionInput": {
+        "properties": {
+          "proposal_hash": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{64}$",
+            "title": "Proposal Hash"
+          },
+          "input_sha": {
+            "type": "string",
+            "pattern": "^(?:[0-9a-f]{40}|[0-9a-f]{64})$",
+            "title": "Input Sha"
+          },
+          "reason": {
+            "type": "string",
+            "maxLength": 4000,
+            "title": "Reason",
+            "default": ""
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "proposal_hash",
+          "input_sha"
+        ],
+        "title": "TestChangeDecisionInput"
+      },
+      "TestChangeExplanation": {
+        "properties": {
+          "file": {
+            "type": "string",
+            "title": "File"
+          },
+          "criterion_ids": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Criterion Ids"
+          },
+          "reason": {
+            "type": "string",
+            "title": "Reason"
+          }
+        },
+        "type": "object",
+        "required": [
+          "file",
+          "criterion_ids",
+          "reason"
+        ],
+        "title": "TestChangeExplanation"
+      },
+      "TestChangeProposalView": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "title": "Id"
+          },
+          "proposal_hash": {
+            "type": "string",
+            "title": "Proposal Hash"
+          },
+          "input_sha": {
+            "type": "string",
+            "title": "Input Sha"
+          },
+          "patch_hash": {
+            "type": "string",
+            "title": "Patch Hash"
+          },
+          "role": {
+            "type": "string",
+            "title": "Role"
+          },
+          "revision": {
+            "type": "integer",
+            "title": "Revision"
+          },
+          "iteration": {
+            "type": "integer",
+            "title": "Iteration"
+          },
+          "changes": {
+            "items": {
+              "$ref": "#/components/schemas/TestChangeExplanation"
+            },
+            "type": "array",
+            "title": "Changes"
+          },
+          "created_at": {
+            "type": "string",
+            "title": "Created At"
+          },
+          "patch": {
+            "type": "string",
+            "title": "Patch"
+          },
+          "approved": {
+            "type": "boolean",
+            "title": "Approved"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "proposal_hash",
+          "input_sha",
+          "patch_hash",
+          "role",
+          "revision",
+          "iteration",
+          "changes",
+          "created_at",
+          "patch",
+          "approved"
+        ],
+        "title": "TestChangeProposalView"
+      },
+      "TestChangeView": {
+        "properties": {
+          "proposal": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/TestChangeProposalView"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "error": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Error"
+          }
+        },
+        "type": "object",
+        "title": "TestChangeView"
       },
       "TestCommand": {
         "properties": {

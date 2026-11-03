@@ -92,6 +92,54 @@ def resume(
         raise typer.Exit(2)
 
 
+@app.command("test-changes")
+@guarded
+def test_changes(ctx: typer.Context, run_id: str):
+    """승인 대기 중인 기존 테스트 변경 사유와 전체 패치를 조회합니다."""
+    from dev_orchestra.application.test_changes import TestChangeService
+
+    typer.echo(
+        json.dumps(TestChangeService(ctx.obj.store).view(run_id), ensure_ascii=False, indent=2)
+    )
+
+
+@app.command("approve-test-changes")
+@guarded
+def approve_test_changes(
+    ctx: typer.Context,
+    run_id: str,
+    proposal_hash: str = typer.Option(...),
+    input_sha: str = typer.Option(...),
+    detach: bool = False,
+):
+    """검토한 정확한 패치를 승인하고 테스트·리뷰까지 실행을 재개합니다."""
+    ctx.obj.decide_test_changes(run_id, proposal_hash, input_sha, True)
+    ctx.obj.start(run_id, detached=detach)
+    result = ctx.obj.queries.get(run_id)
+    typer.echo(json.dumps(result, ensure_ascii=False, indent=2))
+    if not detach and result["state"] in {"failed", "needs_input"}:
+        raise typer.Exit(2)
+
+
+@app.command("reject-test-changes")
+@guarded
+def reject_test_changes(
+    ctx: typer.Context,
+    run_id: str,
+    proposal_hash: str = typer.Option(...),
+    input_sha: str = typer.Option(...),
+    reason: str = typer.Option(...),
+    detach: bool = False,
+):
+    """패치를 반려하고 사유를 전달해 해당 단계에서 새 패치를 생성합니다."""
+    ctx.obj.decide_test_changes(run_id, proposal_hash, input_sha, False, reason)
+    ctx.obj.start(run_id, detached=detach)
+    result = ctx.obj.queries.get(run_id)
+    typer.echo(json.dumps(result, ensure_ascii=False, indent=2))
+    if not detach and result["state"] in {"failed", "needs_input"}:
+        raise typer.Exit(2)
+
+
 @app.command()
 @guarded
 def cancel(ctx: typer.Context, run_id: str):

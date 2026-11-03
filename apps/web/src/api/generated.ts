@@ -352,6 +352,57 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/runs/{rid}/test-changes": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Test Changes */
+        get: operations["test_changes_api_runs__rid__test_changes_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/runs/{rid}/approve-test-changes": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Approve Test Changes */
+        post: operations["approve_test_changes_api_runs__rid__approve_test_changes_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/runs/{rid}/reject-test-changes": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Reject Test Changes */
+        post: operations["reject_test_changes_api_runs__rid__reject_test_changes_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/runs/{rid}/reconcile": {
         parameters: {
             query?: never;
@@ -1418,6 +1469,11 @@ export interface components {
             questions: string[];
             /** Error */
             error: string | null;
+            /**
+             * Test Change Pending
+             * @default false
+             */
+            test_change_pending: boolean;
         };
         /** RunPage */
         RunPage: {
@@ -1596,6 +1652,58 @@ export interface components {
             queued_reason: "dispatcher_offline" | "waiting_capacity";
             /** Run Version */
             run_version: number;
+        };
+        /** TestChangeDecisionInput */
+        TestChangeDecisionInput: {
+            /** Proposal Hash */
+            proposal_hash: string;
+            /** Input Sha */
+            input_sha: string;
+            /**
+             * Reason
+             * @default
+             */
+            reason: string;
+        };
+        /** TestChangeExplanation */
+        TestChangeExplanation: {
+            /** File */
+            file: string;
+            /** Criterion Ids */
+            criterion_ids: string[];
+            /** Reason */
+            reason: string;
+        };
+        /** TestChangeProposalView */
+        TestChangeProposalView: {
+            /** Id */
+            id: string;
+            /** Proposal Hash */
+            proposal_hash: string;
+            /** Input Sha */
+            input_sha: string;
+            /** Patch Hash */
+            patch_hash: string;
+            /** Role */
+            role: string;
+            /** Revision */
+            revision: number;
+            /** Iteration */
+            iteration: number;
+            /** Changes */
+            changes: components["schemas"]["TestChangeExplanation"][];
+            /** Created At */
+            created_at: string;
+            /** Patch */
+            patch: string;
+            /** Approved */
+            approved: boolean;
+        };
+        /** TestChangeView */
+        TestChangeView: {
+            proposal?: components["schemas"]["TestChangeProposalView"] | null;
+            /** Error */
+            error?: string | null;
         };
         /** TestCommand */
         TestCommand: {
@@ -2590,6 +2698,107 @@ export interface operations {
         responses: {
             /** @description Successful Response */
             200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["OperationView"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    test_changes_api_runs__rid__test_changes_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                rid: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TestChangeView"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    approve_test_changes_api_runs__rid__approve_test_changes_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                rid: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["TestChangeDecisionInput"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["OperationView"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    reject_test_changes_api_runs__rid__reject_test_changes_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                rid: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["TestChangeDecisionInput"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            202: {
                 headers: {
                     [name: string]: unknown;
                 };

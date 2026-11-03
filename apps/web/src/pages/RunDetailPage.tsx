@@ -37,6 +37,7 @@ import { LogViewer } from "../components/LogViewer";
 import { AgentUsagePanel } from "../components/AgentUsagePanel";
 import { WorkflowTimeline } from "../components/WorkflowTimeline";
 import { DeleteRunButton } from "../components/DeleteRunButton";
+import { TestChangePanel } from "../components/TestChangePanel";
 import { useRunEvents } from "../hooks/events";
 type Action =
   | "cancel"
@@ -291,7 +292,10 @@ function RunDetailBody({ rid }: { rid: string }) {
                 <Button
                   variant="secondary"
                   disabled={
-                    r.control === "cancel" || r.execution?.worktree_removed
+                    r.control === "cancel" ||
+                    r.execution?.worktree_removed ||
+                    (r.test_change_pending &&
+                      !r.allowed_actions?.includes("resume"))
                   }
                   onClick={() => open("resume")}
                 >
@@ -366,6 +370,9 @@ function RunDetailBody({ rid }: { rid: string }) {
         </p>
       )}
       {openError && <ErrorNotice error={openError} />}
+      {r.test_change_pending && !r.deletion_pending && (
+        <TestChangePanel run={r} />
+      )}
       {opening && (
         <p role="status" className="help">
           최신 실행 상태 확인 중…
@@ -660,12 +667,19 @@ function RunDetailBody({ rid }: { rid: string }) {
               </>
             ) : action?.kind === "resume" ? (
               <>
+                {action.run.test_change_pending && (
+                  <p className="help">
+                    승인된 패치를 그대로 재개합니다. 추가 지시는 테스트 변경
+                    제안을 반려한 뒤 전달하세요.
+                  </p>
+                )}
                 <label>
                   질문 답변·추가 지시 (선택)
                   <textarea
                     value={reason}
                     maxLength={65536}
                     onChange={(e) => setReason(e.target.value)}
+                    disabled={action.run.test_change_pending}
                   />
                 </label>
                 <label>

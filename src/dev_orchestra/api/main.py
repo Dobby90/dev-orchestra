@@ -22,6 +22,7 @@ from dev_orchestra.application.errors import ApplicationError
 from dev_orchestra.application.notifications import NotificationService
 from dev_orchestra.application.results import Results
 from dev_orchestra.application.service import RunService
+from dev_orchestra.application.test_changes import TestChangeService
 from dev_orchestra.application.web_contracts import (
     AgentSettingsInput,
     AgentSettingsView,
@@ -61,6 +62,8 @@ from dev_orchestra.application.web_contracts import (
     SpecView,
     StepPage,
     SubmissionView,
+    TestChangeDecisionInput,
+    TestChangeView,
     TestResultView,
     ValidationCandidate,
     ValidationDetectInput,
@@ -442,6 +445,18 @@ def create_app(config=None, allowed_roots=None, port=8000, static_directory=None
     @app.post("/api/runs/{rid}/approve", response_model=OperationView)
     def approve(rid: str, request: Request, body: ApprovalInput):
         return command(rid, request, "approve", body.model_dump())
+
+    @app.get("/api/runs/{rid}/test-changes", response_model=TestChangeView)
+    def test_changes(rid: str):
+        return TestChangeService(runs.store).view(rid)
+
+    @app.post("/api/runs/{rid}/approve-test-changes", status_code=202, response_model=OperationView)
+    def approve_test_changes(rid: str, request: Request, body: TestChangeDecisionInput):
+        return command(rid, request, "approve-test-changes", body.model_dump())
+
+    @app.post("/api/runs/{rid}/reject-test-changes", status_code=202, response_model=OperationView)
+    def reject_test_changes(rid: str, request: Request, body: TestChangeDecisionInput):
+        return command(rid, request, "reject-test-changes", body.model_dump())
 
     @app.post("/api/runs/{rid}/reconcile", response_model=OperationView)
     def reconcile(rid: str, request: Request):

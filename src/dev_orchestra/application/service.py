@@ -103,6 +103,12 @@ class RunService:
             raise PipelineError("cleanup is in progress")
         if run["state"] in {"completed", "cancelled", "waiting_approval"}:
             raise PipelineError("run is not resumable")
+        if run.get("test_change_proposal") and not run["test_change_proposal"].get("approval"):
+            raise PipelineError("review and approve or reject the pending test change proposal")
+        if run.get("test_change_proposal") and answers and answers.strip():
+            raise PipelineError(
+                "reject the approved test change proposal before adding instructions"
+            )
         ensure_stopped(Path(run["directory"]))
         checkpoints(self.store, run)
         changes = {}
@@ -164,6 +170,30 @@ class RunService:
                     changes,
                     run["version"] if expected_version is None else expected_version,
                 )
+
+    def decide_test_changes(self, run_id, proposal_hash, input_sha, approve, reason=""):
+        from dev_orchestra.application.queue import QueueService
+        from dev_orchestra.application.test_changes import TestChangeService
+
+        queue = QueueService(self.store)
+        if queue.enabled():
+            queue.recover()
+        run = self.store.get(run_id)
+        with lock(Path(run["directory"]) / "execution.lock"):
+            run = self.store.get(run_id)
+            ensure_stopped(Path(run["directory"]))
+            service = TestChangeService(self.store)
+            proposal = service.verify(run, proposal_hash, input_sha, approve=approve)
+            changes = service.decision_changes(run, proposal, approve, reason)
+            with self.store.transaction() as db:
+                self.commit_resume(db, run, changes, run["version"])
+                self.store._event(
+                    db,
+                    run_id,
+                    "test_changes.decided",
+                    {"proposal_id": proposal["id"], "approved": approve},
+                )
+        self.refresh_report(run_id)
 
     def request_control(self, run_id, action, expected_version=None, connection=None):
         if connection is None:

@@ -53,6 +53,7 @@ class RunQueryService:
                 max_fix_attempts=data.get("config", {}).get("workflow", {}).get("max_fix_attempts"),
                 questions=sanitize(data.get("questions", [])),
                 error=sanitize(data.get("error")),
+                test_change_pending=bool(data.get("test_change_proposal")),
             )
         from dev_orchestra.application.observations import observe
 

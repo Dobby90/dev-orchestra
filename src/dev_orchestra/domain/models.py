@@ -47,6 +47,12 @@ class Coverage(Model):
     command_ids: list[str]
 
 
+class TestChange(Model):
+    file: str
+    criterion_ids: list[str] = Field(min_length=1)
+    reason: str = Field(min_length=1)
+
+
 class AgentResult(Model):
     summary: str
     questions: list[str] = Field(default_factory=list)
@@ -56,6 +62,7 @@ class AgentResult(Model):
     command_ids: list[str] = Field(default_factory=list)
     coverage: list[Coverage] = Field(default_factory=list)
     issues: list[Issue] = Field(default_factory=list)
+    test_changes: list[TestChange] = Field(default_factory=list)
 
 
 class AgentRequest(Model):

@@ -11,7 +11,9 @@ def checkpoints(store, run):
     latest = {}
     try:
         for step in store.steps(run["id"]):
-            if step["status"] != "completed":
+            if step["status"] != "completed" and not (
+                step["status"] == "failed" and step["data"].get("artifact")
+            ):
                 continue
             data = step["data"]
             artifact = Path(data["artifact"])
@@ -20,7 +22,19 @@ def checkpoints(store, run):
             payload = json.loads(artifact.read_text())
             if payload["sha"] != step["output_sha"]:
                 raise PipelineError("checkpoint SHA mismatch")
-            latest[step["role"]] = payload
+            approval = payload.get("test_change_approval")
+            if approval:
+                if (
+                    approval not in run.get("test_change_approvals", [])
+                    or approval["patch_hash"] != digest(payload["patch"].encode())
+                    or approval["input_sha"] != step["input_sha"]
+                    or approval["role"] != step["role"]
+                    or approval["iteration"] != step["iteration"]
+                    or approval["revision"] != payload.get("revision", 0)
+                ):
+                    raise PipelineError("protected test approval evidence mismatch")
+            if step["status"] == "completed":
+                latest[step["role"]] = payload
         return latest
     except (OSError, ValueError, KeyError) as error:
         raise PipelineError("missing or invalid checkpoint evidence") from error
