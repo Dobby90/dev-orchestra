@@ -1460,3 +1460,19 @@ dd {
     grid-template-columns: repeat(2, 1fr);
   }
 }
+
+.input-guide dt {
+  font-weight: 600;
+  margin-top: 16px;
+}
+.input-guide dd {
+  margin: 6px 0 0;
+  line-height: 1.6;
+}
+.input-guide h3 {
+  margin: 20px 0 10px;
+}
+.input-guide pre {
+  overflow-x: auto;
+  font-size: 12px;
+}

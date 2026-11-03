@@ -904,6 +904,11 @@ export interface components {
             /** Default Base Branch */
             default_base_branch: string;
             policy: components["schemas"]["Policy"];
+            /**
+             * Branch Prefix
+             * @default feature/ai
+             */
+            branch_prefix: string;
             /** Version */
             version: number;
             /** Created At */

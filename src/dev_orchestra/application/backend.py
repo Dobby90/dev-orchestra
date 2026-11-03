@@ -36,6 +36,7 @@ class BackendService:
             raise ApplicationError("PROJECT_NOT_FOUND", "project not found")
         value = dict(row)
         value["policy"] = json.loads(value["policy"])
+        value["branch_prefix"] = self.runs.config.project.branch_prefix
         value.pop("identity")
         return value
 

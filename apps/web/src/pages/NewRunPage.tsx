@@ -14,6 +14,7 @@ import { ApiError } from "../api/client";
 import type { Schema } from "../api/types";
 import { Heading, ErrorNotice } from "../components/common";
 import { Button } from "../components/ui/button";
+import { PrdGuide } from "../components/PrdGuide";
 export function NewRunPage() {
   const [params] = useSearchParams(),
     navigate = useNavigate();
@@ -179,6 +180,7 @@ export function NewRunPage() {
                   파일 업로드
                 </Button>
               </div>
+              <PrdGuide />
               {mode === "text" ? (
                 <label>
                   PRD
@@ -240,11 +242,23 @@ export function NewRunPage() {
                   <input
                     value={branch}
                     maxLength={200}
+                    aria-describedby="feature-branch-guide"
                     placeholder="자동 생성"
                     onChange={(e) => edit(() => setBranch(e.target.value))}
                   />
                 </label>
               </div>
+              <p id="feature-branch-guide" className="help">
+                Feature 브랜치는 비워 두면 자동 생성됩니다.
+                {selected.data && (
+                  <>
+                    {" "}
+                    직접 입력할 때는 <code>{selected.data.branch_prefix}/</code>
+                    로 시작해야 합니다. 예:{" "}
+                    <code>{selected.data.branch_prefix}/xml</code>
+                  </>
+                )}
+              </p>
               <label>
                 추가 지시사항 (선택)
                 <textarea

@@ -2772,6 +2772,11 @@
           "policy": {
             "$ref": "#/components/schemas/Policy"
           },
+          "branch_prefix": {
+            "type": "string",
+            "title": "Branch Prefix",
+            "default": "feature/ai"
+          },
           "version": {
             "type": "integer",
             "title": "Version"

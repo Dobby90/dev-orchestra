@@ -17,12 +17,13 @@ import { Routes, Route } from "react-router-dom";
 import { Status, states } from "../src/components/common";
 import { api } from "../src/api/resources";
 import type { Project, Schema, State } from "../src/api/types";
-import { initialPolicy } from "../src/components/ProjectForm";
+import { ProjectForm, initialPolicy } from "../src/components/ProjectForm";
 const p: Project = {
   id: "prj-1",
   name: "프로젝트",
   repository_path: "/tmp/repo",
   default_base_branch: "main",
+  branch_prefix: "custom/tasks",
   version: 0,
   created_at: "2026-11-02",
   updated_at: "2026-11-02",
@@ -296,6 +297,23 @@ describe("화면·위험 명령", () => {
     expect(document.querySelector(".markdown img")).toBeNull();
     expect(document.querySelector(".markdown a")).toBeNull();
   });
+  it("정책 가이드를 열고 Escape로 닫아도 폼을 제출하지 않는다", async () => {
+    const onSubmit = vi.fn();
+    wrap(<ProjectForm pending={false} onSubmit={onSubmit} />);
+    await userEvent.click(
+      screen.getByRole("button", { name: "정책 JSON 작성 가이드" }),
+    );
+    expect(
+      screen.getByRole("dialog", { name: "프로젝트 정책 JSON 작성 가이드" }),
+    ).toBeVisible();
+    expect(screen.getByText(/critical·high는 반드시 포함/)).toBeVisible();
+    await userEvent.keyboard("{Escape}");
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    expect(onSubmit).not.toHaveBeenCalled();
+    expect(
+      screen.getByRole("button", { name: "정책 JSON 작성 가이드" }),
+    ).toHaveFocus();
+  });
   it("입력 변경 시 이전 미리보기를 무효화한다", async () => {
     vi.spyOn(api, "projects").mockResolvedValue({
       items: [p],
@@ -315,7 +333,21 @@ describe("화면·위험 명령", () => {
       spec_sha256: "hash",
     });
     wrap(<NewRunPage />, "/runs/new?project=prj-1");
+    expect(await screen.findByText("custom/tasks/xml")).toBeVisible();
+    expect(
+      screen.getByLabelText("Feature 브랜치 (선택)"),
+    ).toHaveAccessibleDescription(/custom\/tasks\//);
     await userEvent.type(screen.getByLabelText("PRD"), "작업 요구사항");
+    await userEvent.click(
+      screen.getByRole("button", { name: "PRD 작성 가이드" }),
+    );
+    expect(
+      screen.getByRole("dialog", { name: "PRD 작성 가이드" }),
+    ).toBeVisible();
+    expect(screen.getByText(/한 줄로도 입력할 수 있습니다/)).toBeVisible();
+    await userEvent.keyboard("{Escape}");
+    expect(screen.getByLabelText("PRD")).toHaveValue("작업 요구사항");
+    expect(api.preview).not.toHaveBeenCalled();
     await userEvent.click(screen.getByRole("button", { name: "실행 전 확인" }));
     expect(
       await screen.findByRole("button", { name: "확인하고 작업 시작" }),

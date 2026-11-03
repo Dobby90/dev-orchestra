@@ -106,6 +106,15 @@ def test_project_crud_version_archive(web):
     assert repo.is_dir()
 
 
+def test_project_exposes_configured_branch_prefix(web):
+    c, svc, _, repo, _ = web
+    svc.config.project.branch_prefix = "custom/tasks"
+    p = project(c, svc, repo)
+    assert p["branch_prefix"] == "custom/tasks"
+    assert c.get(f"/api/projects/{p['id']}").json()["branch_prefix"] == "custom/tasks"
+    assert c.get("/api/projects").json()["items"][0]["branch_prefix"] == "custom/tasks"
+
+
 def test_project_duplicate_path_denied(web):
     c, svc, _, repo, _ = web
     project(c, svc, repo)
