@@ -1,3 +1,4 @@
+import { Link } from "react-router-dom";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { ArrowDownToLine, Download, Pause, Search } from "lucide-react";
@@ -9,11 +10,13 @@ export function LogViewer({
   removed,
   unavailable,
   runId,
+  stepId,
 }: {
   logs: Log[];
   removed: number;
   unavailable: boolean;
   runId?: string;
+  stepId?: number;
 }) {
   const [role, setRole] = useState(""),
     [level, setLevel] = useState(""),
@@ -24,11 +27,12 @@ export function LogViewer({
     () =>
       logs.filter(
         (log) =>
+          (!stepId || log.step === stepId) &&
           (!role || log.role === role) &&
           (!level || log.level === level) &&
           (!query || log.text.toLowerCase().includes(query.toLowerCase())),
       ),
-    [logs, role, level, query],
+    [logs, role, level, query, stepId],
   );
   const virtual = useVirtualizer({
     count: filtered.length,
@@ -54,6 +58,11 @@ export function LogViewer({
   }
   return (
     <section>
+      {stepId && (
+        <p role="status">
+          단계 {stepId} 로그 · <Link to="?tab=logs">전체 로그 보기</Link>
+        </p>
+      )}
       <div className="log-toolbar">
         {runId && (
           <Button asChild variant="ghost">

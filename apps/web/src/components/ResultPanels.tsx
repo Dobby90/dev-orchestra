@@ -44,6 +44,7 @@ function Attempts({
   );
 }
 export function TestsPanel({
+  initialStep = "",
   rid,
   version,
   revision,
@@ -51,8 +52,9 @@ export function TestsPanel({
   rid: string;
   version: number;
   revision: number;
+  initialStep?: string;
 }) {
-  const [selected, setSelected] = useState("");
+  const [selected, setSelected] = useState(initialStep);
   const result = useQuery({
     queryKey: ["tests", rid, version, selected],
     queryFn: () => api.tests(rid, selected ? Number(selected) : undefined),
@@ -150,6 +152,7 @@ export function TestsPanel({
   );
 }
 export function ReviewPanel({
+  initialStep = "",
   rid,
   version,
   revision,
@@ -158,9 +161,10 @@ export function ReviewPanel({
   rid: string;
   version: number;
   revision: number;
+  initialStep?: string;
   canClassify: boolean;
 }) {
-  const [selected, setSelected] = useState(""),
+  const [selected, setSelected] = useState(initialStep),
     [issue, setIssue] = useState<
       (Schema["ReviewIssueView"] & { version: number }) | null
     >(null),

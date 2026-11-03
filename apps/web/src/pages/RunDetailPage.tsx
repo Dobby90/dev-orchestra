@@ -6,9 +6,6 @@ import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import {
   ArrowLeft,
-  Check,
-  CheckCircle2,
-  Circle,
   CircleAlert,
   GitBranch,
   Pause,
@@ -27,7 +24,6 @@ import {
   ErrorNotice,
   Heading,
   Loading,
-  roles,
   Status,
 } from "../components/common";
 import { Button } from "../components/ui/button";
@@ -39,6 +35,7 @@ import {
 } from "../components/ResultPanels";
 import { LogViewer } from "../components/LogViewer";
 import { AgentUsagePanel } from "../components/AgentUsagePanel";
+import { WorkflowTimeline } from "../components/WorkflowTimeline";
 import { DeleteRunButton } from "../components/DeleteRunButton";
 import { useRunEvents } from "../hooks/events";
 type Action =
@@ -463,60 +460,19 @@ function RunDetailBody({ rid }: { rid: string }) {
           <Loading />
         ) : steps.error ? (
           <ErrorNotice error={steps.error} retry={() => steps.refetch()} />
-        ) : steps.data.items.length ? (
-          <ol className="timeline" tabIndex={0} aria-label="워크플로 단계">
-            {steps.data.items.map((step) => (
-              <li key={step.id} className={`timeline-step step-${step.status}`}>
-                <span className="step-icon">
-                  {step.status === "completed" ? (
-                    <Check size={14} />
-                  ) : step.status === "running" ? (
-                    <Radio size={14} />
-                  ) : (
-                    <CircleAlert size={14} />
-                  )}
-                </span>
-                <div>
-                  <strong>{roles[step.role] ?? step.role}</strong>
-                  <span className="subtle text-small">
-                    revision {step.revision ?? 0} · 회차 {step.iteration} · 시도{" "}
-                    {step.attempt} ·{" "}
-                    {step.status === "completed"
-                      ? "완료"
-                      : step.status === "running"
-                        ? "진행 중"
-                        : step.status === "failed"
-                          ? "실행·증거 오류"
-                          : "중단됨"}
-                  </span>
-                  <code>
-                    {(step.output_sha ?? step.input_sha).slice(0, 10)}
-                  </code>
-                </div>
-              </li>
-            ))}
-            <li
-              className={`timeline-step ${r.state === "completed" ? "step-completed" : ""}`}
-            >
-              <span className="step-icon">
-                {r.state === "completed" ? (
-                  <CheckCircle2 size={14} />
-                ) : (
-                  <Circle size={14} />
-                )}
-              </span>
-              <div>
-                <strong>Human approval</strong>
-                <span className="subtle text-small">
-                  {r.state === "completed" ? "승인 완료" : "사용자 확인"}
-                </span>
-              </div>
-            </li>
-          </ol>
         ) : (
-          <p className="panel-body subtle">
-            실행 시작 후 단계별 이력이 표시됩니다.
-          </p>
+          <WorkflowTimeline
+            run={r}
+            items={steps.data.items}
+            onSelect={(tab, step) => {
+              setParams({ tab, step: String(step) });
+              requestAnimationFrame(() =>
+                document
+                  .querySelector(".results-panel")
+                  ?.scrollIntoView({ block: "start" }),
+              );
+            }}
+          />
         )}
       </section>
       <section className="panel results-panel">
@@ -533,6 +489,8 @@ function RunDetailBody({ rid }: { rid: string }) {
           </Tabs.List>
           <Tabs.Content value="logs" className="tab-content">
             <LogViewer
+              key={params.get("step") ?? "all"}
+              stepId={Number(params.get("step")) || undefined}
               runId={rid}
               logs={stream.logs}
               removed={stream.removed}
@@ -544,6 +502,8 @@ function RunDetailBody({ rid }: { rid: string }) {
           </Tabs.Content>
           <Tabs.Content value="tests" className="tab-content">
             <TestsPanel
+              key={params.get("step") ?? "latest"}
+              initialStep={params.get("step") ?? ""}
               rid={rid}
               version={r.version}
               revision={r.revision ?? 0}
@@ -551,6 +511,8 @@ function RunDetailBody({ rid }: { rid: string }) {
           </Tabs.Content>
           <Tabs.Content value="review" className="tab-content">
             <ReviewPanel
+              key={params.get("step") ?? "latest"}
+              initialStep={params.get("step") ?? ""}
               rid={rid}
               version={r.version}
               revision={r.revision ?? 0}
