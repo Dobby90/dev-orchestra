@@ -123,3 +123,40 @@ it("결과 패널이 연결받은 시도의 근거를 조회한다", async () =>
   expect(tests).toHaveBeenCalledWith("r", 42);
   expect(reviews).toHaveBeenCalledWith("r", 43);
 });
+
+it("이력만 별도 스크롤 영역에 넣고 요약과 승인은 밖에 유지한다", () => {
+  wrap(<WorkflowTimeline run={run} items={[]} onSelect={vi.fn()} />);
+  const history = screen.getByRole("region", { name: "워크플로 실행 이력" });
+  expect(history).toHaveAttribute("tabindex", "0");
+  expect(history).not.toContainElement(
+    document.querySelector(".workflow-current"),
+  );
+  expect(history).not.toContainElement(
+    document.querySelector(".approval-step"),
+  );
+  expect(screen.queryByRole("button", { name: "현재 단계로 이동" })).toBeNull();
+});
+it("접힌 현재 회차를 펼쳐 이동하고 이후 갱신에는 위치를 바꾸지 않는다", async () => {
+  const { waitFor } = await import("@testing-library/react");
+  const client = createQueryClient();
+  const items = [
+    { ...step, role: "developer", status: "running", finished_at: null },
+  ];
+  const node = () => (
+    <QueryClientProvider client={client}>
+      <WorkflowTimeline run={run} items={[...items]} onSelect={vi.fn()} />
+    </QueryClientProvider>
+  );
+  const view = render(node());
+  const group = document.querySelector(".timeline-group") as HTMLDetailsElement;
+  group.open = false;
+  fireEvent(group, new Event("toggle"));
+  expect(group).not.toHaveAttribute("open");
+  const scroll = vi.mocked(Element.prototype.scrollTo);
+  scroll.mockClear();
+  fireEvent.click(screen.getByRole("button", { name: "현재 단계로 이동" }));
+  await waitFor(() => expect(group).toHaveAttribute("open"));
+  await waitFor(() => expect(scroll).toHaveBeenCalledTimes(1));
+  view.rerender(node());
+  expect(scroll).toHaveBeenCalledTimes(1);
+});

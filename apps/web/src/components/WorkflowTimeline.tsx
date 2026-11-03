@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { Check, Circle, CircleAlert, Radio } from "lucide-react";
 import { api } from "../api/resources";
@@ -136,6 +136,14 @@ export function WorkflowTimeline({
   onSelect: (tab: string, step: number) => void;
 }) {
   const [now, setNow] = useState(Date.now);
+  const [reveal, setReveal] = useState(0);
+  const currentStep = [...items]
+    .reverse()
+    .find(
+      (step) =>
+        step.status === "running" &&
+        (step.revision ?? 0) === (run.revision ?? 0),
+    );
   const running = items.some((s) => s.status === "running");
   useEffect(() => {
     if (!running) return;
@@ -165,18 +173,37 @@ export function WorkflowTimeline({
         기획 → 개발 → 테스트 → 리뷰 → 보고서 → 최종 승인 · 수정 시 수정 → 테스트
         → 리뷰 반복
       </p>
-      {!items.length && (
-        <p className="subtle">실행 시작 후 단계별 이력이 표시됩니다.</p>
+      {currentStep && (
+        <button
+          type="button"
+          className="step-link"
+          onClick={() => setReveal((value) => value + 1)}
+        >
+          현재 단계로 이동
+        </button>
       )}
-      {[...groups].map(([key, steps]) => (
-        <Group
-          key={`${key}:${run.revision}:${run.iteration}`}
-          steps={steps}
-          run={run}
-          now={now}
-          onSelect={onSelect}
-        />
-      ))}
+      <div
+        className="timeline-history"
+        role="region"
+        aria-label="워크플로 실행 이력"
+        tabIndex={0}
+      >
+        {!items.length && (
+          <p className="subtle">실행 시작 후 단계별 이력이 표시됩니다.</p>
+        )}
+        {[...groups].map(([key, steps]) => (
+          <Group
+            key={`${key}:${run.revision}:${run.iteration}`}
+            steps={steps}
+            run={run}
+            now={now}
+            onSelect={onSelect}
+            reveal={
+              steps.some((step) => step.id === currentStep?.id) ? reveal : 0
+            }
+          />
+        ))}
+      </div>
       <div
         className={`approval-step ${run.state === "waiting_approval" ? "approval-waiting" : ""}`}
       >
@@ -188,6 +215,7 @@ export function WorkflowTimeline({
   );
 }
 function Group({
+  reveal,
   steps,
   run,
   now,
@@ -197,14 +225,35 @@ function Group({
   run: RunDetail;
   now: number;
   onSelect: (tab: string, step: number) => void;
+  reveal: number;
 }) {
   const first = steps[0];
   const [expanded, setExpanded] = useState(
     (first.revision ?? 0) === (run.revision ?? 0) &&
       first.iteration === run.iteration,
   );
+  const groupRef = useRef<HTMLDetailsElement>(null);
+  useEffect(() => {
+    if (reveal) setExpanded(true);
+  }, [reveal]);
+  useLayoutEffect(() => {
+    if (!reveal || !expanded) return;
+    const group = groupRef.current;
+    const history = group?.closest<HTMLElement>(".timeline-history");
+    const target = group?.querySelector<HTMLElement>('[aria-current="step"]');
+    if (history && target) {
+      history.scrollTo({
+        top:
+          history.scrollTop +
+          target.getBoundingClientRect().top -
+          history.getBoundingClientRect().top,
+        behavior: "instant",
+      });
+    }
+  }, [reveal, expanded]);
   return (
     <details
+      ref={groupRef}
       className="timeline-group"
       open={expanded}
       onToggle={(event) => setExpanded(event.currentTarget.open)}

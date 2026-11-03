@@ -1698,3 +1698,16 @@ dd {
 .results-panel {
   scroll-margin-top: 80px;
 }
+
+.timeline-history {
+  max-height: 480px;
+  overflow-y: auto;
+  scrollbar-gutter: stable;
+  overscroll-behavior-y: contain;
+}
+@media (max-width: 560px) {
+  .timeline-history {
+    max-height: 50vh;
+    max-height: 50dvh;
+  }
+}
