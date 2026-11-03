@@ -335,7 +335,9 @@ describe("화면·위험 명령", () => {
       spec_sha256: "hash",
     });
     wrap(<NewRunPage />, "/runs/new?project=prj-1");
-    expect(await screen.findByText("custom/tasks/xml")).toBeVisible();
+    expect(
+      await screen.findByText("custom/tasks/add-task-search"),
+    ).toBeVisible();
     expect(
       screen.getByLabelText("Feature 브랜치 (선택)"),
     ).toHaveAccessibleDescription(/custom\/tasks\//);

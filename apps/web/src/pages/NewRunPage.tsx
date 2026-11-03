@@ -255,7 +255,7 @@ export function NewRunPage() {
                     {" "}
                     직접 입력할 때는 <code>{selected.data.branch_prefix}/</code>
                     로 시작해야 합니다. 예:{" "}
-                    <code>{selected.data.branch_prefix}/xml</code>
+                    <code>{selected.data.branch_prefix}/add-task-search</code>
                   </>
                 )}
               </p>
