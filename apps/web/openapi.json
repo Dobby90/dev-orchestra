@@ -1839,6 +1839,91 @@
         }
       }
     },
+    "/api/runs/{rid}/logs/window": {
+      "get": {
+        "summary": "Log Window",
+        "operationId": "log_window_api_runs__rid__logs_window_get",
+        "parameters": [
+          {
+            "name": "rid",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Rid"
+            }
+          },
+          {
+            "name": "before",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "integer",
+                  "minimum": 0
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Before"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "maximum": 200,
+              "minimum": 1,
+              "default": 200,
+              "title": "Limit"
+            }
+          },
+          {
+            "name": "step_id",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "integer",
+                  "minimum": 1
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Step Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LogWindow"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/runs/{rid}/logs": {
       "get": {
         "summary": "Logs",
@@ -3111,6 +3196,37 @@
           "has_more"
         ],
         "title": "LogPage"
+      },
+      "LogWindow": {
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/EventEnvelope"
+            },
+            "type": "array",
+            "title": "Items"
+          },
+          "latest_cursor": {
+            "type": "integer",
+            "title": "Latest Cursor"
+          },
+          "before_cursor": {
+            "type": "integer",
+            "title": "Before Cursor"
+          },
+          "has_more": {
+            "type": "boolean",
+            "title": "Has More"
+          }
+        },
+        "type": "object",
+        "required": [
+          "items",
+          "latest_cursor",
+          "before_cursor",
+          "has_more"
+        ],
+        "title": "LogWindow"
       },
       "NotificationPage": {
         "properties": {

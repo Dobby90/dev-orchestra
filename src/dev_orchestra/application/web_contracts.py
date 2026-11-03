@@ -278,6 +278,13 @@ class EventPage(BaseModel):
     has_more: bool
 
 
+class LogWindow(BaseModel):
+    items: list[EventEnvelope]
+    latest_cursor: int
+    before_cursor: int
+    has_more: bool
+
+
 class LogPage(EventPage):
     schema_version: Literal[2] = 2
 

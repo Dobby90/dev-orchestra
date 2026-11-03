@@ -586,3 +586,25 @@ def test_notifications_include_all_runs_not_only_first_page(web):
     assert len(c.get(f"/api/notifications?before={page['next_cursor']}").json()["items"]) == 5
     svc.store.update(rid, "failed")
     assert c.get("/api/notifications").json()["items"][0]["run_id"] == rid
+
+
+def test_log_window_contract_and_authentication(web):
+    from dev_orchestra.infrastructure.log_index import LogIndexer
+
+    c, svc, rid, _, _ = web
+    root = Path(svc.store.get(rid)["directory"])
+    (root / "worker.log").write_text("처음\n최신 token=CANARY\n")
+    LogIndexer(svc.store).index(rid)
+    response = c.get(f"/api/runs/{rid}/logs/window?limit=1")
+    assert response.status_code == 200
+    page = response.json()
+    assert page["has_more"]
+    assert len(page["items"]) == 1
+    assert "CANARY" not in response.text and "[REDACTED]" in response.text
+    previous = c.get(f"/api/runs/{rid}/logs/window?before={page['before_cursor']}").json()
+    assert previous["items"][0]["data"]["text"] == "처음\n"
+    assert not previous["has_more"]
+    assert c.get(f"/api/runs/{rid}/logs/window?before=-1").status_code == 422
+    assert c.get(f"/api/runs/{rid}/logs/window?step_id=0").status_code == 422
+    c.cookies.clear()
+    assert c.get(f"/api/runs/{rid}/logs/window").status_code == 401

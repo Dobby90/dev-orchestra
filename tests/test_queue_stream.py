@@ -637,3 +637,53 @@ def test_status_respects_pending_claim_over_old_launch_marker(prepared):
     assert svc.status(rid)["state"] == "queued"
     assert q.job(job["id"])["claim_token"] == job["claim_token"]
     assert q.job(job["id"])["state"] == "claimed"
+
+
+def test_log_window_is_bounded_paginated_and_resumes_without_gap(prepared):
+    svc, _, create, _, _ = prepared
+    rid = create()
+    root = Path(svc.store.get(rid)["directory"])
+    path = root / "worker.log"
+    path.write_text("".join(f"{i}: 한글 token=CANARY " + "가" * 1500 + "\n" for i in range(40)))
+    index = LogIndexer(svc.store)
+    index.index(rid)
+    state = svc.store.get(rid)
+    window = svc.events.log_window(rid)
+    assert window["has_more"]
+    assert len(json.dumps(window["items"], ensure_ascii=False).encode()) < 66000
+    assert "CANARY" not in json.dumps(window)
+    assert "[REDACTED]" in json.dumps(window)
+    ids = [e["id"] for e in window["items"]]
+    assert ids == sorted(ids)
+    assert ids[-1] == window["latest_cursor"]
+    cursor = window["before_cursor"]
+    while window["has_more"]:
+        window = svc.events.log_window(rid, cursor)
+        assert window["before_cursor"] < cursor
+        cursor = window["before_cursor"]
+        ids = [e["id"] for e in window["items"]] + ids
+    assert len(ids) == len(set(ids)) == 80
+    assert svc.store.get(rid) == state
+    with path.open("a") as handle:
+        handle.write("새 로그\n")
+    index.index(rid)
+    resumed = svc.events.stream_page(rid, ids[-1])
+    assert [e["data"]["text"] for e in resumed["items"]] == ["새 로그\n"]
+
+
+def test_log_window_step_filter_and_integrity(prepared):
+    svc, _, create, _, _ = prepared
+    rid = create()
+    root = Path(svc.store.get(rid)["directory"])
+    step, _ = svc.store.start_step(rid, "developer", 0, "a" * 40)
+    path = root / "iterations" / "0" / "developer" / "attempt-1" / "process.log"
+    path.parent.mkdir(parents=True)
+    path.write_text("단계 로그\n")
+    (root / "worker.log").write_text("시스템 로그\n")
+    LogIndexer(svc.store).index(rid)
+    page = svc.events.log_window(rid, step_id=step)
+    assert [e["data"]["text"] for e in page["items"]] == ["단계 로그\n"]
+    assert not svc.events.log_window(rid, step_id=step + 1)["items"]
+    view = root / "log-views" / (page["items"][0]["data"]["log_id"] + ".log")
+    view.write_text("변조\n")
+    assert svc.events.log_window(rid, step_id=step)["items"][0]["kind"] == "log.unavailable"

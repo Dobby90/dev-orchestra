@@ -607,6 +607,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/runs/{rid}/logs/window": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Log Window */
+        get: operations["log_window_api_runs__rid__logs_window_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/runs/{rid}/logs": {
         parameters: {
             query?: never;
@@ -1020,6 +1037,17 @@ export interface components {
              * @constant
              */
             schema_version: 2;
+        };
+        /** LogWindow */
+        LogWindow: {
+            /** Items */
+            items: components["schemas"]["EventEnvelope"][];
+            /** Latest Cursor */
+            latest_cursor: number;
+            /** Before Cursor */
+            before_cursor: number;
+            /** Has More */
+            has_more: boolean;
         };
         /** NotificationPage */
         NotificationPage: {
@@ -3064,6 +3092,41 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["SpecContent"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    log_window_api_runs__rid__logs_window_get: {
+        parameters: {
+            query?: {
+                before?: number | null;
+                limit?: number;
+                step_id?: number | null;
+            };
+            header?: never;
+            path: {
+                rid: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LogWindow"];
                 };
             };
             /** @description Validation Error */

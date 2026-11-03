@@ -51,6 +51,8 @@ def routes(runs, security):
         async def generate():
             nonlocal cursor
             heartbeat = time.monotonic()
+            # Flush headers even when the latest-log snapshot left no events to replay.
+            yield b": connected\n\n"
             try:
                 while not await request.is_disconnected():
                     try:

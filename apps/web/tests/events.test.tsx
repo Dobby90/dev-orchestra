@@ -1,7 +1,7 @@
 import { act, renderHook, waitFor } from "@testing-library/react";
 import { QueryClientProvider } from "@tanstack/react-query";
 import type { ReactNode } from "react";
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { appendBounded, decodeEvent, useRunEvents } from "../src/hooks/events";
 import { createQueryClient } from "../src/App";
 const event = (id: number, kind = "log.appended") => ({
@@ -34,6 +34,15 @@ class Stream {
   }
 }
 describe("영속 이벤트와 bounded 로그", () => {
+  beforeEach(async () => {
+    const { api } = await import("../src/api/resources");
+    vi.spyOn(api, "logWindow").mockResolvedValue({
+      items: [],
+      latest_cursor: 0,
+      before_cursor: 0,
+      has_more: false,
+    });
+  });
   it("다른 Run·손상된 envelope·잘못된 ID를 거부한다", () => {
     expect(decodeEvent(event(1), "r1")?.id).toBe(1);
     expect(decodeEvent(event(1), "other")).toBeNull();
@@ -85,6 +94,7 @@ describe("영속 이벤트와 bounded 로그", () => {
     const { result, unmount } = renderHook(() => useRunEvents("r1"), {
       wrapper,
     });
+    await act(async () => {});
     try {
       act(() => Stream.instances.at(-1)!.onerror?.());
       await act(async () => {
@@ -111,6 +121,7 @@ describe("영속 이벤트와 bounded 로그", () => {
     const { result, unmount } = renderHook(() => useRunEvents("r1"), {
       wrapper,
     });
+    await act(async () => {});
     const stream = Stream.instances.at(-1)!;
     act(() => {
       stream.onopen?.();
@@ -124,4 +135,34 @@ describe("영속 이벤트와 bounded 로그", () => {
     expect(stream.closed).toBe(true);
     expect(fetch).not.toHaveBeenCalled();
   });
+});
+
+it("최신 로그 조회의 기준 커서에서 SSE를 이어 받아 중간 이벤트를 보존한다", async () => {
+  const { api } = await import("../src/api/resources");
+  vi.spyOn(api, "logWindow").mockResolvedValue({
+    items: [event(10)],
+    latest_cursor: 20,
+    before_cursor: 10,
+    has_more: true,
+  });
+  Stream.instances = [];
+  vi.stubGlobal("EventSource", Stream);
+  const client = createQueryClient();
+  const wrapper = ({ children }: { children: ReactNode }) => (
+    <QueryClientProvider client={client}>{children}</QueryClientProvider>
+  );
+  const { result, unmount } = renderHook(() => useRunEvents("r1"), { wrapper });
+  await act(async () => {});
+  const stream = Stream.instances.at(-1)!;
+  expect(stream.url).toContain("after=20");
+  act(() => {
+    stream.onopen?.();
+    stream.emit(event(21));
+  });
+  await waitFor(() =>
+    expect(result.current.logs.map((log) => log.id)).toEqual([10, 21]),
+  );
+  expect(result.current.hasOlder).toBe(true);
+  expect(result.current.lastReceived).not.toBeNull();
+  unmount();
 });

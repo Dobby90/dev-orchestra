@@ -74,6 +74,14 @@ export const api = {
     request<Schema["ReportView"]>(`/runs/${id(rid)}/report`),
   spec: (rid: string) =>
     request<Schema["SpecContent"]>(`/runs/${id(rid)}/spec`),
+  logWindow: (rid: string, before?: number, stepId?: number) => {
+    const params = new URLSearchParams();
+    if (before !== undefined) params.set("before", String(before));
+    if (stepId !== undefined) params.set("step_id", String(stepId));
+    return request<Schema["LogWindow"]>(
+      `/runs/${id(rid)}/logs/window?${params}`,
+    );
+  },
   history: (rid: string, after: number) =>
     request<Schema["EventPage"]>(
       `/runs/${id(rid)}/event-history?after=${after}&limit=200`,

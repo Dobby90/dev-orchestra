@@ -129,6 +129,45 @@ class EventService:
             "has_more": page["has_more"] or len(items) < len(page["items"]),
         }
 
+    def log_window(self, run_id, before=None, limit=200, step_id=None):
+        """Read a bounded newest-first window, then return display order and live cursor."""
+        import json
+
+        self.store.get(run_id)
+        if before is not None and (type(before) is not int or before < 0):
+            raise PipelineError("invalid log cursor")
+        if type(limit) is not int or not 1 <= limit <= 200:
+            raise PipelineError("invalid log limit")
+        if step_id is not None and (type(step_id) is not int or step_id < 1):
+            raise PipelineError("invalid step filter")
+        with self.store.connection() as db:
+            latest = db.execute(
+                "SELECT coalesce(max(id),0) FROM events WHERE run_id=?", (run_id,)
+            ).fetchone()[0]
+            boundary = latest + 1 if before is None else min(before, latest + 1)
+            rows = db.execute(
+                "SELECT e.id FROM events e JOIN log_spans p ON p.event_id=e.id "
+                "JOIN log_sources s ON s.id=p.log_id "
+                "WHERE e.run_id=? AND e.id<? AND (? IS NULL OR s.step_id=?) "
+                "ORDER BY e.id DESC LIMIT ?",
+                (run_id, boundary, step_id, step_id, limit + 1),
+            ).fetchall()
+        items = []
+        size = 0
+        for row in rows[:limit]:
+            event = self.stream_page(run_id, row[0] - 1, 1)["items"][0]
+            length = len(json.dumps(event, ensure_ascii=False).encode())
+            if size + length > 65536:
+                break
+            items.append(event)
+            size += length
+        return {
+            "items": list(reversed(items)),
+            "latest_cursor": latest,
+            "before_cursor": items[-1]["id"] if items else boundary,
+            "has_more": len(rows) > len(items),
+        }
+
     def high_water(self):
         with self.store.connection() as db:
             return db.execute(

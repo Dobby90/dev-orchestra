@@ -492,6 +492,14 @@ function RunDetailBody({ rid }: { rid: string }) {
               key={params.get("step") ?? "all"}
               stepId={Number(params.get("step")) || undefined}
               runId={rid}
+              steps={steps.data?.items}
+              state={r.state}
+              connection={stream.connection}
+              lastReceived={stream.lastReceived}
+              loading={stream.loading}
+              loadError={stream.loadError}
+              hasOlder={stream.hasOlder}
+              beforeCursor={stream.beforeCursor}
               logs={stream.logs}
               removed={stream.removed}
               unavailable={stream.unavailable}

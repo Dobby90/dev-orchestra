@@ -9,7 +9,32 @@ export type Log = {
   level: string;
   source: string;
   step: number | null;
+  logId?: string;
+  generation?: number;
+  offset?: number;
+  endOffset?: number;
 };
+export function eventLog(event: RunEvent): Log | null {
+  const d = event.data;
+  if (
+    event.kind !== "log.appended" ||
+    typeof d.text !== "string" ||
+    typeof d.source !== "string"
+  )
+    return null;
+  return {
+    logId: typeof d.log_id === "string" ? d.log_id : undefined,
+    generation: typeof d.generation === "number" ? d.generation : undefined,
+    offset: typeof d.offset === "number" ? d.offset : undefined,
+    endOffset: typeof d.end_offset === "number" ? d.end_offset : undefined,
+    id: event.id,
+    text: d.text,
+    source: d.source,
+    role: typeof d.role === "string" ? d.role : null,
+    level: typeof d.level === "string" ? d.level : "unknown",
+    step: typeof d.step_id === "number" ? d.step_id : null,
+  };
+}
 export type Connection = "connecting" | "live" | "reconnecting";
 const kinds = [
   "state.changed",
@@ -73,11 +98,17 @@ export function useRunEvents(rid: string) {
   });
   const [unavailable, setUnavailable] = useState(false);
   const cursor = useRef(0);
+  const [lastReceived, setLastReceived] = useState<string | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState(false);
+  const [hasOlder, setHasOlder] = useState(false);
+  const [beforeCursor, setBeforeCursor] = useState<number>();
   useEffect(() => {
     let disposed = false,
       busy = false,
       current: Connection = "connecting";
     const pending: Log[] = [];
+    let pendingReceived: string | null = null;
     let pendingBytes = 0,
       pendingRemoved = 0;
     let invalidate: ReturnType<typeof setTimeout> | undefined;
@@ -89,17 +120,11 @@ export function useRunEvents(rid: string) {
       const event = decodeEvent(raw, rid);
       if (disposed || !event || event.id <= cursor.current) return;
       cursor.current = event.id;
+      pendingReceived = new Date().toISOString();
       if (event.kind === "log.appended") {
         const d = event.data;
         if (typeof d.text === "string" && typeof d.source === "string") {
-          pending.push({
-            id: event.id,
-            text: d.text,
-            source: d.source,
-            role: typeof d.role === "string" ? d.role : null,
-            level: typeof d.level === "string" ? d.level : "unknown",
-            step: typeof d.step_id === "number" ? d.step_id : null,
-          });
+          pending.push(eventLog(event)!);
           pendingBytes += new TextEncoder().encode(d.text).length;
           while (pending.length > 1000 || pendingBytes > 1048576) {
             pendingBytes -= new TextEncoder().encode(
@@ -125,23 +150,53 @@ export function useRunEvents(rid: string) {
           }, 200);
       }
     }
-    const stream = new EventSource(
-      `/api/runs/${encodeURIComponent(rid)}/events?after=${cursor.current}`,
-      { withCredentials: true },
-    );
-    stream.onopen = () => change("live");
-    stream.onerror = () => change("reconnecting");
-    const listener = (event: MessageEvent) => {
+    let stream: EventSource | undefined;
+    let initialized = false;
+    async function initialize() {
+      if (busy || initialized || disposed) return;
+      busy = true;
       try {
-        consume(JSON.parse(event.data));
+        const page = await api.logWindow(rid);
+        if (disposed) return;
+        page.items.forEach(consume);
+        cursor.current = page.latest_cursor;
+        setHasOlder(page.has_more);
+        setBeforeCursor(page.before_cursor);
+        setLoading(false);
+        setLoadError(false);
+        initialized = true;
+        stream = new EventSource(
+          `/api/runs/${encodeURIComponent(rid)}/events?after=${cursor.current}`,
+          { withCredentials: true },
+        );
+        stream.onopen = () => change("live");
+        stream.onerror = () => change("reconnecting");
+        const listener = (event: MessageEvent) => {
+          try {
+            consume(JSON.parse(event.data));
+          } catch {
+            setUnavailable(true);
+          }
+        };
+        kinds.forEach((kind) =>
+          stream!.addEventListener(kind, listener as EventListener),
+        );
       } catch {
-        setUnavailable(true);
+        if (!disposed) {
+          setLoading(false);
+          setLoadError(true);
+          change("reconnecting");
+        }
+      } finally {
+        busy = false;
       }
-    };
-    kinds.forEach((kind) =>
-      stream.addEventListener(kind, listener as EventListener),
-    );
+    }
+    void initialize();
     const flush = setInterval(() => {
+      if (pendingReceived && !disposed) {
+        setLastReceived(pendingReceived);
+        pendingReceived = null;
+      }
       if (pending.length && !disposed) {
         const batch = pending.splice(0),
           dropped = pendingRemoved;
@@ -157,6 +212,10 @@ export function useRunEvents(rid: string) {
       }
     }, 100);
     const fallback = setInterval(async () => {
+      if (!initialized) {
+        void initialize();
+        return;
+      }
       if (busy || disposed || current === "live") return;
       busy = true;
       try {
@@ -174,7 +233,7 @@ export function useRunEvents(rid: string) {
     }, 3000);
     return () => {
       disposed = true;
-      stream.close();
+      stream?.close();
       clearInterval(flush);
       clearInterval(fallback);
       clearTimeout(invalidate);
@@ -182,6 +241,11 @@ export function useRunEvents(rid: string) {
   }, [rid, client]);
   return {
     connection,
+    lastReceived,
+    loading,
+    loadError,
+    hasOlder,
+    beforeCursor,
     logs: buffer.items,
     removed: buffer.removed,
     unavailable,

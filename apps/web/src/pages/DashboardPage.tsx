@@ -49,8 +49,8 @@ export function DashboardPage() {
     <>
       <Heading
         eyebrow="WORKSPACE / OVERVIEW"
-        title="개발의 흐름을 한눈에"
-        description="실행 중인 작업과 다음으로 확인할 일을 살펴보세요."
+        title="작업 현황"
+        description="진행 상황과 확인할 일을 모아봅니다."
       >
         <Button asChild>
           <Link to="/runs/new">

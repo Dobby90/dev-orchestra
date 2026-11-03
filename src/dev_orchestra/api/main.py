@@ -38,6 +38,7 @@ from dev_orchestra.application.web_contracts import (
     DispositionInput,
     EventPage,
     LogPage,
+    LogWindow,
     NotificationPage,
     NotificationRead,
     OperationView,
@@ -522,6 +523,15 @@ def create_app(config=None, allowed_roots=None, port=8000, static_directory=None
     def run_spec(rid: str):
         value = runs.queries.get(rid)
         return {"text": value["spec"], "additional_instructions": value.get("answers", "")}
+
+    @app.get("/api/runs/{rid}/logs/window", response_model=LogWindow)
+    def log_window(
+        rid: str,
+        before: int | None = Query(None, ge=0),
+        limit: int = Query(200, ge=1, le=200),
+        step_id: int | None = Query(None, ge=1),
+    ):
+        return runs.events.log_window(rid, before, limit, step_id)
 
     @app.get("/api/runs/{rid}/logs", response_model=LogPage)
     def logs(

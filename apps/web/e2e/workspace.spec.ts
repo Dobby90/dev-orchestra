@@ -42,9 +42,7 @@ test("실제 로컬 API: 로그인 → 프로젝트 → 실행 → 재연결 →
   await page.getByLabel("일회용 로그인 코드").fill(bootstrap());
   const loginStarted = Date.now() / 1000;
   await page.getByRole("button", { name: "작업 공간 열기" }).click();
-  await expect(
-    page.getByRole("heading", { name: "개발의 흐름을 한눈에" }),
-  ).toBeVisible();
+  await expect(page.getByRole("heading", { name: "작업 현황" })).toBeVisible();
   const sessionCookie = (await page.context().cookies()).find(
     (cookie) => cookie.name === "devorchestra_session",
   );
@@ -170,10 +168,14 @@ test("실제 로컬 API: 로그인 → 프로젝트 → 실행 → 재연결 →
   await page.route("**/events?*", (route) => route.abort("failed"));
   await page.reload();
   await expect(page).toHaveURL(runUrl);
-  await expect(page.getByText("재연결 중 · 주기적 조회")).toBeVisible();
+  await expect(
+    page.locator(".run-actions").getByText("재연결 중 · 주기적 조회"),
+  ).toBeVisible();
   await expect(page.getByText(/GUI 실시간 한글 로그/)).toBeVisible();
   await page.unroute("**/events?*");
-  await expect(page.getByText("실시간 연결됨")).toBeVisible();
+  await expect(
+    page.locator(".run-actions").getByText("실시간 연결됨"),
+  ).toBeVisible();
   await page.getByRole("button", { name: "일시중지", exact: true }).click();
   await page.getByRole("button", { name: "일시중지 확인" }).click();
   await expect(
@@ -232,7 +234,7 @@ test("실제 로컬 API: 로그인 → 프로젝트 → 실행 → 재연결 →
   writeFileSync(f.release, "");
   await page.getByRole("button", { name: "재개", exact: true }).click();
   await page.getByRole("button", { name: "작업 재개 확인" }).click();
-  await expect(page.getByText("승인 대기", { exact: true })).toBeVisible({
+  await expect(page.locator(".page-heading .status")).toHaveText("승인 대기", {
     timeout: 45000,
   });
   await page.getByRole("tab", { name: "테스트", exact: true }).click();
@@ -271,13 +273,13 @@ test("실제 로컬 API: 로그인 → 프로젝트 → 실행 → 재연결 →
   await page.getByRole("button", { name: "보류", exact: true }).click();
   await page.getByLabel("사유 (필수)").fill("추가 확인 뒤 승인합니다");
   await page.getByRole("button", { name: "승인 보류 확인" }).click();
-  await expect(page.getByText("승인 대기", { exact: true })).toBeVisible();
+  await expect(page.locator(".page-heading .status")).toHaveText("승인 대기");
   await page.getByRole("button", { name: "수정 요청", exact: true }).click();
   await page
     .getByLabel("수정 지시사항")
     .fill("변경 없이도 테스트와 리뷰를 다시 검증해 주세요.");
   await page.getByRole("button", { name: "수정 요청 확인" }).click();
-  await expect(page.getByText("승인 대기", { exact: true })).toBeVisible({
+  await expect(page.locator(".page-heading .status")).toHaveText("승인 대기", {
     timeout: 45000,
   });
   await expect(page.locator(".validation-strip")).toContainText("revision 1");
@@ -322,7 +324,7 @@ test("실제 로컬 API: 로그인 → 프로젝트 → 실행 → 재연결 →
         ).state,
     )
     .toBe("waiting_approval");
-  await expect(page.getByText("승인 대기", { exact: true })).toBeVisible();
+  await expect(page.locator(".page-heading .status")).toHaveText("승인 대기");
   const cliLogs = execFileSync(cli, ["--config", f.config, "logs", rid], {
     encoding: "utf8",
   });
@@ -515,9 +517,12 @@ test("CLI 시작·브라우저 종료·재접속·CLI 승인과 GUI 생성 교�
   await reopened.goto(`/runs/${rid}`);
   await expect(reopened.getByText("개발 중", { exact: true })).toBeVisible();
   writeFileSync(f.release, "");
-  await expect(reopened.getByText("승인 대기", { exact: true })).toBeVisible({
-    timeout: 45000,
-  });
+  await expect(reopened.locator(".page-heading .status")).toHaveText(
+    "승인 대기",
+    {
+      timeout: 45000,
+    },
+  );
   execFileSync(cli, [...cliArgs, "approve", rid]);
   await expect(
     reopened.getByText("완료", { exact: true }).first(),
@@ -547,9 +552,12 @@ test("CLI 시작·브라우저 종료·재접속·CLI 승인과 GUI 생성 교�
   await reopened.getByRole("button", { name: "실행 전 확인" }).click();
   await reopened.getByRole("button", { name: "확인하고 작업 시작" }).click();
   await expect(reopened).toHaveURL(/\/runs\/run-/);
-  await expect(reopened.getByText("승인 대기", { exact: true })).toBeVisible({
-    timeout: 45000,
-  });
+  await expect(reopened.locator(".page-heading .status")).toHaveText(
+    "승인 대기",
+    {
+      timeout: 45000,
+    },
+  );
   const guiRid = new URL(reopened.url()).pathname.split("/").at(-1)!;
   expect(guiRid).not.toBe(rid);
   execFileSync(cli, [...cliArgs, "approve", guiRid]);

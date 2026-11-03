@@ -146,7 +146,7 @@ describe("화면·위험 명령", () => {
       screen.getByRole("button", { name: "작업 공간 열기" }),
     );
     expect(
-      await screen.findByRole("heading", { name: "개발의 흐름을 한눈에" }),
+      await screen.findByRole("heading", { name: "작업 현황" }),
     ).toBeVisible();
   });
   it("14개 상태에 텍스트 라벨이 있다", () => {
