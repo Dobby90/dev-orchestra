@@ -2,6 +2,12 @@ import { request, version } from "./client";
 import type { Project, Schema } from "./types";
 const id = encodeURIComponent;
 export const api = {
+  deleteRun: (rid: string, revision: number) =>
+    request<void>(`/runs/${id(rid)}`, {
+      method: "DELETE",
+      headers: version("run", rid, revision),
+      body: JSON.stringify({ confirm: true }),
+    }),
   session: () => request<Schema["SessionView"]>("/session"),
   login: (code: string) =>
     request<Schema["SessionView"]>("/session", {

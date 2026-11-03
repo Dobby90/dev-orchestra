@@ -751,6 +751,46 @@
             }
           }
         }
+      },
+      "delete": {
+        "summary": "Delete Run",
+        "operationId": "delete_run_api_runs__rid__delete",
+        "parameters": [
+          {
+            "name": "rid",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Rid"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CleanupInput"
+              }
+            }
+          }
+        },
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
       }
     },
     "/api/runs/{rid}/cancel": {
@@ -3903,6 +3943,11 @@
               }
             ],
             "title": "Control"
+          },
+          "deletion_pending": {
+            "type": "boolean",
+            "title": "Deletion Pending",
+            "default": false
           },
           "revision": {
             "type": "integer",

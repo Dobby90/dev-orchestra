@@ -39,6 +39,7 @@ import {
 } from "../components/ResultPanels";
 import { LogViewer } from "../components/LogViewer";
 import { AgentUsagePanel } from "../components/AgentUsagePanel";
+import { DeleteRunButton } from "../components/DeleteRunButton";
 import { useRunEvents } from "../hooks/events";
 type Action =
   | "cancel"
@@ -277,7 +278,7 @@ function RunDetailBody({ rid }: { rid: string }) {
               : "재연결 중 · 주기적 조회"}
         </span>
         <div className="inline-actions">
-          {registered && (
+          {registered && !r.deletion_pending && (
             <>
               {active(r.state) && (
                 <Button
@@ -356,8 +357,17 @@ function RunDetailBody({ rid }: { rid: string }) {
               </Button>
             </>
           )}
+          {registered && ["completed", "cancelled"].includes(r.state) && (
+            <DeleteRunButton run={r} />
+          )}
         </div>
       </div>
+      {r.deletion_pending && (
+        <p role="status" className="notice">
+          기록 삭제가 진행 중이거나 중단되었습니다. 일부 파일이 삭제되었을 수
+          있습니다. 기록 삭제를 재시도해 주세요.
+        </p>
+      )}
       {openError && <ErrorNotice error={openError} />}
       {opening && (
         <p role="status" className="help">

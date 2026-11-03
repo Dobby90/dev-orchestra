@@ -396,6 +396,12 @@ def create_app(config=None, allowed_roots=None, port=8000, static_directory=None
         response.headers["ETag"] = f'"run:{rid}:v{value["version"]}"'
         return value
 
+    @app.delete("/api/runs/{rid}", status_code=204)
+    def delete_run(rid: str, request: Request, body: CleanupInput):
+        backend.registered_run(rid)
+        runs.delete(rid, version(request, rid), confirm=body.confirm)
+        return Response(status_code=204)
+
     commands = Commands(runs)
     results = Results(runs.store)
 

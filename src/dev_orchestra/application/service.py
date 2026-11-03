@@ -190,6 +190,11 @@ class RunService:
 
         Runner(self.store, None, None).report(run_id)
 
+    def delete(self, run_id, expected_version, *, confirm=False):
+        from dev_orchestra.application.deletion import RunDeletionService
+
+        RunDeletionService(self.store).delete(run_id, expected_version, confirm=confirm)
+
     def cleanup(self, run_id, expected_version=None):
         run = self.store.get(run_id)
         directory = Path(run["directory"])

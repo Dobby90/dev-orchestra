@@ -12,6 +12,10 @@ export class ApiError extends Error {
   }
 }
 const messages: Record<string, string> = {
+  RUN_BUSY:
+    "Worker·명령 또는 프로세스 정리가 끝나지 않았습니다. 종료 상태를 확인한 뒤 다시 시도해 주세요.",
+  RUN_DELETE_FAILED:
+    "파일 삭제가 중단되었습니다. 일부 파일이 삭제되었을 수 있습니다. 기록 삭제를 재시도해 주세요.",
   NETWORK:
     "로컬 API에 연결할 수 없습니다. API 서버를 확인한 뒤 다시 시도해 주세요.",
   SESSION_REQUIRED: "로그인이 만료되었습니다. 새 로그인 코드를 입력해 주세요.",

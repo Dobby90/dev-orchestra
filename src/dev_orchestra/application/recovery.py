@@ -112,6 +112,8 @@ class RecoveryService:
             return self.store.get(run["id"])
 
     def status(self, run_id):
+        if self.store.get(run_id).get("deletion_pending"):
+            return self.store.get(run_id)
         run = self._reconcile_worker(self._finish_idle_control(self.store.get(run_id)))
         if run["state"] == "completed":
             branch_sha = Git(Path(run["repo"])).call("rev-parse", "refs/heads/" + run["branch"])

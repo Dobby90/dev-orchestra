@@ -11,6 +11,7 @@ from starlette.responses import StreamingResponse
 
 from dev_orchestra.api.security import COOKIE
 from dev_orchestra.application.errors import ApplicationError
+from dev_orchestra.domain.models import PipelineError
 
 
 class BoundedEventResponse(StreamingResponse):
@@ -56,7 +57,12 @@ def routes(runs, security):
                         await run_in_threadpool(security.authenticate, request.cookies.get(COOKIE))
                     except ApplicationError:
                         return
-                    page = await run_in_threadpool(runs.events.stream_page, rid, cursor)
+                    try:
+                        page = await run_in_threadpool(runs.events.stream_page, rid, cursor)
+                    except PipelineError as error:
+                        if str(error).startswith("unknown run:"):
+                            return
+                        raise
                     for event in page["items"]:
                         # JSON escapes embedded newlines; persisted kind is a single SSE field.
                         kind = event["kind"].replace("\r", "").replace("\n", "")

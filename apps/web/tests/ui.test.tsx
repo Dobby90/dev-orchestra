@@ -32,6 +32,7 @@ const p: Project = {
   schema_version: 1,
 };
 const detail: Schema["RunDetail"] = {
+  deletion_pending: false,
   schema_version: 1,
   revision: 0,
   validation: { status: "valid", revision: 0 },

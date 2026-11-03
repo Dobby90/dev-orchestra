@@ -92,6 +92,8 @@ class Commands:
         if kind in {"resume", "request-changes"}:
             QueueService(self.store).recover()
         run = self.store.get(run_id)
+        if run.get("deletion_pending"):
+            raise PipelineError("run deletion is pending; retry deletion")
         directory = Path(run["directory"])
         if kind in {"cancel", "pause"}:
             with self.store.transaction() as db:

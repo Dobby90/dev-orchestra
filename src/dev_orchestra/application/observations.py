@@ -140,9 +140,14 @@ def observe(store, run):
         ):
             actions.append("cleanup")
         actions.append("reconcile")
+        if run["state"] in {"completed", "cancelled"}:
+            actions.append("delete")
+    if run.get("deletion_pending"):
+        actions = ["delete"] if run.get("project_id") else []
     return {
         "execution": execution,
         "validation": validation,
         "allowed_actions": actions,
+        "deletion_pending": bool(run.get("deletion_pending")),
         "revision": run.get("revision", 0),
     }

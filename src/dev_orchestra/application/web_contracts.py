@@ -198,6 +198,7 @@ class ValidationView(BaseModel):
 
 
 class RunDetail(RunSummary):
+    deletion_pending: bool = False
     revision: int = 0
     execution: ExecutionView = Field(default_factory=ExecutionView)
     validation: ValidationView = Field(default_factory=ValidationView)

@@ -164,6 +164,10 @@ devorchestra --config config.yaml defer RUN_ID --reason "추가 확인 후 승�
 
 `cleanup`은 Worktree만 정리하고 브랜치·커밋·보고서·SQLite 이력을 보존합니다. 미커밋 변경이 있는 Worktree를 강제로 삭제하지 않습니다. 보존된 Diff·JUnit·보고서는 Worktree 정리 후에도 조회할 수 있습니다.
 
+완료·취소된 작업은 GUI 상세 화면의 **작업 기록 삭제** 또는 `devorchestra --config config.yaml delete RUN_ID`로 영구 삭제할 수 있습니다. CLI는 삭제 범위를 확인하며 `--yes`로 확인을 생략할 수 있습니다. 실패한 작업은 먼저 `cancel RUN_ID`로 취소해야 합니다. 삭제 범위에는 실행 단계·저장된 요구사항·로그·테스트 및 리뷰 결과·보고서·승인 근거·큐와 명령 이력·Worktree가 포함되며, 원본 저장소와 작업 브랜치·커밋은 보존합니다. 다른 작업에서 참조하는 요구사항은 보존합니다.
+
+삭제는 Worker 소유권·실행 잠금·미처리 큐와 명령·자식 프로세스 종료를 확인하며, 미커밋 변경이 있는 Worktree를 강제로 제거하지 않습니다. 파일 삭제가 중단되면 일부 파일이 이미 삭제되었을 수 있습니다. 삭제 진행 상태는 DB에 보존되며 다른 변경 명령을 차단합니다. 원인을 해결한 뒤 GUI의 **기록 삭제 재시도** 또는 같은 CLI 명령으로 재시도할 수 있습니다. API는 `DELETE /api/runs/RUN_ID`에 최신 `If-Match`와 `{"confirm": true}`를 요구합니다. 별도로 보관한 백업·다운로드 파일과 Git 커밋에 남은 내용은 이 작업 기록 삭제의 대상이 아닙니다.
+
 ## API·Dispatcher와 GUI 개발
 
 CLI 기본 DB는 스키마 2를 사용하며 웹·큐는 스키마 5가 필요합니다. API 시작만으로 기존 DB를 자동 업그레이드하지 않습니다. 아래 명령은 같은 `config.yaml`을 공유합니다.

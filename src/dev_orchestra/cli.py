@@ -122,6 +122,24 @@ def cleanup(ctx: typer.Context, run_id: str):
 
 @app.command()
 @guarded
+def delete(
+    ctx: typer.Context,
+    run_id: str,
+    yes: bool = typer.Option(False, "--yes", help="Confirm permanent record and file deletion"),
+):
+    if not yes:
+        typer.confirm(
+            "작업 기록·로그·보고서·승인 근거와 Worktree를 영구 삭제합니다. "
+            "원본 저장소와 작업 브랜치는 보존합니다. 계속할까요?",
+            abort=True,
+        )
+    run = ctx.obj.queries.get(run_id)
+    ctx.obj.delete(run_id, run["version"], confirm=True)
+    typer.echo("작업 기록 삭제 완료; 원본 저장소와 작업 브랜치는 보존했습니다")
+
+
+@app.command()
+@guarded
 def report(ctx: typer.Context, run_id: str):
     typer.echo(ctx.obj.report(run_id))
 

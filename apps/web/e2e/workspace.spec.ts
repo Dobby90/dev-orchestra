@@ -343,6 +343,43 @@ test("실제 로컬 API: 로그인 → 프로젝트 → 실행 → 재연결 →
     path: "test-results/run-completed.png",
     fullPage: true,
   });
+  const branch = execFileSync(
+    f.python,
+    [
+      "-c",
+      "import sqlite3,json,sys;print(json.loads(sqlite3.connect(sys.argv[1]).execute('SELECT data FROM runs WHERE id=?',(sys.argv[2],)).fetchone()[0])['branch'])",
+      f.database,
+      rid,
+    ],
+    { encoding: "utf8" },
+  ).trim();
+  await page
+    .getByRole("button", { name: "작업 기록 삭제", exact: true })
+    .click();
+  await expect(page.getByRole("dialog")).toContainText("로그·보고서");
+  await expect(page.getByRole("dialog")).toContainText("승인 근거");
+  expect((await new AxeBuilder({ page }).analyze()).violations).toEqual([]);
+  await page.getByRole("button", { name: "영구 삭제 확인" }).click();
+  await expect(page).toHaveURL("/");
+  await expect(page.getByRole("link", { name: rid, exact: true })).toHaveCount(
+    0,
+  );
+  expect(
+    execFileSync("git", ["-C", f.repo, "rev-parse", "refs/heads/" + branch], {
+      encoding: "utf8",
+    }).trim(),
+  ).toBe(sha);
+  const deleted = execFileSync(
+    f.python,
+    [
+      "-c",
+      "import sqlite3,sys;c=sqlite3.connect(sys.argv[1]);assert not c.execute('PRAGMA foreign_key_check').fetchall();print(c.execute('SELECT count(*) FROM runs WHERE id=?',(sys.argv[2],)).fetchone()[0])",
+      f.database,
+      rid,
+    ],
+    { encoding: "utf8" },
+  ).trim();
+  expect(deleted).toBe("0");
   await page.setViewportSize({ width: 390, height: 844 });
   await expect(page.getByRole("button", { name: "메뉴 열기" })).toBeVisible();
   await page.getByRole("button", { name: "메뉴 열기" }).click();

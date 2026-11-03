@@ -131,4 +131,6 @@ class EventService:
 
     def high_water(self):
         with self.store.connection() as db:
-            return db.execute("SELECT coalesce(max(id),0) FROM events").fetchone()[0]
+            return db.execute(
+                "SELECT coalesce((SELECT seq FROM sqlite_sequence WHERE name='events'),0)"
+            ).fetchone()[0]

@@ -124,6 +124,8 @@ class Store:
             if expected_version is not None and row["version"] != expected_version:
                 raise PipelineError("concurrent state update")
             data = {**json.loads(row["data"]), **changes}
+            if json.loads(row["data"]).get("deletion_pending"):
+                raise PipelineError("run deletion is pending; retry deletion")
             target = state or row["state"]
             State(target)
             active = {
@@ -229,7 +231,8 @@ class Store:
     def control(self, run_id, value, expected_version=None):
         if value not in {None, "pause", "cancel"}:
             raise PipelineError("invalid control request")
-        self.get(run_id)
+        if self.get(run_id).get("deletion_pending"):
+            raise PipelineError("run deletion is pending; retry deletion")
         with self.connection() as db:
             if self._transaction.get() is None:
                 db.execute("BEGIN IMMEDIATE")

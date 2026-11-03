@@ -41,9 +41,9 @@ class RunQueryService:
             value = RunSummary.model_validate(
                 {k: v for k, v in data.items() if k in RunSummary.model_fields}
             ).model_dump(mode="json")
-            value["event_cursor"] = db.execute("SELECT coalesce(max(id),0) FROM events").fetchone()[
-                0
-            ]
+            value["event_cursor"] = db.execute(
+                "SELECT coalesce((SELECT seq FROM sqlite_sequence WHERE name='events'),0)"
+            ).fetchone()[0]
             value["project_id"] = row["project_id"] if "project_id" in row.keys() else None
             from dev_orchestra.infrastructure.process import sanitize
 

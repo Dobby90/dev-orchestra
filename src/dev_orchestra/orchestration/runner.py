@@ -387,7 +387,17 @@ class Runner:
             self.store.update(run_id, **changes)
 
     def report(self, run_id):
+        self.store.get(run_id)
+        # Keep the lock outside the removable run directory. A report that read
+        # old state must never recreate files after a concurrent deletion.
+        report_lock = self.store.path.parent / ".run-deletions" / (run_id + ".report.lock")
+        with lock(report_lock, wait=True):
+            self._report(run_id)
+
+    def _report(self, run_id):
         run = self.store.get(run_id)
+        if run.get("deletion_pending"):
+            raise PipelineError("run deletion is pending; retry deletion")
         steps = self.store.steps(run_id)
         summary = {
             k: run.get(k)
