@@ -370,9 +370,8 @@ function RunDetailBody({ rid }: { rid: string }) {
         </p>
       )}
       {openError && <ErrorNotice error={openError} />}
-      {r.test_change_pending && !r.deletion_pending && (
-        <TestChangePanel run={r} />
-      )}
+      {(r.test_change_pending || r.test_change_count > 0) &&
+        !r.deletion_pending && <TestChangePanel run={r} />}
       {opening && (
         <p role="status" className="help">
           최신 실행 상태 확인 중…
@@ -669,8 +668,8 @@ function RunDetailBody({ rid }: { rid: string }) {
               <>
                 {action.run.test_change_pending && (
                   <p className="help">
-                    승인된 패치를 그대로 재개합니다. 추가 지시는 테스트 변경
-                    제안을 반려한 뒤 전달하세요.
+                    보관된 변경으로 테스트·리뷰를 이어갑니다. 추가 지시는 검증을
+                    완료한 뒤 전달하세요.
                   </p>
                 )}
                 <label>

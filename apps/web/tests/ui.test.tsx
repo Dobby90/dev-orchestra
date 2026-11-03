@@ -34,6 +34,7 @@ const p: Project = {
 const detail: Schema["RunDetail"] = {
   deletion_pending: false,
   test_change_pending: false,
+  test_change_count: 0,
   schema_version: 1,
   revision: 0,
   validation: { status: "valid", revision: 0 },

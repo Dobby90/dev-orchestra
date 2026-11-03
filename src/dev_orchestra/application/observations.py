@@ -129,14 +129,10 @@ def observe(store, run):
             run["state"] in {"paused", "failed", "needs_input"}
             and not execution["worktree_removed"]
         ):
-            if not run.get("test_change_proposal"):
+            if not pending_control:
                 actions.append("resume")
-            elif not pending_control:
+            if run.get("test_change_proposal") and not pending_control:
                 actions.append("reject-test-changes")
-                if run["test_change_proposal"].get("approval"):
-                    actions.append("resume")
-                else:
-                    actions.append("approve-test-changes")
         if run["state"] == "waiting_approval":
             actions.extend(["defer", "issue-disposition"])
             if validation["status"] == "valid":

@@ -256,8 +256,9 @@ export function ProjectForm({
             </dd>
             <dt>tests.write_paths</dt>
             <dd>
-              새 테스트 파일을 추가할 수 있는 상대 경로입니다. 기존 테스트
-              수정은 허용하지 않습니다.
+              테스트 파일을 추가·수정할 수 있는 상대 경로입니다. 기존 테스트는
+              요구사항에 따른 변경 근거를 검증한 뒤 자동 수정하며 독립 리뷰에서
+              회귀 검사의 삭제·약화 여부를 확인합니다.
             </dd>
             <dt>tests.output_paths</dt>
             <dd>

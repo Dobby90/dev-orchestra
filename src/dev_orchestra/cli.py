@@ -95,7 +95,7 @@ def resume(
 @app.command("test-changes")
 @guarded
 def test_changes(ctx: typer.Context, run_id: str):
-    """승인 대기 중인 기존 테스트 변경 사유와 전체 패치를 조회합니다."""
+    """자동 수정한 기존 테스트의 변경 근거와 전체 패치를 조회합니다."""
     from dev_orchestra.application.test_changes import TestChangeService
 
     typer.echo(

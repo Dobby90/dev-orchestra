@@ -103,12 +103,12 @@ class RunService:
             raise PipelineError("cleanup is in progress")
         if run["state"] in {"completed", "cancelled", "waiting_approval"}:
             raise PipelineError("run is not resumable")
-        if run.get("test_change_proposal") and not run["test_change_proposal"].get("approval"):
-            raise PipelineError("review and approve or reject the pending test change proposal")
-        if run.get("test_change_proposal") and answers and answers.strip():
+        if run.get("test_change_application") and answers and answers.strip():
             raise PipelineError(
-                "reject the approved test change proposal before adding instructions"
+                "finish validation of the applied test changes before adding instructions"
             )
+        if run.get("test_change_proposal") and answers and answers.strip():
+            raise PipelineError("discard the saved test change proposal before adding instructions")
         ensure_stopped(Path(run["directory"]))
         checkpoints(self.store, run)
         changes = {}

@@ -4,9 +4,7 @@ import { execFileSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 
-test("기존 테스트 변경: 전체 패치 검토 → 승인 → 실제 검증 → 최종 승인", async ({
-  page,
-}) => {
+test("기존 테스트 변경: 자동 수정·실제 검증 → 최종 승인", async ({ page }) => {
   const f = JSON.parse(readFileSync("test-results/fixture.json", "utf8")) as {
     repo: string;
     database: string;
@@ -65,7 +63,8 @@ import json,sys
 from pathlib import Path
 from dev_orchestra.application.service import RunService
 from dev_orchestra.config import load_config
-from dev_orchestra.domain.models import AgentResult,Criterion,TestChange
+from dev_orchestra.domain.models import AgentResult,Criterion,TestChange,Coverage,ReviewResultV2
+from dev_orchestra.infrastructure.test_runner import TestRunner
 from dev_orchestra.orchestration.runner import Runner
 repo=Path(sys.argv[2]);spec=repo.parent/'test-change-prd.md';spec.write_text('덧셈의 0 입력 회귀 검사를 추가하세요.')
 svc=RunService(load_config(Path(sys.argv[1])));rid=svc.create(repo,spec)
@@ -73,10 +72,12 @@ with svc.store.connection() as db:db.execute('UPDATE runs SET project_id=? WHERE
 class Agent:
  def run(self,request,*args):
   if request.role=='planner':return AgentResult(summary='계획',plan='0 입력 회귀 검사 추가',criteria=[Criterion(id='AC1',description='덧셈의 0 입력 검증')])
+  if request.role=='tester':return AgentResult(summary='전체 테스트',command_ids=['unit'],coverage=[Coverage(criterion_id='AC1',command_ids=['unit'])])
+  if request.role=='reviewer':return ReviewResultV2(summary='기존 검사를 보존하는 요구사항 기반 확장 확인')
   patch='--- a/tests/test_main.py\\n+++ b/tests/test_main.py\\n@@ -1,3 +1,4 @@\\n from main import add\\n def test_add():\\n     assert add(2, 3) == 5\\n+    assert add(0, 0) == 0\\n'
   return AgentResult(summary='기존 테스트 확장',patch=patch,test_changes=[TestChange(file='tests/test_main.py',criterion_ids=['AC1'],reason='기존 덧셈 검사를 보존하고 0 입력 경계값 검사를 추가합니다.')])
-Runner(svc.store,Agent(),None).execute(rid)
-run=svc.store.get(rid);assert run['state']=='needs_input',run.get('error')
+Runner(svc.store,Agent(),TestRunner()).execute(rid)
+run=svc.store.get(rid);assert run['state']=='waiting_approval',run.get('error')
 print(json.dumps({'id':rid,'worktree':run['worktree']}))
 `,
         f.config,
@@ -87,31 +88,30 @@ print(json.dumps({'id':rid,'worktree':run['worktree']}))
     ),
   );
   const target = join(pending.worktree, "tests/test_main.py");
-  expect(readFileSync(target, "utf8")).not.toContain("add(0, 0)");
+  expect(readFileSync(target, "utf8")).toContain("add(0, 0)");
   await page.goto(`/runs/${pending.id}`);
   await expect(
-    page.getByRole("heading", { name: "기존 테스트 변경 검토" }),
+    page.getByRole("heading", { name: "기존 테스트 변경 내역" }),
   ).toBeVisible();
   await expect(
-    page.getByRole("button", { name: "재개", exact: true }),
-  ).toBeDisabled();
-  await page
-    .getByRole("button", { name: "테스트 변경 승인", exact: true })
-    .click();
-  const dialog = page.getByRole("dialog");
-  await expect(dialog.locator("pre")).toContainText(
+    page.getByText(
+      "기존 덧셈 검사를 보존하고 0 입력 경계값 검사를 추가합니다.",
+      { exact: true },
+    ),
+  ).toBeVisible();
+  await expect(
+    page.getByRole("button", { name: "테스트 변경 승인", exact: true }),
+  ).toHaveCount(0);
+  await page.getByText("제품·테스트 전체 패치 보기", { exact: true }).click();
+  await expect(page.locator(".test-change-patch")).toContainText(
     "+    assert add(0, 0) == 0",
   );
   expect((await new AxeBuilder({ page }).analyze()).violations).toEqual([]);
   await page.screenshot({
-    path: "test-results/test-change-approval.png",
+    path: "test-results/test-change-automatic.png",
     fullPage: true,
   });
-  await dialog.getByRole("button", { name: "승인하고 재개" }).click();
-  await expect(page.locator(".page-heading .status")).toHaveText("승인 대기", {
-    timeout: 45000,
-  });
-  expect(readFileSync(target, "utf8")).toContain("add(0, 0)");
+  await expect(page.locator(".page-heading .status")).toHaveText("승인 대기");
   expect(readFileSync(join(repo, "tests/test_main.py"), "utf8")).not.toContain(
     "add(0, 0)",
   );

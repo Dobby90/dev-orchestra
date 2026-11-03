@@ -1,4 +1,4 @@
-"""Exact-patch approval for requirement-driven edits to protected tests."""
+"""Requirement-bound test change evidence, with legacy proposal compatibility."""
 
 import json
 import uuid
@@ -28,7 +28,7 @@ class TestChangeService:
     def __init__(self, store):
         self.store = store
 
-    def propose(self, run, result, paths, step_dir):
+    def explanations(self, run, result, paths):
         changes = [c.model_dump() for c in result.test_changes]
         criteria = {c["id"] for c in run["criteria"]}
         if (
@@ -45,6 +45,67 @@ class TestChangeService:
         payload = sanitize(result.model_dump())
         if payload["patch"] != result.patch:
             raise PipelineError("protected test patch contains redacted data")
+        return payload
+
+    def prepare(self, run, result, paths):
+        payload = self.explanations(run, result, paths)
+        record = {
+            "id": "test-change-" + uuid.uuid4().hex,
+            "run_id": run["id"],
+            "role": run["next_role"],
+            "iteration": run.get("iteration", 0),
+            "revision": run.get("revision", 0),
+            "input_sha": run["current_sha"],
+            "patch_hash": digest(result.patch.encode()),
+            "policy_hash": checksum(run["config"]["tests"]),
+            "criteria_hash": checksum(run["criteria"]),
+            "task_hash": task_hash(run),
+            "changes": payload["test_changes"],
+            "created_at": now(),
+        }
+        record["record_hash"] = checksum(record)
+        return record
+
+    def applied_result(self, run):
+        application = run["test_change_application"]
+        artifact = contained(Path(run["directory"]), application["artifact"])
+        raw = artifact.read_bytes()
+        if digest(raw) != application["hash"]:
+            raise PipelineError("applied test change result checksum mismatch")
+        payload = json.loads(raw)
+        result = AgentResult.model_validate(payload["result"])
+        record = payload["record"]
+        approval = payload.get("approval")
+        if (
+            checksum({k: v for k, v in record.items() if k != "record_hash"})
+            != record["record_hash"]
+            or record not in run.get("test_change_records", [])
+            or record["run_id"] != run["id"]
+            or record["role"] != run["next_role"]
+            or record["iteration"] != run.get("iteration", 0)
+            or record["revision"] != run.get("revision", 0)
+            or record["policy_hash"] != checksum(run["config"]["tests"])
+            or record["criteria_hash"] != checksum(run["criteria"])
+            or record["task_hash"] != task_hash(run)
+            or record["patch_hash"] != digest(result.patch.encode())
+            or record["changes"] != [change.model_dump() for change in result.test_changes]
+            or payload["sha"] != run["current_sha"]
+            or application["input_sha"] != record["input_sha"]
+        ):
+            raise PipelineError("applied test change no longer matches run context")
+        if approval and (
+            approval not in run.get("test_change_approvals", [])
+            or any(
+                approval[key] != record[key]
+                for key in ["patch_hash", "input_sha", "role", "iteration", "revision"]
+            )
+        ):
+            raise PipelineError("applied test change approval evidence mismatch")
+        return result, record, approval
+
+    def propose(self, run, result, paths, step_dir):
+        # Kept for decisions on proposals persisted by earlier versions.
+        payload = self.explanations(run, result, paths)
         artifact = step_dir / "test-change-result.json"
         result_hash = write(artifact, payload)
         proposal = {
@@ -108,10 +169,38 @@ class TestChangeService:
 
     def view(self, run_id):
         run = self.store.get(run_id)
+        history = []
+        error = None
+        try:
+            checkpoints(self.store, run)
+            for step in self.store.steps(run_id):
+                if not step["data"].get("artifact"):
+                    continue
+                payload = json.loads(Path(step["data"]["artifact"]).read_text())
+                record = payload.get("test_change_record")
+                if record:
+                    history.append(
+                        {
+                            k: record[k]
+                            for k in ["id", "role", "iteration", "revision", "input_sha", "changes"]
+                        }
+                        | {"output_sha": payload["sha"], "patch": payload["patch"]}
+                    )
+            if run.get("test_change_application"):
+                result, record, _ = self.applied_result(run)
+                history.append(
+                    {
+                        k: record[k]
+                        for k in ["id", "role", "iteration", "revision", "input_sha", "changes"]
+                    }
+                    | {"output_sha": run["current_sha"], "patch": result.patch}
+                )
+        except (PipelineError, OSError, ValueError, KeyError):
+            error = "기존 테스트 변경 근거를 확인할 수 없습니다. 실행 산출물을 확인하세요."
         if not run.get("test_change_proposal"):
-            return {"proposal": None, "error": None}
+            return {"proposal": None, "error": error, "history": history}
         proposal = run["test_change_proposal"]
-        error, patch = None, ""
+        patch = ""
         try:
             _, result = self.load(run)
             patch = result.patch
@@ -136,6 +225,7 @@ class TestChangeService:
             }
             | {"patch": patch, "approved": bool(proposal.get("approval"))},
             "error": error,
+            "history": history,
         }
 
     def verify(self, run, proposal_hash, input_sha, *, approve=True):

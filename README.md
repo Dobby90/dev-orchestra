@@ -101,7 +101,7 @@ CLI에서는 설정의 `tests.commands`를 대상 프로젝트에 맞게 수정�
 - `working_directory`: 명령을 실행할 저장소 기준 상대 경로이며 기본값은 `.`입니다. `junit_report`, `tests.write_paths`, `tests.output_paths`는 작업 경로와 관계없이 저장소 루트를 기준으로 지정합니다.
 - `network`: 기본값 `none`은 네트워크를 차단합니다. macOS의 `loopback`은 브라우저 검사·Gradle 내부 통신에 필요한 localhost 통신을 허용하고 외부 네트워크는 차단합니다. 서버 주소는 `127.0.0.1`을 사용하세요. Linux의 loopback 모드는 모델 호출 전에 실행을 거부하며 일반 오프라인 검증은 기존 격리를 유지합니다.
 - `env`: 명령별 `JAVA_HOME`, `PLAYWRIGHT_JUNIT_OUTPUT_FILE`, `PLAYWRIGHT_BROWSERS_PATH`만 지정할 수 있습니다. JDK·의존성·브라우저는 미리 준비하세요. Java 예시는 Worktree의 `.devorchestra-cache`를 사용하며 Wrapper 배포본·오프라인 캐시도 필요합니다.
-- `tests.write_paths`: Test Agent가 테스트 파일을 추가할 수 있는 경로이며 기존 테스트 보호 범위입니다. 기존 파일에 내용을 추가하는 경우도 정확한 패치 승인이 필요합니다.
+- `tests.write_paths`: 테스트 파일을 추가·수정할 수 있는 경로이며 기존 테스트 변경 근거의 검증 범위입니다. 기존 파일에 내용을 추가하는 경우도 변경 사유와 인수 조건 ID를 검증합니다.
 - `tests.output_paths`: 테스트 격리 중 쓰기를 허용하는 빌드·보고서 경로입니다. Git이 추적하는 소스 파일이 포함된 디렉터리는 허용하지 않습니다.
 - `storage`: 기본 위치는 저장소 외부의 `~/.devorchestra`입니다. DB·실행 산출물·Worktree를 대상 저장소 내부에 두면 실행을 거부합니다. 상대 저장 경로는 YAML 파일 위치를 기준으로 해석합니다.
 - `codex.model`·`codex.reasoning_effort`: 공통 모델과 추론 강도입니다. `codex.roles`의 `planner`·`developer`·`tester`·`reviewer`·`fixer`에서 각각 `model`·`reasoning_effort`를 재정의하며, `null`은 공통값을 상속합니다. 공통값도 `null`이면 Codex 기본값을 사용합니다. 실행은 `--ignore-user-config`를 사용하므로 개인 Codex 설정 파일의 값을 상속하지 않습니다.
@@ -153,18 +153,20 @@ queued → preparing → planning → developing → testing → reviewing
 
 재개할 때 입력한 답변은 기존 지시와 함께 누적되고, 해당 질문과 연결해 모든 역할에 전달됩니다. 답변한 질문은 화면에서 해제되며, 플래닝 중 작성한 잠정 계획도 다음 시도에 전달합니다. 플래너는 확정된 사항을 다시 확인하지 않고 구현을 막는 미해결 사항만 질문합니다. 변경 전에 덮어써진 과거 답변은 자동 복원되지 않으므로 필요한 합의는 다시 입력하세요.
 
-각 역할은 새 읽기 전용 Codex 세션에서 구조화된 결과를 반환합니다. 호스트가 unified diff를 검증·적용하며 기존 테스트는 모든 변경 역할에서 기본 보호합니다. 추가 검사는 새 테스트 파일로 작성합니다. 요구사항 변경으로 기존 기대값 수정이 필요한 경우에는 변경 사유와 인수 조건 ID를 포함한 제안을 생성하고, 제품·테스트 패치 전체를 적용하지 않은 채 `needs_input`에서 기다립니다. GUI의 **기존 테스트 변경 검토**에서 전체 diff를 검토한 뒤 승인하거나 사유를 적어 반려할 수 있습니다.
+각 역할은 새 읽기 전용 Codex 세션에서 구조화된 결과를 반환합니다. 호스트가 unified diff를 검증·적용합니다. 요구사항 변경으로 기존 테스트의 기대값을 수정하거나 검사를 추가해야 하면, 에이전트는 변경 사유와 인수 조건 ID를 `test_changes`로 함께 반환합니다. 호스트는 파일별 변경 근거·패치·테스트 명령·인수 조건 커버리지를 적용 전에 검증하고 중간 승인 없이 자동 진행합니다. 테스트 변경을 이유로 `needs_input`에 진입하지 않으며 전체 설정 테스트와 독립 리뷰를 거쳐 최종 승인만 받습니다.
 
-테스트 변경 승인은 Run ID·입력 SHA·revision·패치 체크섬에 연결됩니다. 승인 시 보관된 정확한 패치를 재검증해 적용하고 전체 설정 테스트와 독립 리뷰를 진행합니다. 패치·기준 HEAD·검증 정책·인수 조건·요구사항·추가 지시가 바뀌면 기존 승인으로 적용하지 않습니다. 일반 `resume` 답변은 승인을 대신하지 않으며, 승인한 패치에 추가 지시가 필요하면 반려 후 다시 작성합니다. 최종 승인은 테스트·리뷰 통과 후 별도로 필요합니다. 반려하면 패치를 적용하지 않고 사유를 전달해 해당 단계에서 다시 작성합니다. CLI 기본 스키마 2에서도 같은 절차를 사용할 수 있습니다.
+기존 테스트 변경 근거는 Run ID·입력 SHA·revision·패치 체크섬에 연결해 보존하고 다음 역할에도 전달합니다. 독립 리뷰는 변경된 기대값이 요구사항에 맞는지와 회귀 검사 삭제·skip·검증 약화 여부를 확인합니다. GUI의 **기존 테스트 변경 내역**과 최종 보고서에서 사유·인수 조건을 확인하고 전체 diff와 테스트·리뷰 결과를 검토한 뒤 최종 승인하세요. 변경 근거가 누락되거나 손상되면 적용·최종 승인을 차단합니다.
+
+기존 테스트 패치 적용 후 테스트가 일시정지되거나 실행 오류로 중단되면 적용 결과와 체크섬을 보존합니다. 일반 `resume`으로 같은 패치를 다시 생성·적용하지 않고 검증을 재시도합니다. 보관된 결과·현재 HEAD·정책·요구사항이 바뀌면 재사용하지 않습니다. 적용 후 검증 대기 중에는 추가 지시를 섞지 않고 먼저 검증을 완료합니다. 환경 오류나 JUnit 누락은 정상 통과로 처리하지 않으며 원인을 해결한 뒤 재개합니다.
 
 ```sh
 devorchestra --config config.yaml test-changes RUN_ID
-# 조회 결과의 proposal_hash와 input_sha를 사용합니다.
-devorchestra --config config.yaml approve-test-changes RUN_ID --proposal-hash PROPOSAL_HASH --input-sha INPUT_SHA --detach
-devorchestra --config config.yaml reject-test-changes RUN_ID --proposal-hash PROPOSAL_HASH --input-sha INPUT_SHA --reason "관련 없는 회귀 검사를 유지하세요" --detach
+devorchestra --config config.yaml resume RUN_ID --detach
 ```
 
-승인 절차가 있어도 테스트 삭제·skip·검증 약화나 명령 변경은 허용하지 않습니다. Test Agent는 제품 코드를 변경할 수 없습니다. 파일 삭제·이름 변경, 바이너리 패치, 심볼릭 링크, 권한 변경은 자동 적용하지 않습니다. 자동 수정 중 Planning에서 확정한 인수 조건을 바꾸지 않습니다.
+이전 버전에서 중간 승인 대기 중이던 제안도 일반 `resume` 시 보관한 정확한 패치와 실행 기준을 검증해 자동 적용합니다. 이전 승인을 받은 제안은 그 승인 근거도 유지합니다. 구버전 CLI·API의 `approve-test-changes`와 `reject-test-changes`는 기존 제안과의 호환성을 위해 남아 있지만 새 실행은 이 승인을 요구하지 않습니다. 보관한 제안에 추가 지시가 필요하거나 제안이 손상됐다면 `reject-test-changes RUN_ID --proposal-hash PROPOSAL_HASH --input-sha INPUT_SHA --reason "수정 지시"`로 폐기하고 다시 작성할 수 있습니다.
+
+자동 테스트 수정에서도 테스트 삭제·skip·검증 약화나 명령 변경은 허용하지 않습니다. Test Agent는 제품 코드를 변경할 수 없습니다. 파일 삭제·이름 변경, 바이너리 패치, 심볼릭 링크, 권한 변경은 자동 적용하지 않습니다. 자동 수정 중 Planning에서 확정한 인수 조건을 바꾸지 않습니다.
 
 승인은 현재 HEAD·작업 트리·테스트·리뷰·체크포인트와 검증 산출물의 무결성이 모두 확인된 후보에만 적용합니다. 리뷰 V2의 이슈 해결에는 같은 후보 SHA·revision의 새 테스트와 명시적 재검증 근거가 필요하며, 이전 리뷰에서 빠졌다고 자동 해결하지 않습니다. 차단 이슈는 사용자 분류로 우회할 수 없습니다.
 

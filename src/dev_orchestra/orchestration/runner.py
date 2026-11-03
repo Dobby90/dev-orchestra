@@ -14,7 +14,7 @@ from dev_orchestra.infrastructure.evidence import checkpoints, verified_candidat
 from dev_orchestra.infrastructure.files import contained, digest, write
 from dev_orchestra.infrastructure.git import Git
 from dev_orchestra.infrastructure.locking import lock
-from dev_orchestra.infrastructure.process import execution_scope, redact
+from dev_orchestra.infrastructure.process import execution_scope, redact, sanitize
 from dev_orchestra.infrastructure.process_owner import ensure_stopped, identity
 
 STATES = {
@@ -196,7 +196,12 @@ class Runner:
                     raise PipelineError("checkpoint artifact checksum mismatch")
                 payload = json.loads(artifact.read_text())
             else:
-                step_id, attempt = self.store.start_step(run_id, role, iteration, sha)
+                step_id, attempt = self.store.start_step(
+                    run_id,
+                    role,
+                    iteration,
+                    (run.get("test_change_application") or {}).get("input_sha", sha),
+                )
                 step_dir = (
                     directory / "iterations" / f"{iteration:03}" / role / f"attempt-{attempt:03}"
                 )
@@ -210,6 +215,7 @@ class Runner:
                     "test_paths": config.tests.write_paths,
                     "test_commands": {k: v.model_dump() for k, v in config.tests.commands.items()},
                     "approved_test_changes": run.get("test_change_approvals", []),
+                    "test_change_records": run.get("test_change_records", []),
                     "validation_policy": {
                         "immutable_for_run": True,
                         "change_target": "project validation settings (GUI) or tests in the CLI YAML config",
@@ -236,11 +242,17 @@ class Runner:
                     input_sha=sha,
                     context=context,
                 )
-                approval = None
-                if run.get("test_change_proposal"):
-                    result, approval = TestChangeService(self.store).approved_result(run)
-                    if sha != approval["input_sha"]:
-                        raise PipelineError("approved test change input SHA changed")
+                approval, record = None, None
+                test_changes = TestChangeService(self.store)
+                if run.get("test_change_application"):
+                    result, record, approval = test_changes.applied_result(run)
+                elif run.get("test_change_proposal"):
+                    if run["test_change_proposal"].get("approval"):
+                        result, approval = test_changes.approved_result(run)
+                    else:
+                        _, result = test_changes.load(run)
+                    if sha != run["test_change_proposal"]["input_sha"]:
+                        raise PipelineError("saved test change input SHA changed")
                 else:
                     result = self.agent.run(
                         request, step_dir, lambda: self.store.get(run_id)["control"]
@@ -274,18 +286,28 @@ class Runner:
                             raise PipelineError("review finding has invalid source location")
                         if not issue.evidence.strip():
                             raise PipelineError("review finding requires evidence")
-                try:
-                    patched_paths = apply_patch(
-                        worktree,
-                        result.patch,
-                        role,
-                        config.tests.write_paths,
-                        approved_patch_hash=approval["patch_hash"] if approval else None,
+                if role == "tester":
+                    self.validate_test_result(run, result, config)
+                if not run.get("test_change_application"):
+                    try:
+                        patched_paths = apply_patch(
+                            worktree, result.patch, role, config.tests.write_paths
+                        )
+                    except TestChangesRequired as error:
+                        record = test_changes.prepare(run, result, error.paths)
+                        patched_paths = apply_patch(
+                            worktree,
+                            result.patch,
+                            role,
+                            config.tests.write_paths,
+                            approved_patch_hash=approval["patch_hash"] if approval else None,
+                            validated_patch_hash=record["patch_hash"],
+                        )
+                    out_sha = git.commit(
+                        f"자동 개발: {run_id} {role} 회차 {iteration} 단계 {step_id}"
                     )
-                except TestChangesRequired as error:
-                    TestChangeService(self.store).propose(run, result, error.paths, step_dir)
-                    return
-                out_sha = git.commit(f"자동 개발: {run_id} {role} 회차 {iteration} 단계 {step_id}")
+                else:
+                    out_sha, patched_paths = sha, []
                 if patched_paths:
                     tracked = set(
                         git.call("ls-files", "--cached", "-z", "--", *patched_paths).split("\0")
@@ -301,22 +323,43 @@ class Runner:
                         "--",
                         *patched_paths,
                     )
-                self.store.update(run_id, current_sha=out_sha)
+                if record and not run.get("test_change_application"):
+                    application_path = step_dir / "applied-test-change.json"
+                    application_hash = write(
+                        application_path,
+                        {
+                            "result": sanitize(result.model_dump()),
+                            "record": record,
+                            "approval": approval,
+                            "sha": out_sha,
+                        },
+                    )
+                    with self.store.transaction() as db:
+                        self.store.update(
+                            run_id,
+                            current_sha=out_sha,
+                            test_change_proposal=None,
+                            test_change_records=[*run.get("test_change_records", []), record],
+                            test_change_application={
+                                "input_sha": record["input_sha"],
+                                "artifact": str(application_path.relative_to(directory)),
+                                "hash": application_hash,
+                            },
+                        )
+                        self.store._event(
+                            db,
+                            run_id,
+                            "test_changes.applied",
+                            {"record_id": record["id"], "sha": out_sha},
+                        )
+                else:
+                    self.store.update(run_id, current_sha=out_sha)
                 payload = result.model_dump() | {"sha": out_sha, "revision": run.get("revision", 0)}
                 if approval:
                     payload["test_change_approval"] = approval
+                if record:
+                    payload["test_change_record"] = record
                 if role == "tester":
-                    ids = set(config.tests.commands)
-                    if set(result.command_ids) != ids:
-                        raise PipelineError("tester must select all configured test commands")
-                    criteria = {c["id"] for c in run["criteria"]}
-                    test_ids = {k for k, v in config.tests.commands.items() if v.kind == "test"}
-                    coverage = {c.criterion_id: c.command_ids for c in result.coverage}
-                    if set(coverage) != criteria or any(
-                        not v or not set(v) <= ids or not set(v) & test_ids
-                        for v in coverage.values()
-                    ):
-                        raise PipelineError("missing acceptance criterion test coverage")
                     payload["execution"] = self.tests.run(
                         worktree, config.tests, step_dir, lambda: self.store.get(run_id)["control"]
                     )
@@ -324,8 +367,6 @@ class Runner:
                         raise PipelineError(
                             "test execution modified tracked source or created untracked files"
                         )
-                from dev_orchestra.infrastructure.process import sanitize
-
                 payload = sanitize(payload)
                 artifact = step_dir / "result.json"
                 from dev_orchestra.application.results import Results
@@ -337,7 +378,7 @@ class Runner:
                     "timeout",
                 }
                 atomic_result = (
-                    bool(approval)
+                    bool(record)
                     or results.enabled()
                     and (
                         role == "tester" or (role == "reviewer" and run.get("review_contract") == 2)
@@ -364,14 +405,8 @@ class Runner:
                         self.store.finish_step(step_id, out_sha, evidence, status="failed")
                     else:
                         self.store.finish_step(step_id, out_sha, evidence)
-                    if approval:
-                        self.store.update(run_id, test_change_proposal=None)
-                        self.store._event(
-                            db,
-                            run_id,
-                            "test_changes.applied",
-                            {"proposal_id": approval["proposal_id"], "sha": out_sha},
-                        )
+                    if record:
+                        self.store.update(run_id, test_change_application=None)
                 write(directory / FILES[role], payload)
                 if failed_test:
                     self.store.update(
@@ -385,6 +420,21 @@ class Runner:
             self.advance(run_id, role, payload, config)
             if self.store.get(run_id)["state"] == "needs_input":
                 return
+
+    @staticmethod
+    def validate_test_result(run, result, config):
+        ids = set(config.tests.commands)
+        if set(result.command_ids) != ids:
+            raise PipelineError("tester must select all configured test commands")
+        criteria = {c["id"] for c in run["criteria"]}
+        test_ids = {k for k, v in config.tests.commands.items() if v.kind == "test"}
+        coverage = {c.criterion_id: c.command_ids for c in result.coverage}
+        if (
+            len(result.coverage) != len(criteria)
+            or set(coverage) != criteria
+            or any(not v or not set(v) <= ids or not set(v) & test_ids for v in coverage.values())
+        ):
+            raise PipelineError("missing acceptance criterion test coverage")
 
     def advance(self, run_id, role, payload, config):
         run = self.store.get(run_id)
@@ -467,6 +517,11 @@ class Runner:
         content += "\n\n## Requirements\n\n" + run["spec"]
         if run.get("directives"):
             content += "\n\n## User change requests\n\n" + "\n\n".join(run["directives"])
+        if run.get("test_change_records"):
+            content += "\n\n## 기존 테스트 변경\n\n최종 승인 전에 전체 Diff와 다음 변경 근거를 확인하세요.\n\n"
+            for record in run["test_change_records"]:
+                for change in record["changes"]:
+                    content += f"- `{change['file']}` ({', '.join(change['criterion_ids'])}): {change['reason']}\n"
         content += "\n\n## Implementation and verification history\n\n"
         for step in steps:
             content += f"- {step['role']} iteration={step['iteration']} attempt={step['attempt']} {step['status']} SHA={step['output_sha']}\n"

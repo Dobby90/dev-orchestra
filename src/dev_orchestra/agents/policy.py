@@ -16,18 +16,26 @@ class TestChangesRequired(PipelineError):
     def __init__(self, paths):
         self.paths = paths
         super().__init__(
-            "existing tests are protected from developer/fixer changes and immutable for tester; "
-            "explicit patch approval required: " + ", ".join(paths)
+            "existing tests are protected; requirement-bound test change evidence required: "
+            + ", ".join(paths)
         )
 
 
 def validate_patch(
-    worktree: Path, patch: str, role: str, test_paths: list[str], *, approved_patch_hash=None
+    worktree: Path,
+    patch: str,
+    role: str,
+    test_paths: list[str],
+    *,
+    approved_patch_hash=None,
+    validated_patch_hash=None,
 ):
     if not patch:
         return "", []
     if approved_patch_hash is not None and digest(patch.encode()) != approved_patch_hash:
         raise PipelineError("approved patch checksum mismatch")
+    if validated_patch_hash is not None and digest(patch.encode()) != validated_patch_hash:
+        raise PipelineError("validated patch checksum mismatch")
     # Model diffs occasionally indent section headers or miscount hunks. Git recounts
     # hunk sizes; scope and Git-interpreted filenames are still validated below.
     patch = re.sub(r"(?m)^ +(?=diff --git )", "", patch).rstrip("\n") + "\n"
@@ -78,16 +86,27 @@ def validate_patch(
     actual = [line.split("\t", 2)[2] for line in stats.splitlines()]
     if set(actual) != set(paths):
         raise PipelineError("patch path interpretation mismatch")
-    if protected and approved_patch_hash is None:
+    if protected and approved_patch_hash is None and validated_patch_hash is None:
         raise TestChangesRequired(protected)
     return patch, paths
 
 
 def apply_patch(
-    worktree: Path, patch: str, role: str, test_paths: list[str], *, approved_patch_hash=None
+    worktree: Path,
+    patch: str,
+    role: str,
+    test_paths: list[str],
+    *,
+    approved_patch_hash=None,
+    validated_patch_hash=None,
 ):
     patch, paths = validate_patch(
-        worktree, patch, role, test_paths, approved_patch_hash=approved_patch_hash
+        worktree,
+        patch,
+        role,
+        test_paths,
+        approved_patch_hash=approved_patch_hash,
+        validated_patch_hash=validated_patch_hash,
     )
     if patch:
         Git(worktree).call("apply", "--recount", "--whitespace=error", "-", input=patch)

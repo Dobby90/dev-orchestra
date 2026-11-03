@@ -1474,6 +1474,11 @@ export interface components {
              * @default false
              */
             test_change_pending: boolean;
+            /**
+             * Test Change Count
+             * @default 0
+             */
+            test_change_count: number;
         };
         /** RunPage */
         RunPage: {
@@ -1699,11 +1704,32 @@ export interface components {
             /** Approved */
             approved: boolean;
         };
+        /** TestChangeRecordView */
+        TestChangeRecordView: {
+            /** Id */
+            id: string;
+            /** Role */
+            role: string;
+            /** Iteration */
+            iteration: number;
+            /** Revision */
+            revision: number;
+            /** Input Sha */
+            input_sha: string;
+            /** Output Sha */
+            output_sha: string;
+            /** Changes */
+            changes: components["schemas"]["TestChangeExplanation"][];
+            /** Patch */
+            patch: string;
+        };
         /** TestChangeView */
         TestChangeView: {
             proposal?: components["schemas"]["TestChangeProposalView"] | null;
             /** Error */
             error?: string | null;
+            /** History */
+            history?: components["schemas"]["TestChangeRecordView"][];
         };
         /** TestCommand */
         TestCommand: {

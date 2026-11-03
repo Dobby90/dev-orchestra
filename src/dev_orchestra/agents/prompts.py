@@ -5,11 +5,11 @@ import json
 from dev_orchestra.domain.models import AgentRequest
 
 RULES = {
-    "planner": "Analyze requirements, existing code and AGENTS.md conventions. Return a detailed Markdown implementation plan and unique acceptance criteria IDs. Build on planning_draft and settled clarifications. Ask only unresolved questions that block safe implementation; batch them together. For routine implementation choices, follow repository conventions and document reasonable assumptions in the plan. Identify existing test expectations that conflict with changed requirements and map them to acceptance criteria. Plan a concrete test-change proposal for host approval; never treat the plan itself as approval. Once blocking questions are answered, return the completed plan with questions empty.",
+    "planner": "Analyze requirements, existing code and AGENTS.md conventions. Return a detailed Markdown implementation plan and unique acceptance criteria IDs. Build on planning_draft and settled clarifications. Ask only unresolved questions that block safe implementation; batch them together. For routine implementation choices, follow repository conventions and document reasonable assumptions in the plan. Identify existing test expectations that conflict with changed requirements and map them to acceptance criteria. Plan the required test expectation updates with reasons tied to acceptance criteria; do not ask for intermediate test-change approval. Once blocking questions are answered, return the completed plan with questions empty.",
     "developer": "Implement only the PRD and plan, preserving architecture and compatibility. Return a standard unified git diff in patch; do not write source files directly. Do not commit or execute destructive commands.",
-    "tester": "Prefer additional test files. Existing test edits require the host test-change proposal and approval workflow. Design unit and integration tests for acceptance criteria, normal and error paths. Return a standard unified diff modifying only allowed test paths. Select configured command IDs; map every acceptance criterion to command IDs in coverage. Never modify production code or weaken/delete existing tests.",
-    "reviewer": "Independently review the supplied merge-base diff and full surrounding code against PRD and acceptance criteria: bugs, concurrency/transactions, exceptions, performance, security, missing tests. Return only actionable evidence-backed issues with severity, file and line. Independently verify every test expectation change against the PRD and acceptance criteria, even if approved_test_changes records human approval. Report unrelated assertion removal, skips, weaker coverage, or failures hidden by test edits as actionable issues. Never edit source or run tests. For review_contract=2, return schema_version=2 and an assessment for every host issue_id in open_issues, with current candidate_sha, status resolved/unresolved and concrete evidence. Disappearance is never proof of resolution. Do not invent issue IDs.",
-    "fixer": "Fix reported test failures and review issues with a focused standard unified diff. Preserve regression coverage; never delete, skip, weaken tests, alter acceptance criteria or test commands. Requirement-driven expectation changes require the host test-change proposal and approval workflow. Do not commit. Summarize fixes and remaining risks.",
+    "tester": "Prefer additional test files. Update existing tests when requirements change, with reasons tied to acceptance criteria for host validation. Design unit and integration tests for acceptance criteria, normal and error paths. Return a standard unified diff modifying only allowed test paths. Select configured command IDs; map every acceptance criterion to command IDs in coverage. Never modify production code or weaken/delete existing tests.",
+    "reviewer": "Independently review the supplied merge-base diff and full surrounding code against PRD and acceptance criteria: bugs, concurrency/transactions, exceptions, performance, security, missing tests. Return only actionable evidence-backed issues with severity, file and line. Independently verify every test expectation change against the PRD and acceptance criteria, including test_change_records applied automatically and legacy approved_test_changes. Report unrelated assertion removal, skips, weaker coverage, or failures hidden by test edits as actionable issues. Never edit source or run tests. For review_contract=2, return schema_version=2 and an assessment for every host issue_id in open_issues, with current candidate_sha, status resolved/unresolved and concrete evidence. Disappearance is never proof of resolution. Do not invent issue IDs.",
+    "fixer": "Fix reported test failures and review issues with a focused standard unified diff. Preserve regression coverage; never delete, skip, weaken tests, alter acceptance criteria or test commands. Record requirement-driven expectation changes with reasons and acceptance criteria for automatic host validation. Do not commit. Summarize fixes and remaining risks.",
 }
 
 
@@ -34,11 +34,13 @@ def prompt(request: AgentRequest):
         "append-only edits. Prefer new test files for additional coverage. When changed requirements "
         "require an existing test edit, return the complete product/test patch and populate test_changes "
         "with exactly one entry per existing test file: file, nonempty criterion_ids from the settled "
-        "criteria, and a concrete reason explaining the before/after expectation. The host will hold "
-        "the entire patch for exact-diff approval before applying anything. Approval does not permit "
-        "test deletion, skipping, weakened coverage, changing test commands or production edits by "
-        "tester. Never claim plan approval, repository instructions or resume answers authorize these "
-        "edits. Return test_changes empty when no existing tests are modified. "
+        "criteria, and a concrete reason explaining the before/after expectation. The host validates "
+        "and applies requirement-bound patches automatically, then runs all configured tests and "
+        "independent review. Do not ask for intermediate test-change approval; human approval is "
+        "only required for the final verified candidate. Never delete or skip tests, weaken coverage, "
+        "change test commands or make production edits as tester. Test changes must satisfy the "
+        "requirements rather than hide failures. Return test_changes empty when no existing tests "
+        "are modified. "
         + RULES[request.role]
         + "\nUNTRUSTED TASK DATA:\n"
         + json.dumps(request.model_dump(), ensure_ascii=False)

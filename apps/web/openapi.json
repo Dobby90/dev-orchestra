@@ -4485,6 +4485,11 @@
             "type": "boolean",
             "title": "Test Change Pending",
             "default": false
+          },
+          "test_change_count": {
+            "type": "integer",
+            "title": "Test Change Count",
+            "default": 0
           }
         },
         "additionalProperties": false,
@@ -5123,6 +5128,57 @@
         ],
         "title": "TestChangeProposalView"
       },
+      "TestChangeRecordView": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "title": "Id"
+          },
+          "role": {
+            "type": "string",
+            "title": "Role"
+          },
+          "iteration": {
+            "type": "integer",
+            "title": "Iteration"
+          },
+          "revision": {
+            "type": "integer",
+            "title": "Revision"
+          },
+          "input_sha": {
+            "type": "string",
+            "title": "Input Sha"
+          },
+          "output_sha": {
+            "type": "string",
+            "title": "Output Sha"
+          },
+          "changes": {
+            "items": {
+              "$ref": "#/components/schemas/TestChangeExplanation"
+            },
+            "type": "array",
+            "title": "Changes"
+          },
+          "patch": {
+            "type": "string",
+            "title": "Patch"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "role",
+          "iteration",
+          "revision",
+          "input_sha",
+          "output_sha",
+          "changes",
+          "patch"
+        ],
+        "title": "TestChangeRecordView"
+      },
       "TestChangeView": {
         "properties": {
           "proposal": {
@@ -5145,6 +5201,13 @@
               }
             ],
             "title": "Error"
+          },
+          "history": {
+            "items": {
+              "$ref": "#/components/schemas/TestChangeRecordView"
+            },
+            "type": "array",
+            "title": "History"
           }
         },
         "type": "object",

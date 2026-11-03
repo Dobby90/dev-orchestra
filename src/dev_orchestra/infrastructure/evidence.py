@@ -33,8 +33,29 @@ def checkpoints(store, run):
                     or approval["revision"] != payload.get("revision", 0)
                 ):
                     raise PipelineError("protected test approval evidence mismatch")
+            record = payload.get("test_change_record")
+            if record:
+                from dev_orchestra.application.test_changes import checksum
+
+                if (
+                    record not in run.get("test_change_records", [])
+                    or checksum({k: v for k, v in record.items() if k != "record_hash"})
+                    != record["record_hash"]
+                    or record["run_id"] != run["id"]
+                    or record["patch_hash"] != digest(payload["patch"].encode())
+                    or record["changes"] != payload["test_changes"]
+                    or record["input_sha"] != step["input_sha"]
+                    or record["role"] != step["role"]
+                    or record["iteration"] != step["iteration"]
+                    or record["revision"] != payload.get("revision", 0)
+                ):
+                    raise PipelineError("protected test change evidence mismatch")
             if step["status"] == "completed":
                 latest[step["role"]] = payload
+        if run.get("test_change_application"):
+            from dev_orchestra.application.test_changes import TestChangeService
+
+            TestChangeService(store).applied_result(run)
         return latest
     except (OSError, ValueError, KeyError) as error:
         raise PipelineError("missing or invalid checkpoint evidence") from error

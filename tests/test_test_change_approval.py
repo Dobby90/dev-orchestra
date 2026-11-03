@@ -1,17 +1,14 @@
 """Requirement-driven test edits use disposable Git/SQLite and fake agents only."""
 
-import json
 from pathlib import Path
 
 import pytest
 from test_workflow import FakeAgent, FakeTests
 from test_workflow import service as service
-from typer.testing import CliRunner
 
 from dev_orchestra.agents.policy import apply_patch
 from dev_orchestra.agents.prompts import prompt
 from dev_orchestra.application.test_changes import TestChangeService as Changes
-from dev_orchestra.cli import app
 from dev_orchestra.domain.models import (
     AgentRequest,
     AgentResult,
@@ -76,14 +73,29 @@ def create_xml_run(svc, old, repo):
     return svc.create(repo, Path(svc.store.get(old)["directory"]) / "spec.md")
 
 
+def legacy_pending(svc, old, repo, agent=None):
+    """Create a proposal in the format persisted before automatic test changes."""
+    rid = create_xml_run(svc, old, repo)
+    agent = agent or XmlAgent()
+    captured = []
+
+    class Capture:
+        def run(self, request, *args):
+            result = agent.run(request, *args)
+            if request.role == "developer":
+                captured.append(result)
+                return result.model_copy(update={"questions": ["legacy test-change gate"]})
+            return result
+
+    Runner(svc.store, Capture(), FakeTests()).execute(rid)
+    run = svc.store.get(rid)
+    Changes(svc.store).propose(run, captured[0], [TEST_FILE], Path(run["directory"]) / "legacy")
+    return svc, rid, repo, agent
+
+
 @pytest.fixture
 def pending(service):
-    svc, old, repo = service
-    rid = create_xml_run(svc, old, repo)
-    agent = XmlAgent()
-    Runner(svc.store, agent, FakeTests()).execute(rid)
-    assert svc.store.get(rid)["state"] == "needs_input", svc.store.get(rid).get("error")
-    return svc, rid, repo, agent
+    return legacy_pending(*service)
 
 
 def decide(svc, rid, approve=True, reason=""):
@@ -91,36 +103,53 @@ def decide(svc, rid, approve=True, reason=""):
     svc.decide_test_changes(rid, p["proposal_hash"], p["input_sha"], approve, reason)
 
 
-def test_full_patch_waits_for_exact_approval_and_reuses_saved_result(pending):
-    svc, rid, repo, agent = pending
-    before = svc.store.get(rid)
-    tree = Path(before["worktree"])
-    assert agent.calls == ["planner", "developer"]
-    assert (tree / "main.py").read_text() == "original\n"
-    assert (tree / TEST_FILE).read_text() == OLD_TEST
-    view = Changes(svc.store).view(rid)
-    assert view["proposal"]["patch"] == PATCH
-    assert svc.store.get(rid) == before  # GET has no recovery or report side effects.
-    with pytest.raises(PipelineError, match="approve or reject"):
-        svc.resume_changes(before, "기존 테스트 변경을 허용합니다")
-    decide(svc, rid)
-    assert (tree / TEST_FILE).read_text() == OLD_TEST  # Approval only queues work.
+def test_requirement_test_changes_run_through_to_final_approval(service):
+    svc, old, repo = service
+    rid = create_xml_run(svc, old, repo)
+    agent = XmlAgent()
     Runner(svc.store, agent, FakeTests()).execute(rid)
     run = svc.store.get(rid)
     assert run["state"] == "waiting_approval", run.get("error")
     assert agent.calls == ["planner", "developer", "tester", "reviewer"]
+    assert not run.get("test_change_proposal")
+    assert not run.get("test_change_approvals")
+    assert len(run["test_change_records"]) == 1
+    assert agent.contexts[-1]["test_change_records"][0]["changes"][0]["file"] == TEST_FILE
+    tree = Path(run["worktree"])
     assert (tree / "main.py").read_text() == "xml enabled\n"
     assert (tree / TEST_FILE).read_text() == NEW_TEST
-    assert not run.get("test_change_proposal")
-    assert agent.contexts[-1]["approved_test_changes"][0]["changes"][0]["file"] == TEST_FILE
     assert (repo / "main.py").read_text() == "developer local edits\n"
     assert (repo / TEST_FILE).read_text() == OLD_TEST
+    assert not any(e["kind"] == "test_changes.proposed" for e in svc.store.events(rid))
+    before, events = svc.store.get(rid), svc.store.events(rid)
+    history = Changes(svc.store).view(rid)["history"]
+    assert history[0]["patch"] == PATCH
+    assert history[0]["changes"][0]["file"] == TEST_FILE
+    assert svc.store.get(rid) == before and svc.store.events(rid) == events
+    report = (Path(run["directory"]) / "final-report.md").read_text()
+    assert TEST_FILE in report and "XML 활성화 요구사항" in report
     svc.approve(rid)
     assert svc.store.get(rid)["state"] == "completed"
 
 
+@pytest.mark.parametrize("approved", [False, True])
+def test_legacy_proposal_resumes_saved_result_without_intermediate_approval(pending, approved):
+    svc, rid, _, agent = pending
+    if approved:
+        decide(svc, rid)
+    else:
+        svc.resume(rid)
+    Runner(svc.store, agent, FakeTests()).execute(rid)
+    run = svc.store.get(rid)
+    assert run["state"] == "waiting_approval", run.get("error")
+    assert agent.calls == ["planner", "developer", "tester", "reviewer"]
+    assert not run.get("test_change_proposal")
+    assert not run.get("test_change_application")
+    svc.approve(rid)
+
+
 @pytest.mark.parametrize("change", ["artifact", "head", "dirty", "revision", "policy", "criteria"])
-def test_approval_rejects_stale_or_tampered_proposal(pending, change):
+def test_legacy_approval_rejects_stale_or_tampered_proposal(pending, change):
     svc, rid, _, _ = pending
     run = svc.store.get(rid)
     proposal = run["test_change_proposal"]
@@ -140,76 +169,30 @@ def test_approval_rejects_stale_or_tampered_proposal(pending, change):
         config["tests"]["write_paths"].append("other-tests")
         svc.store.update(rid, config=config)
     with pytest.raises(PipelineError):
-        svc.decide_test_changes(rid, proposal["proposal_hash"], proposal["input_sha"], True)
+        decide(svc, rid)
     assert not svc.store.get(rid).get("test_change_approvals")
 
 
-def test_approved_result_is_checked_again_before_application(pending):
+@pytest.mark.parametrize("change", ["artifact", "revision", "criteria", "answers"])
+def test_legacy_automatic_resume_checks_saved_context(pending, change):
     svc, rid, _, agent = pending
-    decide(svc, rid)
     run = svc.store.get(rid)
-    with pytest.raises(PipelineError, match="before adding instructions"):
-        svc.resume_changes(run, "추가 변경 지시")
-    svc.store.update(rid, answers="추가 변경 지시")
-    with pytest.raises(PipelineError, match="context"):
-        Changes(svc.store).approved_result(svc.store.get(rid))
-    svc.store.update(rid, answers=None)
-    path = Path(run["directory"]) / run["test_change_proposal"]["artifact"]
-    result = json.loads(path.read_text())
-    result["patch"] = PATCH.replace("+xml enabled", "+different code")
-    path.write_text(json.dumps(result))
+    if change == "artifact":
+        (Path(run["directory"]) / run["test_change_proposal"]["artifact"]).write_text("tampered")
+    elif change == "criteria":
+        svc.store.update(rid, criteria=[{"id": "AC1", "description": "changed"}])
+    else:
+        svc.store.update(rid, **{change: 1 if change == "revision" else "changed"})
+    svc.resume(rid)
     Runner(svc.store, agent, FakeTests()).execute(rid)
     assert svc.store.get(rid)["state"] == "failed"
     assert (Path(run["worktree"]) / TEST_FILE).read_text() == OLD_TEST
-    assert agent.calls == ["planner", "developer"]
-    assert Changes(svc.store).view(rid)["error"]
     decide(svc, rid, False, "손상된 제안을 폐기하고 다시 생성하세요")
     assert svc.store.get(rid)["test_change_proposal"] is None
-    assert svc.store.get(rid)["test_change_approvals"] == []
-
-
-def test_rejection_keeps_worktree_and_regenerates_with_instructions(pending):
-    svc, rid, _, agent = pending
-    with pytest.raises(PipelineError, match="instructions"):
-        decide(svc, rid, False)
-    svc.store.update(rid, worktree_removed=True)
-    with pytest.raises(PipelineError, match="unavailable"):
-        decide(svc, rid, False, "다시 작성하세요")
-    svc.store.update(rid, worktree_removed=False)
-    decide(svc, rid, False, "XML 기대값만 수정하고 회귀 검사는 보존하세요 token=CANARY")
-    assert "CANARY" not in "".join(svc.store.get(rid)["directives"])
-    assert svc.store.get(rid)["test_change_proposal"] is None
-    Runner(svc.store, agent, FakeTests()).execute(rid)
-    run = svc.store.get(rid)
-    assert run["state"] == "needs_input"
-    assert agent.calls.count("developer") == 2
-    assert "회귀 검사" in agent.contexts[-1]["directives"][-1]
-    assert (Path(run["worktree"]) / TEST_FILE).read_text() == OLD_TEST
-
-
-def test_stale_artifact_is_visible_for_rejection_without_authorizing_it(pending):
-    svc, rid, _, _ = pending
-    run = svc.store.get(rid)
-    (Path(run["directory"]) / run["test_change_proposal"]["artifact"]).unlink()
-    view = Changes(svc.store).view(rid)
-    assert view["error"] and view["proposal"]["patch"] == ""
-    with pytest.raises(OSError):
-        decide(svc, rid)
-    decide(svc, rid, False, "패치를 다시 생성하세요")
-    assert svc.store.get(rid)["test_change_proposal"] is None
-
-
-def test_paused_proposal_can_be_decided_without_generic_resume(pending):
-    svc, rid, _, agent = pending
-    svc.cancel(rid, pause=True)
-    assert svc.store.get(rid)["state"] == "paused"
-    decide(svc, rid)
-    Runner(svc.store, agent, FakeTests()).execute(rid)
-    assert svc.store.get(rid)["state"] == "waiting_approval"
 
 
 @pytest.mark.parametrize("role", ["tester", "fixer"])
-def test_test_and_fix_roles_use_the_same_protected_test_approval(service, role):
+def test_all_mutation_roles_change_tests_automatically(service, role):
     svc, old, repo = service
     rid = create_xml_run(svc, old, repo)
 
@@ -228,29 +211,77 @@ def test_test_and_fix_roles_use_the_same_protected_test_approval(service, role):
 
     agent = RoleAgent()
     Runner(svc.store, agent, FakeTests()).execute(rid)
-    assert svc.store.get(rid)["state"] == "needs_input"
-    assert svc.store.get(rid)["test_change_proposal"]["role"] == role
-    calls = agent.calls.count(role)
-    decide(svc, rid)
-    Runner(svc.store, agent, FakeTests()).execute(rid)
     run = svc.store.get(rid)
     assert run["state"] == "waiting_approval", run.get("error")
-    assert agent.calls.count(role) == calls
+    assert run["test_change_records"][0]["role"] == role
     svc.approve(rid)
 
 
-def test_no_proposal_for_missing_requirement_explanation(service):
+@pytest.mark.parametrize("invalid", ["missing", "criterion", "reason"])
+def test_missing_requirement_evidence_never_mutates_worktree(service, invalid):
     svc, old, repo = service
     rid = create_xml_run(svc, old, repo)
-    Runner(svc.store, XmlAgent(changes=False), FakeTests()).execute(rid)
+
+    class InvalidAgent(XmlAgent):
+        def run(self, request, *args):
+            result = super().run(request, *args)
+            if request.role == "developer":
+                if invalid == "missing":
+                    result.test_changes = []
+                elif invalid == "criterion":
+                    result.test_changes[0].criterion_ids = ["unknown"]
+                else:
+                    result.test_changes[0].reason = " "
+            return result
+
+    Runner(svc.store, InvalidAgent(), FakeTests()).execute(rid)
     run = svc.store.get(rid)
     assert run["state"] == "failed"
     assert "criterion IDs" in run["error"]
     assert not run.get("test_change_proposal")
     assert (Path(run["worktree"]) / TEST_FILE).read_text() == OLD_TEST
+    assert (Path(run["worktree"]) / "main.py").read_text() == "original\n"
 
 
-def test_approval_never_allows_deletion_or_tester_production_changes(pending):
+@pytest.mark.parametrize("invalid", ["commands", "coverage"])
+def test_tester_contract_is_checked_before_applying_patch(service, invalid):
+    svc, old, repo = service
+    rid = create_xml_run(svc, old, repo)
+
+    class InvalidTester(FakeAgent):
+        def run(self, request, *args):
+            result = super().run(request, *args)
+            if request.role == "tester":
+                result.patch = PATCH[PATCH.index("diff --git a/tests/") :]
+                result.test_changes = [
+                    Change(file=TEST_FILE, criterion_ids=["AC1"], reason="XML 활성화")
+                ]
+                if invalid == "commands":
+                    result.command_ids = []
+                else:
+                    result.coverage = []
+            return result
+
+    Runner(svc.store, InvalidTester(), FakeTests()).execute(rid)
+    run = svc.store.get(rid)
+    assert run["state"] == "failed"
+    assert (Path(run["worktree"]) / TEST_FILE).read_text() == OLD_TEST
+    assert not run.get("test_change_records")
+
+
+def test_test_change_evidence_is_required_for_final_approval(service):
+    svc, old, repo = service
+    rid = create_xml_run(svc, old, repo)
+    Runner(svc.store, XmlAgent(), FakeTests()).execute(rid)
+    svc.store.update(rid, test_change_records=[])
+    with pytest.raises(PipelineError, match="change evidence"):
+        checkpoints(svc.store, svc.store.get(rid))
+    with pytest.raises(PipelineError):
+        svc.approve(rid)
+    assert Changes(svc.store).view(rid)["error"]
+
+
+def test_automatic_changes_never_allow_deletion_or_tester_production_changes(pending):
     svc, rid, _, _ = pending
     tree = Path(svc.store.get(rid)["worktree"])
     for role, patch in [
@@ -258,48 +289,12 @@ def test_approval_never_allows_deletion_or_tester_production_changes(pending):
         ("developer", f"--- a/{TEST_FILE}\n+++ /dev/null\n@@ -1 +0,0 @@\n-{OLD_TEST}"),
     ]:
         with pytest.raises(PipelineError):
-            apply_patch(tree, patch, role, ["tests"], approved_patch_hash=digest(patch.encode()))
+            apply_patch(tree, patch, role, ["tests"], validated_patch_hash=digest(patch.encode()))
     assert (tree / TEST_FILE).read_text() == OLD_TEST
 
 
-def test_final_approval_requires_retained_test_change_evidence(pending):
-    svc, rid, _, agent = pending
-    decide(svc, rid)
-    Runner(svc.store, agent, FakeTests()).execute(rid)
-    svc.store.update(rid, test_change_approvals=[])
-    with pytest.raises(PipelineError, match="approval evidence"):
-        checkpoints(svc.store, svc.store.get(rid))
-    with pytest.raises(PipelineError):
-        svc.approve(rid)
-
-
-def test_cli_inspection_and_approval_use_the_shared_service(pending, monkeypatch):
-    svc, rid, _, agent = pending
-    monkeypatch.setattr("dev_orchestra.cli.RunService", lambda _: svc)
-    monkeypatch.setattr(
-        svc, "start", lambda *args, **kwargs: Runner(svc.store, agent, FakeTests()).execute(rid)
-    )
-    runner = CliRunner()
-    response = runner.invoke(app, ["test-changes", rid])
-    assert response.exit_code == 0, response.output
-    proposal = json.loads(response.output)["proposal"]
-    response = runner.invoke(
-        app,
-        [
-            "approve-test-changes",
-            rid,
-            "--proposal-hash",
-            proposal["proposal_hash"],
-            "--input-sha",
-            proposal["input_sha"],
-        ],
-    )
-    assert response.exit_code == 0, response.output
-    assert svc.store.get(rid)["state"] == "waiting_approval"
-
-
 @pytest.mark.parametrize("role", ["planner", "developer", "tester", "fixer", "reviewer"])
-def test_every_role_knows_requirement_changes_need_exact_patch_approval(role):
+def test_every_role_knows_test_changes_are_automatic_and_requirement_bound(role):
     text = prompt(
         AgentRequest(
             run_id="r", role=role, worktree="/tmp/example", iteration=0, input_sha="a", context={}
@@ -307,4 +302,90 @@ def test_every_role_knows_requirement_changes_need_exact_patch_approval(role):
     )
     assert "test_changes" in text
     assert "append-only" in text
-    assert "exact-diff approval" in text
+    assert "Do not ask for intermediate test-change approval" in text
+    assert "final verified candidate" in text
+
+
+@pytest.mark.parametrize("interruption", ["pause", "failure", "tampered"])
+def test_applied_test_patch_resumes_without_regenerating_or_reapplying(service, interruption):
+    from dev_orchestra.domain.models import StopRequested
+
+    svc, old, repo = service
+    rid = create_xml_run(svc, old, repo)
+
+    class Tester(FakeAgent):
+        def run(self, request, *args):
+            result = super().run(request, *args)
+            if request.role == "tester":
+                result.patch = PATCH[PATCH.index("diff --git a/tests/") :]
+                result.test_changes = [
+                    Change(file=TEST_FILE, criterion_ids=["AC1"], reason="XML 활성화")
+                ]
+            return result
+
+    class InterruptingTests(FakeTests):
+        def run(self, *args):
+            if interruption in {"pause", "tampered"}:
+                raise StopRequested("pause")
+            raise PipelineError("temporary validation failure")
+
+    agent = Tester()
+    Runner(svc.store, agent, InterruptingTests()).execute(rid)
+    run = svc.store.get(rid)
+    assert run["state"] == ("failed" if interruption == "failure" else "paused")
+    assert (Path(run["worktree"]) / TEST_FILE).read_text() == NEW_TEST
+    sha = run["current_sha"]
+    assert run["test_change_application"] and not run.get("test_change_proposal")
+    view = Changes(svc.store).view(rid)
+    assert view["error"] is None
+    assert view["history"][0]["patch"] == PATCH[PATCH.index("diff --git a/tests/") :]
+    if interruption == "tampered":
+        artifact = Path(run["directory"]) / run["test_change_application"]["artifact"]
+        artifact.write_text("tampered")
+        with pytest.raises(PipelineError, match="applied test change result checksum mismatch"):
+            svc.resume(rid)
+        assert Changes(svc.store).view(rid)["error"]
+        assert (Path(run["worktree"]) / TEST_FILE).read_text() == NEW_TEST
+        return
+    svc.resume(rid)
+    Runner(svc.store, agent, FakeTests()).execute(rid)
+    run = svc.store.get(rid)
+    assert run["state"] == "waiting_approval", run.get("error")
+    assert run["current_sha"] == sha
+    assert agent.calls == ["planner", "developer", "tester", "reviewer"]
+    assert len(run["test_change_records"]) == 1
+    assert not run.get("test_change_application")
+    checkpoints(svc.store, run)
+    svc.approve(rid)
+
+
+def test_test_failures_still_enter_automatic_fix_and_revalidation(service):
+    svc, old, repo = service
+    rid = create_xml_run(svc, old, repo)
+
+    class FailingOnce(FakeTests):
+        calls = 0
+
+        def run(self, *args):
+            self.calls += 1
+            return {
+                "passed": self.calls > 1,
+                "commands": [{"exit_code": int(self.calls == 1), "total": 1}],
+            }
+
+    agent, tests = XmlAgent(), FailingOnce()
+    Runner(svc.store, agent, tests).execute(rid)
+    run = svc.store.get(rid)
+    assert run["state"] == "waiting_approval", run.get("error")
+    assert agent.calls == [
+        "planner",
+        "developer",
+        "tester",
+        "reviewer",
+        "fixer",
+        "tester",
+        "reviewer",
+    ]
+    assert tests.calls == 2
+    assert not run.get("test_change_approvals")
+    svc.approve(rid)

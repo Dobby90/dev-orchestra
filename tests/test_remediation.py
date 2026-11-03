@@ -97,7 +97,7 @@ def test_filter_execution_is_rejected(service, tmp_path):
     assert not (tmp_path / "forbidden").exists()
 
 
-def test_existing_test_edits_are_rejected(service):
+def test_existing_test_edits_without_requirement_evidence_are_rejected(service):
     svc, rid, repo = service
     (repo / "tests").mkdir()
     file = repo / "tests/test_a.py"
@@ -105,7 +105,7 @@ def test_existing_test_edits_are_rejected(service):
     delta = (
         "--- a/tests/test_a.py\n+++ b/tests/test_a.py\n@@ -1 +1 @@\n-assert False\n+assert True\n"
     )
-    with pytest.raises(PipelineError, match="immutable"):
+    with pytest.raises(PipelineError, match="evidence required"):
         apply_patch(repo, delta, "tester", ["tests"])
     assert file.read_text() == "assert False\n"
 

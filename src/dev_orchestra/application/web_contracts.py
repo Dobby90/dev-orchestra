@@ -153,9 +153,21 @@ class TestChangeProposalView(BaseModel):
     approved: bool
 
 
+class TestChangeRecordView(BaseModel):
+    id: str
+    role: str
+    iteration: int
+    revision: int
+    input_sha: str
+    output_sha: str
+    changes: list[TestChangeExplanation]
+    patch: str
+
+
 class TestChangeView(BaseModel):
     proposal: TestChangeProposalView | None = None
     error: str | None = None
+    history: list[TestChangeRecordView] = Field(default_factory=list)
 
 
 class Reason(Input):
@@ -242,6 +254,7 @@ class RunDetail(RunSummary):
     questions: list[str]
     error: str | None
     test_change_pending: bool = False
+    test_change_count: int = 0
 
 
 class DashboardView(BaseModel):
