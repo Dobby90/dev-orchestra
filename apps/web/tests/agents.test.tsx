@@ -26,6 +26,50 @@ function wrap(node: React.ReactNode) {
   );
 }
 describe("에이전트 모델·사용량", () => {
+  it.each([
+    [undefined, "미확인"],
+    [null, "미확인"],
+    [0, "0초"],
+    [12.3, "12.3초"],
+    [59.9, "59.9초"],
+    [59.96, "1분 0초"],
+    [60, "1분 0초"],
+    [125.4, "2분 5.4초"],
+    [3599.9, "59분 59.9초"],
+    [3599.96, "1시간 0분 0초"],
+    [3600, "1시간 0분 0초"],
+    [3661.2, "1시간 1분 1.2초"],
+    [90061.2, "25시간 1분 1.2초"],
+  ])("Codex 소요 시간 %s초를 %s로 표시한다", async (duration, expected) => {
+    vi.spyOn(api, "agentUsage").mockResolvedValue({
+      agents: {},
+      usage_status: "unknown",
+      measured_attempts: 0,
+      total_attempts: 1,
+      usage: null,
+      attempts: [
+        {
+          step_id: 1,
+          role: "developer",
+          revision: 0,
+          iteration: 0,
+          attempt: 1,
+          status: "completed",
+          completed_turns: 0,
+          usage: null,
+          usage_status: "unknown",
+          duration_seconds: duration,
+        },
+      ],
+    });
+    wrap(<AgentUsagePanel rid="r1" />);
+    const table = await screen.findByRole("region", {
+      name: "시도별 토큰 사용량",
+    });
+    const cells = within(table).getAllByRole("cell");
+    expect(cells[3]).toHaveTextContent(expected);
+  });
+
   it("공통 설정을 상속하고 모델에서 지원하는 추론 강도만 저장한다", async () => {
     vi.spyOn(api, "agentSettings").mockResolvedValue(initial);
     const catalog = vi.spyOn(api, "codexModels").mockResolvedValue(models);
