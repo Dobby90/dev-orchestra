@@ -202,6 +202,7 @@ class Runner:
                 context = {
                     "prd": run["spec"],
                     "answers": run.get("answers", ""),
+                    "clarifications": run.get("clarifications", []),
                     "directives": run.get("directives", []),
                     "review_contract": run.get("review_contract", 1),
                     "base_sha": run["base_sha"],
@@ -216,6 +217,8 @@ class Runner:
                 }
                 for key in ["plan", "criteria", "test_result", "review_result"]:
                     context[key] = run.get(key)
+                if role == "planner":
+                    context["planning_draft"] = run.get("planning_draft")
                 if role == "reviewer":
                     context["diff"] = git.diff(run["base_sha"], sha)
                     context["candidate_sha"] = sha
@@ -237,7 +240,13 @@ class Runner:
                 if git.sha() != sha or git.dirty():
                     raise PipelineError("read-only agent changed the worktree")
                 if result.questions:
-                    self.store.update(run_id, "needs_input", questions=result.questions)
+                    changes = {"questions": result.questions}
+                    if role == "planner":
+                        changes["planning_draft"] = {
+                            "plan": result.plan,
+                            "criteria": [criterion.model_dump() for criterion in result.criteria],
+                        }
+                    self.store.update(run_id, "needs_input", **changes)
                     return
                 if role == "planner":
                     if (
@@ -352,7 +361,12 @@ class Runner:
             write(directory / "implementation-plan.md", payload["plan"])
             write(directory / "acceptance-criteria.json", payload["criteria"])
             self.store.update(
-                run_id, next_role="developer", plan=payload["plan"], criteria=payload["criteria"]
+                run_id,
+                next_role="developer",
+                plan=payload["plan"],
+                criteria=payload["criteria"],
+                planning_draft=None,
+                questions=[],
             )
         elif role in {"developer", "fixer"}:
             self.store.update(run_id, next_role="tester")

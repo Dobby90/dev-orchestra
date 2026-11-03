@@ -106,8 +106,18 @@ class RunService:
         ensure_stopped(Path(run["directory"]))
         checkpoints(self.store, run)
         changes = {}
-        if answers is not None:
-            changes["answers"] = answers
+        if answers is not None and answers.strip():
+            previous = run.get("answers", "")
+            changes["answers"] = "\n\n".join(part for part in [previous, answers] if part)
+            changes["clarifications"] = [
+                *run.get("clarifications", []),
+                {
+                    "role": run.get("next_role"),
+                    "questions": run.get("questions", []),
+                    "answer": answers,
+                },
+            ]
+            changes["questions"] = []
         if max_fixes is not None:
             if max_fixes <= run["config"]["workflow"]["max_fix_attempts"]:
                 raise PipelineError("new fix budget must increase the recorded limit")

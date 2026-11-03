@@ -209,3 +209,68 @@ def test_ambiguous_plan_needs_input(service):
     Runner(svc.store, Questions(), FakeTests()).execute(run_id)
     assert svc.store.get(run_id)["state"] == "needs_input"
     assert svc.store.get(run_id)["questions"] == ["Which greeting?"]
+
+
+def test_planner_clarifications_survive_multiple_resumes(service, tmp_path):
+    svc, run_id, _ = service
+    svc.store.update(run_id, answers="Initial instruction")
+
+    class Clarifying(FakeAgent):
+        contexts = []
+
+        def run(self, req, *args):
+            self.contexts.append((req.role, req.context))
+            rounds = len([role for role, _ in self.contexts if role == "planner"])
+            if req.role == "planner" and rounds <= 2:
+                return AgentResult(
+                    summary="clarify",
+                    plan=f"Draft {rounds}",
+                    criteria=[Criterion(id="AC1", description="greeting works")],
+                    questions=[f"Question {rounds}?"],
+                )
+            return super().run(req, *args)
+
+    agent = Clarifying()
+    runner = Runner(svc.store, agent, FakeTests())
+    runner.execute(run_id)
+    assert svc.store.get(run_id).get("plan") is None
+    for number in [1, 2]:
+        answer = tmp_path / f"answer-{number}.txt"
+        answer.write_text(f"Answer {number}")
+        svc.resume(run_id, answer)
+        assert svc.store.get(run_id)["questions"] == []
+        runner.execute(run_id)
+
+    run = svc.store.get(run_id)
+    assert run["state"] == "waiting_approval"
+    assert run["planning_draft"] is None
+    assert run["questions"] == []
+    planner = [context for role, context in agent.contexts if role == "planner"]
+    assert planner[1]["planning_draft"]["plan"] == "Draft 1"
+    assert planner[2]["planning_draft"]["plan"] == "Draft 2"
+    expected = [
+        {"role": "planner", "questions": [f"Question {n}?"], "answer": f"Answer {n}"}
+        for n in [1, 2]
+    ]
+    for _, context in agent.contexts[2:]:
+        assert context["clarifications"] == expected
+        assert context["answers"] == "Initial instruction\n\nAnswer 1\n\nAnswer 2"
+
+
+@pytest.mark.parametrize("role", ["planner", "developer", "tester", "reviewer", "fixer"])
+def test_resume_preserves_decisions_for_every_role(service, tmp_path, role):
+    svc, run_id, _ = service
+    svc.store.update(
+        run_id, "needs_input", next_role=role, answers="Previous decision", questions=["Scope?"]
+    )
+    svc.resume(run_id)
+    assert svc.store.get(run_id)["questions"] == ["Scope?"]
+    assert svc.store.get(run_id)["answers"] == "Previous decision"
+    svc.store.update(run_id, "needs_input")
+    answer = tmp_path / "answer.txt"
+    answer.write_text("Yes")
+    svc.resume(run_id, answer)
+    run = svc.store.get(run_id)
+    assert run["answers"] == "Previous decision\n\nYes"
+    assert run["clarifications"] == [{"role": role, "questions": ["Scope?"], "answer": "Yes"}]
+    assert run["questions"] == []
