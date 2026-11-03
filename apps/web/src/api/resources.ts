@@ -10,6 +10,18 @@ export const api = {
     }),
   logout: () => request<void>("/session", { method: "DELETE" }),
   health: () => request<{ status: string }>("/health"),
+  agentSettings: () => request<Schema["AgentSettingsView"]>("/settings/agents"),
+  saveAgentSettings: (body: Schema["AgentSettingsInput"]) =>
+    request<Schema["AgentSettingsView"]>("/settings/agents", {
+      method: "PATCH",
+      body: JSON.stringify(body),
+    }),
+  codexModels: () =>
+    request<Schema["CodexModelPage"]>("/settings/agents/models", {
+      method: "POST",
+    }),
+  agentUsage: (rid: string) =>
+    request<Schema["AgentUsageView"]>(`/runs/${id(rid)}/agent-usage`),
   dashboard: () => request<Schema["DashboardView"]>("/dashboard"),
   projects: (cursor = "") =>
     request<Schema["ProjectPage"]>(`/projects?cursor=${id(cursor)}`),

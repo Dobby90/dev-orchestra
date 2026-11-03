@@ -182,6 +182,78 @@
         }
       }
     },
+    "/api/settings/agents": {
+      "get": {
+        "summary": "Get Agent Settings",
+        "operationId": "get_agent_settings_api_settings_agents_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AgentSettingsView"
+                }
+              }
+            }
+          }
+        }
+      },
+      "patch": {
+        "summary": "Save Agent Settings",
+        "operationId": "save_agent_settings_api_settings_agents_patch",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AgentSettingsInput"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AgentSettingsView"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/settings/agents/models": {
+      "post": {
+        "summary": "Codex Models",
+        "operationId": "codex_models_api_settings_agents_models_post",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CodexModelPage"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/projects/{pid}": {
       "get": {
         "summary": "Project",
@@ -1437,6 +1509,45 @@
         }
       }
     },
+    "/api/runs/{rid}/agent-usage": {
+      "get": {
+        "summary": "Agent Usage",
+        "operationId": "agent_usage_api_runs__rid__agent_usage_get",
+        "parameters": [
+          {
+            "name": "rid",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Rid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AgentUsageView"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/runs/{rid}/event-history": {
       "get": {
         "summary": "Events",
@@ -1745,6 +1856,276 @@
   },
   "components": {
     "schemas": {
+      "AgentAttemptView": {
+        "properties": {
+          "model": {
+            "anyOf": [
+              {
+                "type": "string",
+                "pattern": "^[A-Za-z0-9][A-Za-z0-9._:/-]{0,199}$"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Model"
+          },
+          "reasoning_effort": {
+            "anyOf": [
+              {
+                "type": "string",
+                "pattern": "^[a-z][a-z0-9_]{0,31}$"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reasoning Effort"
+          },
+          "usage": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/TokenUsage"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "usage_status": {
+            "type": "string",
+            "enum": [
+              "reported",
+              "partial",
+              "unknown"
+            ],
+            "title": "Usage Status",
+            "default": "unknown"
+          },
+          "completed_turns": {
+            "type": "integer",
+            "minimum": 0.0,
+            "title": "Completed Turns",
+            "default": 0
+          },
+          "duration_seconds": {
+            "anyOf": [
+              {
+                "type": "number",
+                "minimum": 0.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Duration Seconds"
+          },
+          "step_id": {
+            "type": "integer",
+            "title": "Step Id"
+          },
+          "role": {
+            "type": "string",
+            "title": "Role"
+          },
+          "revision": {
+            "type": "integer",
+            "title": "Revision"
+          },
+          "iteration": {
+            "type": "integer",
+            "title": "Iteration"
+          },
+          "attempt": {
+            "type": "integer",
+            "title": "Attempt"
+          },
+          "status": {
+            "type": "string",
+            "title": "Status"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "step_id",
+          "role",
+          "revision",
+          "iteration",
+          "attempt",
+          "status"
+        ],
+        "title": "AgentAttemptView"
+      },
+      "AgentOptions": {
+        "properties": {
+          "model": {
+            "anyOf": [
+              {
+                "type": "string",
+                "pattern": "^[A-Za-z0-9][A-Za-z0-9._:/-]{0,199}$"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Model"
+          },
+          "reasoning_effort": {
+            "anyOf": [
+              {
+                "type": "string",
+                "pattern": "^[a-z][a-z0-9_]{0,31}$"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reasoning Effort"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "title": "AgentOptions"
+      },
+      "AgentSettings": {
+        "properties": {
+          "model": {
+            "anyOf": [
+              {
+                "type": "string",
+                "pattern": "^[A-Za-z0-9][A-Za-z0-9._:/-]{0,199}$"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Model"
+          },
+          "reasoning_effort": {
+            "anyOf": [
+              {
+                "type": "string",
+                "pattern": "^[a-z][a-z0-9_]{0,31}$"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reasoning Effort"
+          },
+          "roles": {
+            "additionalProperties": {
+              "$ref": "#/components/schemas/AgentOptions"
+            },
+            "propertyNames": {
+              "enum": [
+                "planner",
+                "developer",
+                "tester",
+                "reviewer",
+                "fixer"
+              ]
+            },
+            "type": "object",
+            "title": "Roles"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "title": "AgentSettings"
+      },
+      "AgentSettingsInput": {
+        "properties": {
+          "settings": {
+            "$ref": "#/components/schemas/AgentSettings"
+          },
+          "expected_version": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{64}$",
+            "title": "Expected Version"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "settings",
+          "expected_version"
+        ],
+        "title": "AgentSettingsInput"
+      },
+      "AgentSettingsView": {
+        "properties": {
+          "settings": {
+            "$ref": "#/components/schemas/AgentSettings"
+          },
+          "version": {
+            "type": "string",
+            "title": "Version"
+          }
+        },
+        "type": "object",
+        "required": [
+          "settings",
+          "version"
+        ],
+        "title": "AgentSettingsView"
+      },
+      "AgentUsageView": {
+        "properties": {
+          "agents": {
+            "additionalProperties": {
+              "$ref": "#/components/schemas/AgentOptions"
+            },
+            "type": "object",
+            "title": "Agents"
+          },
+          "attempts": {
+            "items": {
+              "$ref": "#/components/schemas/AgentAttemptView"
+            },
+            "type": "array",
+            "title": "Attempts"
+          },
+          "usage": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/TokenUsage"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "usage_status": {
+            "type": "string",
+            "enum": [
+              "reported",
+              "partial",
+              "unknown"
+            ],
+            "title": "Usage Status"
+          },
+          "measured_attempts": {
+            "type": "integer",
+            "title": "Measured Attempts"
+          },
+          "total_attempts": {
+            "type": "integer",
+            "title": "Total Attempts"
+          }
+        },
+        "type": "object",
+        "required": [
+          "agents",
+          "attempts",
+          "usage",
+          "usage_status",
+          "measured_attempts",
+          "total_attempts"
+        ],
+        "title": "AgentUsageView"
+      },
       "ApprovalInput": {
         "properties": {
           "expected_sha": {
@@ -1971,6 +2352,43 @@
           "confirm"
         ],
         "title": "CleanupInput"
+      },
+      "CodexModelPage": {
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/CodexModelView"
+            },
+            "type": "array",
+            "title": "Items"
+          }
+        },
+        "type": "object",
+        "required": [
+          "items"
+        ],
+        "title": "CodexModelPage"
+      },
+      "CodexModelView": {
+        "properties": {
+          "model": {
+            "type": "string",
+            "title": "Model"
+          },
+          "reasoning_efforts": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Reasoning Efforts"
+          }
+        },
+        "type": "object",
+        "required": [
+          "model",
+          "reasoning_efforts"
+        ],
+        "title": "CodexModelView"
       },
       "CommandView": {
         "properties": {
@@ -2608,6 +3026,11 @@
           "project_version": {
             "type": "integer",
             "title": "Project Version"
+          },
+          "agent_settings_hash": {
+            "type": "string",
+            "title": "Agent Settings Hash",
+            "default": ""
           },
           "proposal_hash": {
             "type": "string",
@@ -4216,6 +4639,33 @@
           "text"
         ],
         "title": "TextSpec"
+      },
+      "TokenUsage": {
+        "properties": {
+          "input_tokens": {
+            "type": "integer",
+            "minimum": 0.0,
+            "title": "Input Tokens"
+          },
+          "cached_input_tokens": {
+            "type": "integer",
+            "minimum": 0.0,
+            "title": "Cached Input Tokens"
+          },
+          "output_tokens": {
+            "type": "integer",
+            "minimum": 0.0,
+            "title": "Output Tokens"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "input_tokens",
+          "cached_input_tokens",
+          "output_tokens"
+        ],
+        "title": "TokenUsage"
       },
       "ValidationError": {
         "properties": {

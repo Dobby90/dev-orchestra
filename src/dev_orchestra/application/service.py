@@ -39,9 +39,15 @@ class RunService:
         self.store.create(data)
         return data["id"]
 
-    def prepare_run(self, command: CreateRun, *, run_id=None, branch=None):
+    def prepare_run(self, command: CreateRun, *, run_id=None, branch=None, resolve_settings=True):
         repo, spec, base, max_fixes = command.repo, command.spec, command.base, command.max_fixes
-        config = self.config.model_copy(deep=True)
+        from dev_orchestra.application.agent_settings import AgentSettingsService
+
+        config = (
+            AgentSettingsService(self.config).apply(self.config)
+            if resolve_settings
+            else self.config.model_copy(deep=True)
+        )
         if max_fixes is not None:
             config.workflow.max_fix_attempts = max_fixes
         config = Config.model_validate(config.model_dump())

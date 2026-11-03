@@ -20,7 +20,9 @@ const messages: Record<string, string> = {
   VERSION_CONFLICT:
     "다른 작업으로 상태가 변경되었습니다. 최신 내용을 확인하고 다시 시도해 주세요.",
   PREVIEW_STALE:
-    "미리보기의 유효 시간이 지났거나 프로젝트가 변경되었습니다. 다시 미리보기 해주세요.",
+    "미리보기의 유효 시간이 지났거나 프로젝트·에이전트 설정이 변경되었습니다. 다시 미리보기 해주세요.",
+  CODEX_CATALOG_UNAVAILABLE:
+    "Codex 모델 목록을 불러오지 못했습니다. Codex 설치·인증 상태를 확인한 뒤 다시 시도해 주세요.",
   CSRF_INVALID: "세션을 다시 확인해야 합니다. 새로고침 후 다시 시도해 주세요.",
   PROJECT_REQUIRED: "등록되지 않은 CLI 작업입니다. CLI에서 제어해 주세요.",
   VALIDATION_ERROR: "입력 형식이나 프로젝트 정책을 확인해 주세요.",

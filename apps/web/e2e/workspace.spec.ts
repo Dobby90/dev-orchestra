@@ -58,6 +58,38 @@ test("실제 로컬 API: 로그인 → 프로젝트 → 실행 → 재연결 →
   });
   const audit = await new AxeBuilder({ page }).analyze();
   expect(audit.violations).toEqual([]);
+  await page.getByRole("link", { name: "연결 및 환경", exact: true }).click();
+  await page.getByRole("button", { name: "모델 목록 불러오기" }).click();
+  await page
+    .getByRole("combobox", { name: "공통 기본값 모델", exact: true })
+    .selectOption("test-standard");
+  await page
+    .getByRole("combobox", { name: "공통 기본값 추론 강도", exact: true })
+    .selectOption("medium");
+  await page
+    .getByRole("combobox", { name: "Review 모델", exact: true })
+    .selectOption("test-review");
+  await page
+    .getByRole("combobox", { name: "Review 추론 강도", exact: true })
+    .selectOption("xhigh");
+  expect((await new AxeBuilder({ page }).analyze()).violations).toEqual([]);
+  await page.getByRole("button", { name: "에이전트 설정 저장" }).click();
+  await expect(page.getByText("에이전트 설정을 저장했습니다.")).toBeVisible();
+  await page.screenshot({
+    path: "test-results/agent-settings.png",
+    fullPage: true,
+  });
+  await page.setViewportSize({ width: 390, height: 844 });
+  expect((await new AxeBuilder({ page }).analyze()).violations).toEqual([]);
+  await page.screenshot({
+    path: "test-results/agent-settings-mobile.png",
+    fullPage: true,
+  });
+  await page.setViewportSize({ width: 1440, height: 1000 });
+  await page.reload();
+  await expect(
+    page.getByRole("combobox", { name: "Review 모델", exact: true }),
+  ).toHaveValue("test-review");
   await page.getByRole("link", { name: "프로젝트", exact: true }).click();
   await page
     .getByRole("button", { name: "프로젝트 등록", exact: true })
@@ -159,6 +191,25 @@ test("실제 로컬 API: 로그인 → 프로젝트 → 실행 → 재연결 →
   await expect(page.getByText("승인 대기", { exact: true })).toBeVisible({
     timeout: 45000,
   });
+  await page.getByRole("tab", { name: "테스트", exact: true }).click();
+  await page.getByRole("tab", { name: "에이전트·사용량", exact: true }).click();
+  await expect(
+    page.getByText("실행에 저장된 모델 설정", { exact: true }),
+  ).toBeVisible();
+  await expect(
+    page.getByRole("cell", { name: "test-review", exact: true }),
+  ).toBeVisible();
+  await expect(
+    page.getByRole("cell", { name: "xhigh", exact: true }),
+  ).toBeVisible();
+  await expect(
+    page.getByText("일부 집계", { exact: true }).first(),
+  ).toBeVisible();
+  await page.screenshot({
+    path: "test-results/agent-usage.png",
+    fullPage: true,
+  });
+  expect((await new AxeBuilder({ page }).analyze()).violations).toEqual([]);
   await page.getByRole("tab", { name: "테스트", exact: true }).click();
   await expect(
     page.getByRole("heading", { name: "테스트 통과", exact: true }),

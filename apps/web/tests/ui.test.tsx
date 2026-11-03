@@ -327,6 +327,7 @@ describe("화면·위험 명령", () => {
       branch: "feature/x",
       base_sha: "b".repeat(40),
       project_version: 0,
+      agent_settings_hash: "settings",
       proposal_hash: "h",
       expires: Date.now() / 1000 + 300,
       preview_token: "receipt",
