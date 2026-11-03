@@ -1,4 +1,62 @@
 # 저장소 작업 규칙
 
+## 언어와 개인정보
+
 - 커밋 메시지는 한국어로 작성합니다.
 - README.md와 docs/의 프로젝트 문서 설명은 한국어로 유지합니다. 명령어, 옵션, 경로 및 코드 식별자는 원래 표기를 유지합니다.
+- README.md에는 실명, 개인 계정명·이메일, 사용자별 절대 경로, 비공개 저장소 주소·내부 접속 정보, 실제 로그인 코드·토큰·쿠키·키 등 개인·민감정보를 포함하지 않습니다. 예시는 `~/projects/example`, `/absolute/path/to/project`, `RUN_ID`처럼 일반화합니다. 로컬 접속 안내에는 `127.0.0.1`을 사용합니다.
+- 실행 로그나 검증 결과를 문서에 옮길 때도 개인·민감정보를 제거합니다. 과거 테스트 수치나 의존성 감사 결과를 현재 결과처럼 기재하지 않습니다.
+
+## 저장소 구조
+
+- `src/dev_orchestra/cli.py`: Typer CLI와 `devorchestra`·`codex-pipeline` 진입점입니다.
+- `src/dev_orchestra/domain/`, `src/dev_orchestra/config.py`: 도메인 모델과 YAML 설정 검증입니다.
+- `src/dev_orchestra/application/`: CLI·API가 공유하는 실행·조회·프로젝트·큐·결과·승인 서비스입니다.
+- `src/dev_orchestra/orchestration/`, `src/dev_orchestra/agents/`: 단계 실행과 Codex 프롬프트·패치 정책입니다.
+- `src/dev_orchestra/infrastructure/`: Git·SQLite·마이그레이션·샌드박스·프로세스 소유권·검증 근거 저장입니다.
+- `src/dev_orchestra/api/`, `src/dev_orchestra/execution/`, `src/dev_orchestra/worker.py`: FastAPI·SSE와 웹 서비스·Dispatcher·Run Worker입니다.
+- `apps/web/`: React + TypeScript + Vite 기반 npm workspace입니다.
+- `tests/`, `apps/web/tests/`, `apps/web/e2e/`: Python·화면 단위·브라우저 검사입니다.
+- `scripts/`: GUI 빌드·API 스키마 내보내기·패키지 검사·로그 벤치마크·선택 E2E 도구입니다.
+- `start.sh`, `stop.sh`: 저장소의 `.venv`로 로컬 GUI를 기동·종료합니다.
+- `docs/`는 `.gitignore`에 등록된 로컬 문서입니다. 명시적 요청 없이 강제로 추적하거나 공개 README가 이 문서에 의존하도록 만들지 않습니다.
+
+## 환경과 검증
+
+명령은 저장소 루트에서 실행합니다. Python 3.11 이상을 사용하며, GUI 소스 개발·빌드에는 Node 22.12 이상과 npm이 필요합니다. `.tools/uv`나 `.python`이 준비되어 있다고 가정하지 말고 표준 `uv` 명령을 안내합니다.
+
+```sh
+uv sync --frozen --extra web
+npm ci
+
+# Python 변경
+.venv/bin/python -m pytest -q
+.venv/bin/ruff check src tests scripts apps/web/e2e/backend.py
+.venv/bin/ruff format --check src tests scripts apps/web/e2e/backend.py
+
+# 프론트엔드 변경
+npm run test:web
+npm run typecheck:web
+npm run format:check --workspace apps/web
+
+# 공개 API와 생성 타입의 일치 확인
+.venv/bin/python scripts/export_web_schema.py --check
+npm run check:api --workspace apps/web
+```
+
+- 변경 범위에 맞는 검사를 실행합니다. 문서만 변경했다면 명령·옵션·링크·개인정보와 `git diff --check`를 확인하며 전체 제품 검사를 반복할 필요는 없습니다.
+- 공개 API 계약을 변경하면 `.venv/bin/python scripts/export_web_schema.py`와 `npm run generate:api --workspace apps/web`으로 스키마·타입을 함께 갱신합니다. `apps/web/src/api/generated.ts`를 직접 수정하지 않습니다.
+- 통합 GUI 빌드는 `.venv/bin/python scripts/build_web.py`를 사용합니다. 생성된 `apps/web/dist/`, `src/dev_orchestra/_web/`, `dist/`와 캐시·DB·실행 산출물은 커밋하지 않습니다.
+- 실제 OS 샌드박스 검사는 `DEVORCHESTRA_TEST_SANDBOX=1 .venv/bin/python -m pytest tests/test_security.py -q`로 선택 실행합니다.
+- 브라우저 검사는 Chromium을 설치한 뒤 `npm run test:e2e --workspace apps/web`으로 실행합니다. 정적 GUI 검사는 먼저 통합 GUI를 빌드하고 `E2E_BUNDLED=1`을 지정합니다. 검사는 5173·18080 포트를 사용하며 기존 서버를 재사용하지 않습니다.
+- `scripts/e2e.py`와 `scripts/e2e_gui.py`는 실제 모델을 호출하고 사용량이 발생합니다. 사용자가 모델 호출을 명시적으로 승인한 경우에만 실행하며 일반 테스트에 포함하지 않습니다.
+
+## 구현 시 유지할 경계
+
+- 워크플로 판단은 공통 서비스·Runner에 둡니다. CLI·API는 어댑터이며 프론트엔드에서 Git이나 Codex를 직접 실행하지 않습니다. 읽기 전용 조회에 복구·보고서 생성 같은 변경 작업을 추가하지 않습니다.
+- 런타임 에이전트는 읽기 전용 세션에서 구조화된 결과와 패치를 반환하고 호스트가 검증·적용합니다. 기존 테스트 보호, 테스트 명령 허용 목록, JUnit 검증, SHA·revision·체크섬에 연결된 승인 근거를 약화하지 않습니다.
+- 대상 프로젝트의 자동 Push·Merge를 추가하지 않습니다. 원본 작업 디렉터리의 미커밋 변경을 보존하고, 복구를 위해 자동 reset·clean이나 강제 Worktree 삭제를 수행하지 않습니다.
+- 프로세스 종료는 PID만으로 판단하지 말고 생성 시각·실행 잠금·소유권을 확인합니다. API·SSE·Dispatcher 종료를 개별 Run 취소로 해석하지 않습니다.
+- 웹은 loopback·Origin/Host·세션·CSRF 검사를 유지합니다. 로그인 코드·세션·CSRF를 URL, 로그, localStorage에 저장하지 않습니다. 현재 코드 유효기간은 5분, 새 세션 수명은 로그인부터 48시간입니다.
+- CLI 기본 DB는 스키마 2이며 웹·큐는 스키마 5를 사용합니다. 마이그레이션은 기존 안전 검사·백업·트랜잭션을 유지하고 사용자 운영 DB로 개발 검사를 수행하지 않습니다.
+- 커밋 전 `git status --short`와 `git diff --check`를 확인하고 요청한 변경만 스테이징합니다.
