@@ -44,6 +44,14 @@ from pathlib import Path
 from dev_orchestra.domain.models import AgentResult, Criterion, Coverage, ReviewResultV2
 if '--help' in sys.argv:
  print('--output-schema --ephemeral --ignore-user-config --json');sys.exit(0)
+if 'app-server' in sys.argv:
+ for line in sys.stdin:
+  request=json.loads(line)
+  if 'id' not in request:continue
+  assert request['method'] in ['initialize','model/list']
+  data={{}} if request['method']=='initialize' else {{'data':[{{'model':name,'supportedReasoningEfforts':[{{'reasoningEffort':effort}} for effort in efforts]}} for name,efforts in [('test-standard',['low','medium','high']),('test-review',['high','xhigh'])]],'nextCursor':None}}
+  print(json.dumps({{'id':request['id'],'result':data}}),flush=True)
+ sys.exit(0)
 req=json.loads(sys.stdin.read().split('UNTRUSTED TASK DATA:\\n',1)[1])
 if req['role']=='developer':
  print('GUI 실시간 한글 로그 token=CANARY',flush=True)
@@ -52,6 +60,7 @@ r=ReviewResultV2(summary='GUI 검증') if req['role']=='reviewer' and req['conte
 if req['role']=='planner':r.plan='덧셈 검증';r.criteria=[Criterion(id='AC1',description='덧셈 통과')]
 if req['role']=='tester':r.command_ids=['unit'];r.coverage=[Coverage(criterion_id='AC1',command_ids=['unit'])]
 Path(sys.argv[sys.argv.index('--output-last-message')+1]).write_text(r.model_dump_json())
+print(json.dumps({{'type':'turn.completed','usage':{{'input_tokens':100,'cached_input_tokens':70,'output_tokens':20}}}}),flush=True)
 """)
 mock.chmod(0o700)
 config = Config(

@@ -54,7 +54,16 @@ def execution_directory():
 
 
 def execute(
-    argv, cwd: Path, timeout, log: Path, stdin=None, stop=lambda: None, env=None, capture_raw=False
+    argv,
+    cwd: Path,
+    timeout,
+    log: Path,
+    stdin=None,
+    stop=lambda: None,
+    env=None,
+    capture_raw=False,
+    on_event=None,
+    separate_stderr=False,
 ):
     log.parent.mkdir(parents=True, exist_ok=True)
     with tempfile.TemporaryFile() as input_file, log.open("w") as output_file:
@@ -82,7 +91,7 @@ def execute(
                 env=env or environment(),
                 stdin=input_file,
                 stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE if capture_raw else subprocess.STDOUT,
+                stderr=subprocess.PIPE if capture_raw or separate_stderr else subprocess.STDOUT,
                 start_new_session=True,
                 pass_fds=(owner_read,),
             )
@@ -106,6 +115,9 @@ def execute(
                     return
             except (ValueError, AttributeError):
                 pass
+            else:
+                if on_event is not None and stream == "out" and isinstance(event, dict):
+                    on_event(sanitize(event))
             text = redact(line)
             output_file.write(text)
             output_file.flush()

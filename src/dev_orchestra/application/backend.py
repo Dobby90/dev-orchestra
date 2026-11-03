@@ -9,6 +9,7 @@ import time
 import uuid
 from pathlib import Path
 
+from dev_orchestra.application.agent_settings import AgentSettingsService, settings_fingerprint
 from dev_orchestra.application.errors import ApplicationError
 from dev_orchestra.application.projects import ProjectService
 from dev_orchestra.application.web_contracts import ProjectCreate, Proposal
@@ -56,7 +57,7 @@ class BackendService:
         return info
 
     def policy_config(self, policy):
-        config = self.runs.config.model_copy(deep=True)
+        config = AgentSettingsService(self.runs.config).apply(self.runs.config)
         config.tests = policy.tests.model_copy(deep=True)
         config.workflow.max_fix_attempts = policy.max_fix_attempts
         config.review.blocking_severities = policy.blocking_severities
@@ -199,6 +200,7 @@ class BackendService:
             "branch": branch,
             "base_sha": info.base_sha,
             "project_version": p["version"],
+            "agent_settings_hash": settings_fingerprint(config),
             "proposal_hash": hashlib.sha256(
                 canonical(proposal.model_dump(mode="json")).encode()
             ).hexdigest(),
@@ -246,7 +248,8 @@ class BackendService:
             raise ApplicationError("PREVIEW_STALE", "invalid preview") from None
         fresh = self.preview(proposal)
         if receipt["expires"] < time.time() or any(
-            receipt[k] != fresh[k] for k in ["base_sha", "project_version", "proposal_hash"]
+            receipt.get(k) != fresh[k]
+            for k in ["base_sha", "project_version", "proposal_hash", "agent_settings_hash"]
         ):
             raise ApplicationError("PREVIEW_STALE", "preview changed; request another preview")
         p = self.project(proposal.project_id)
@@ -261,6 +264,8 @@ class BackendService:
         from dev_orchestra.application.web_contracts import Policy
 
         config = self.policy_config(Policy.model_validate(p["policy"]))
+        if settings_fingerprint(config) != receipt["agent_settings_hash"]:
+            raise ApplicationError("PREVIEW_STALE", "agent settings changed")
         config.project.default_base_branch = p["default_base_branch"]
         from dev_orchestra.application.contracts import CreateRun
         from dev_orchestra.application.service import RunService
@@ -278,6 +283,7 @@ class BackendService:
                 ),
                 run_id=receipt["run_id"],
                 branch=receipt["branch"],
+                resolve_settings=False,
             )
         if data["base_sha"] != receipt["base_sha"]:
             raise ApplicationError("PREVIEW_STALE", "base branch changed during submission")

@@ -38,6 +38,7 @@ import {
   ChangesPanel,
 } from "../components/ResultPanels";
 import { LogViewer } from "../components/LogViewer";
+import { AgentUsagePanel } from "../components/AgentUsagePanel";
 import { useRunEvents } from "../hooks/events";
 type Action =
   | "cancel"
@@ -58,9 +59,18 @@ const actionLabels: Record<Action, string> = {
   approve: "최종 승인",
   reconcile: "상태 확인·조정",
 };
-const tabs = ["logs", "tests", "review", "diff", "report", "spec"] as const;
+const tabs = [
+  "logs",
+  "agents",
+  "tests",
+  "review",
+  "diff",
+  "report",
+  "spec",
+] as const;
 const labels: Record<(typeof tabs)[number], string> = {
   logs: "실시간 로그",
+  agents: "에이전트·사용량",
   tests: "테스트",
   review: "코드 리뷰",
   diff: "변경 내용",
@@ -429,7 +439,7 @@ function RunDetailBody({ rid }: { rid: string }) {
         ) : steps.error ? (
           <ErrorNotice error={steps.error} retry={() => steps.refetch()} />
         ) : steps.data.items.length ? (
-          <ol className="timeline">
+          <ol className="timeline" tabIndex={0} aria-label="워크플로 단계">
             {steps.data.items.map((step) => (
               <li key={step.id} className={`timeline-step step-${step.status}`}>
                 <span className="step-icon">
@@ -503,6 +513,9 @@ function RunDetailBody({ rid }: { rid: string }) {
               removed={stream.removed}
               unavailable={stream.unavailable}
             />
+          </Tabs.Content>
+          <Tabs.Content value="agents" className="tab-content">
+            <AgentUsagePanel rid={rid} />
           </Tabs.Content>
           <Tabs.Content value="tests" className="tab-content">
             <TestsPanel

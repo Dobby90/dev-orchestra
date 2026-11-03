@@ -4,6 +4,9 @@ project:
 codex:
   command: codex
   model: null
+  reasoning_effort: null
+  # 역할별 null 값은 공통 기본값을 상속합니다.
+  roles: {}
   timeout_seconds: 1800
   role_timeouts:
     reviewer: 900

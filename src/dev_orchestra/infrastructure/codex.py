@@ -4,6 +4,7 @@ import uuid
 from pathlib import Path
 
 from dev_orchestra.domain.models import AgentRequest, AgentResult, PipelineError, ReviewResultV2
+from dev_orchestra.infrastructure.agent_usage import UsageCollector
 from dev_orchestra.infrastructure.files import write
 from dev_orchestra.infrastructure.process import execute, execution_directory
 
@@ -73,17 +74,28 @@ class CodexClient:
             "--output-last-message",
             str(result),
         ]
-        if self.config.model:
-            argv += ["--model", self.config.model]
+        options = self.config.for_role(request.role)
+        if options.model:
+            argv += ["--model", options.model]
+        if options.reasoning_effort:
+            argv += ["-c", f'model_reasoning_effort="{options.reasoning_effort}"']
         argv.append("-")
-        rc, _ = execute(
-            argv,
-            Path(request.worktree),
-            self.config.role_timeouts.get(request.role, self.config.timeout_seconds),
-            directory / "process.log",
-            prompt(request),
-            stop,
-        )
+        collector = UsageCollector(directory / "telemetry.json", options)
+        succeeded = False
+        try:
+            rc, _ = execute(
+                argv,
+                Path(request.worktree),
+                self.config.role_timeouts.get(request.role, self.config.timeout_seconds),
+                directory / "process.log",
+                prompt(request),
+                stop,
+                on_event=collector.event,
+                separate_stderr=True,
+            )
+            succeeded = rc == 0
+        finally:
+            collector.finish(succeeded)
         if rc:
             raise PipelineError(f"Codex {request.role} exited with code {rc}")
         if not result.exists():

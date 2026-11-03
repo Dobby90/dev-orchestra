@@ -58,6 +58,41 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/settings/agents": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Agent Settings */
+        get: operations["get_agent_settings_api_settings_agents_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        /** Save Agent Settings */
+        patch: operations["save_agent_settings_api_settings_agents_patch"];
+        trace?: never;
+    };
+    "/api/settings/agents/models": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Codex Models */
+        post: operations["codex_models_api_settings_agents_models_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/projects/{pid}": {
         parameters: {
             query?: never;
@@ -452,6 +487,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/runs/{rid}/agent-usage": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Agent Usage */
+        get: operations["agent_usage_api_runs__rid__agent_usage_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/runs/{rid}/event-history": {
         parameters: {
             query?: never;
@@ -558,6 +610,88 @@ export interface paths {
 export type webhooks = Record<string, never>;
 export interface components {
     schemas: {
+        /** AgentAttemptView */
+        AgentAttemptView: {
+            /** Model */
+            model?: string | null;
+            /** Reasoning Effort */
+            reasoning_effort?: string | null;
+            usage?: components["schemas"]["TokenUsage"] | null;
+            /**
+             * Usage Status
+             * @default unknown
+             * @enum {string}
+             */
+            usage_status: "reported" | "partial" | "unknown";
+            /**
+             * Completed Turns
+             * @default 0
+             */
+            completed_turns: number;
+            /** Duration Seconds */
+            duration_seconds?: number | null;
+            /** Step Id */
+            step_id: number;
+            /** Role */
+            role: string;
+            /** Revision */
+            revision: number;
+            /** Iteration */
+            iteration: number;
+            /** Attempt */
+            attempt: number;
+            /** Status */
+            status: string;
+        };
+        /** AgentOptions */
+        AgentOptions: {
+            /** Model */
+            model?: string | null;
+            /** Reasoning Effort */
+            reasoning_effort?: string | null;
+        };
+        /** AgentSettings */
+        AgentSettings: {
+            /** Model */
+            model?: string | null;
+            /** Reasoning Effort */
+            reasoning_effort?: string | null;
+            /** Roles */
+            roles?: {
+                [key: string]: components["schemas"]["AgentOptions"];
+            };
+        };
+        /** AgentSettingsInput */
+        AgentSettingsInput: {
+            settings: components["schemas"]["AgentSettings"];
+            /** Expected Version */
+            expected_version: string;
+        };
+        /** AgentSettingsView */
+        AgentSettingsView: {
+            settings: components["schemas"]["AgentSettings"];
+            /** Version */
+            version: string;
+        };
+        /** AgentUsageView */
+        AgentUsageView: {
+            /** Agents */
+            agents: {
+                [key: string]: components["schemas"]["AgentOptions"];
+            };
+            /** Attempts */
+            attempts: components["schemas"]["AgentAttemptView"][];
+            usage: components["schemas"]["TokenUsage"] | null;
+            /**
+             * Usage Status
+             * @enum {string}
+             */
+            usage_status: "reported" | "partial" | "unknown";
+            /** Measured Attempts */
+            measured_attempts: number;
+            /** Total Attempts */
+            total_attempts: number;
+        };
         /** ApprovalInput */
         ApprovalInput: {
             /** Expected Sha */
@@ -625,6 +759,18 @@ export interface components {
              * @constant
              */
             confirm: true;
+        };
+        /** CodexModelPage */
+        CodexModelPage: {
+            /** Items */
+            items: components["schemas"]["CodexModelView"][];
+        };
+        /** CodexModelView */
+        CodexModelView: {
+            /** Model */
+            model: string;
+            /** Reasoning Efforts */
+            reasoning_efforts: string[];
         };
         /** CommandView */
         CommandView: {
@@ -848,6 +994,11 @@ export interface components {
             base_sha: string;
             /** Project Version */
             project_version: number;
+            /**
+             * Agent Settings Hash
+             * @default
+             */
+            agent_settings_hash: string;
             /** Proposal Hash */
             proposal_hash: string;
             /** Expires */
@@ -1369,6 +1520,15 @@ export interface components {
             /** Text */
             text: string;
         };
+        /** TokenUsage */
+        TokenUsage: {
+            /** Input Tokens */
+            input_tokens: number;
+            /** Cached Input Tokens */
+            cached_input_tokens: number;
+            /** Output Tokens */
+            output_tokens: number;
+        };
         /** ValidationError */
         ValidationError: {
             /** Location */
@@ -1568,6 +1728,79 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_agent_settings_api_settings_agents_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AgentSettingsView"];
+                };
+            };
+        };
+    };
+    save_agent_settings_api_settings_agents_patch: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AgentSettingsInput"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AgentSettingsView"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    codex_models_api_settings_agents_models_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CodexModelPage"];
                 };
             };
         };
@@ -2416,6 +2649,37 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["StepPage"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    agent_usage_api_runs__rid__agent_usage_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                rid: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AgentUsageView"];
                 };
             };
             /** @description Validation Error */

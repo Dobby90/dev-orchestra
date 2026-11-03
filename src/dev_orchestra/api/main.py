@@ -14,17 +14,23 @@ from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from starlette.concurrency import run_in_threadpool
 
 from dev_orchestra.api.security import COOKIE, SESSION_TTL_SECONDS, Security, digest, runtime_key
+from dev_orchestra.application.agent_settings import AgentSettingsService
+from dev_orchestra.application.agent_usage import usage_view
 from dev_orchestra.application.backend import BackendService
 from dev_orchestra.application.commands import Commands
 from dev_orchestra.application.errors import ApplicationError
 from dev_orchestra.application.results import Results
 from dev_orchestra.application.service import RunService
 from dev_orchestra.application.web_contracts import (
+    AgentSettingsInput,
+    AgentSettingsView,
+    AgentUsageView,
     ApprovalInput,
     BranchPage,
     ChangeInput,
     ChangesView,
     CleanupInput,
+    CodexModelPage,
     DashboardView,
     DeferInput,
     DiffView,
@@ -53,7 +59,7 @@ from dev_orchestra.application.web_contracts import (
     SubmissionView,
     TestResultView,
 )
-from dev_orchestra.config import load_config
+from dev_orchestra.config import ROLES, load_config
 from dev_orchestra.domain.models import PipelineError
 from dev_orchestra.infrastructure.migrations import upgrade
 
@@ -79,6 +85,7 @@ def create_app(config=None, allowed_roots=None, port=8000, static_directory=None
     key = runtime_key(runs.store.path.with_suffix(".web-key"))
     backend = BackendService(runs, roots, key)
     security = Security(runs.store, key)
+    agent_settings = AgentSettingsService(config)
     app = FastAPI(
         title="DevOrchestra",
         version="0.1.0",
@@ -274,6 +281,24 @@ def create_app(config=None, allowed_roots=None, port=8000, static_directory=None
     def project_create(body: ProjectCreate):
         return backend.register(body)
 
+    @app.get("/api/settings/agents", response_model=AgentSettingsView)
+    def get_agent_settings():
+        return agent_settings.get()
+
+    @app.post("/api/settings/agents/models", response_model=CodexModelPage)
+    def codex_models():
+        return {"items": agent_settings.models(refresh=True)}
+
+    @app.patch("/api/settings/agents", response_model=AgentSettingsView)
+    def save_agent_settings(body: AgentSettingsInput):
+        explicit = any(
+            body.settings.for_role(role).model or body.settings.for_role(role).reasoning_effort
+            for role in ROLES
+        )
+        return agent_settings.save(
+            body.settings, body.expected_version, agent_settings.models() if explicit else []
+        )
+
     @app.get("/api/projects", response_model=ProjectPage)
     def projects(
         limit: int = Query(50, ge=1, le=100), cursor: str = "", include_archived: bool = False
@@ -450,6 +475,10 @@ def create_app(config=None, allowed_roots=None, port=8000, static_directory=None
     def steps(rid: str):
         rows = runs.queries.steps(rid)
         return {"items": [{k: v for k, v in r.items() if k != "data"} for r in rows]}
+
+    @app.get("/api/runs/{rid}/agent-usage", response_model=AgentUsageView)
+    def agent_usage(rid: str):
+        return usage_view(runs.store, rid)
 
     @app.get("/api/runs/{rid}/event-history", response_model=EventPage)
     def events(rid: str, after: int = Query(0, ge=0), limit: int = Query(100, ge=1, le=200)):

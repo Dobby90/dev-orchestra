@@ -6,12 +6,50 @@ from typing import Annotated, Any, Literal
 from pydantic import BaseModel, ConfigDict, Field
 
 from dev_orchestra.application.contracts import RunSummary
-from dev_orchestra.config import Tests
+from dev_orchestra.config import AgentOptions, AgentSettings, Tests
 from dev_orchestra.domain.models import State
+from dev_orchestra.infrastructure.agent_usage import AgentTelemetry, TokenUsage
 
 
 class Input(BaseModel):
     model_config = ConfigDict(extra="forbid")
+
+
+class AgentSettingsInput(Input):
+    settings: AgentSettings
+    expected_version: str = Field(pattern=r"^[0-9a-f]{64}$")
+
+
+class AgentSettingsView(BaseModel):
+    settings: AgentSettings
+    version: str
+
+
+class CodexModelView(BaseModel):
+    model: str
+    reasoning_efforts: list[str]
+
+
+class CodexModelPage(BaseModel):
+    items: list[CodexModelView]
+
+
+class AgentAttemptView(AgentTelemetry):
+    step_id: int
+    role: str
+    revision: int
+    iteration: int
+    attempt: int
+    status: str
+
+
+class AgentUsageView(BaseModel):
+    agents: dict[str, AgentOptions]
+    attempts: list[AgentAttemptView]
+    usage: TokenUsage | None
+    usage_status: Literal["reported", "partial", "unknown"]
+    measured_attempts: int
+    total_attempts: int
 
 
 class Policy(Input):
@@ -177,6 +215,7 @@ class PreviewView(BaseModel):
     branch: str
     base_sha: str
     project_version: int
+    agent_settings_hash: str = ""
     proposal_hash: str
     expires: int
     preview_token: str

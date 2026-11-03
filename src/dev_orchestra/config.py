@@ -1,10 +1,10 @@
 """Strict YAML configuration, resolved once and snapshotted per run."""
 
 from pathlib import Path
-from typing import Literal
+from typing import Annotated, Literal
 
 import yaml
-from pydantic import Field, model_validator
+from pydantic import Field, StringConstraints, model_validator
 
 from dev_orchestra.domain.models import Model
 
@@ -14,9 +14,30 @@ class Project(Model):
     branch_prefix: str = "feature/ai"
 
 
-class Codex(Model):
+Role = Literal["planner", "developer", "tester", "reviewer", "fixer"]
+ROLES = ("planner", "developer", "tester", "reviewer", "fixer")
+ModelName = Annotated[str, StringConstraints(pattern=r"^[A-Za-z0-9][A-Za-z0-9._:/-]{0,199}$")]
+ReasoningEffort = Annotated[str, StringConstraints(pattern=r"^[a-z][a-z0-9_]{0,31}$")]
+
+
+class AgentOptions(Model):
+    model: ModelName | None = None
+    reasoning_effort: ReasoningEffort | None = None
+
+
+class AgentSettings(AgentOptions):
+    roles: dict[Role, AgentOptions] = Field(default_factory=dict)
+
+    def for_role(self, role: str) -> AgentOptions:
+        override = self.roles.get(role, AgentOptions())
+        return AgentOptions(
+            model=override.model or self.model,
+            reasoning_effort=override.reasoning_effort or self.reasoning_effort,
+        )
+
+
+class Codex(AgentSettings):
     command: str = "codex"
-    model: str | None = None
     timeout_seconds: int = Field(default=1800, gt=0)
     role_timeouts: dict[str, int] = Field(default_factory=dict)
 
