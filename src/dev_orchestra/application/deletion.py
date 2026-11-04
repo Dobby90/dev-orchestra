@@ -8,14 +8,89 @@ from pathlib import Path
 from dev_orchestra.application.errors import ApplicationError
 from dev_orchestra.config import Config
 from dev_orchestra.domain.models import PipelineError
+from dev_orchestra.infrastructure.files import contained
 from dev_orchestra.infrastructure.git import Git
 from dev_orchestra.infrastructure.locking import lock
 from dev_orchestra.infrastructure.process_owner import alive, markers
+from dev_orchestra.infrastructure.test_runner import junit_paths
 
 
 class RunDeletionService:
     def __init__(self, store):
         self.store = store
+
+    def branch_target(self, run, worktree):
+        git = Git(Path(run["repo"]))
+        branch = run["branch"]
+        git.call("check-ref-format", "--branch", branch)
+        if branch == run["base"]:
+            raise ApplicationError("RUN_BRANCH_CHANGED", "cannot delete the base branch")
+        ref = "refs/heads/" + branch
+        if worktree.exists():
+            checkout = Git(worktree)
+            expected = run.get("final_sha") or run.get("current_sha") or run["base_sha"]
+            if (
+                checkout.call("rev-parse", "--symbolic-full-name", "HEAD") != ref
+                or checkout.sha() != expected
+                or checkout.common().resolve() != git.common().resolve()
+            ):
+                raise ApplicationError("RUN_BRANCH_CHANGED", "worktree branch changed")
+        with self.store.connection() as db:
+            for row in db.execute("SELECT id,data FROM runs WHERE id<>?", (run["id"],)):
+                other = json.loads(row["data"])
+                if (
+                    other.get("branch") == branch
+                    and Git(Path(other["repo"])).common().resolve() == git.common().resolve()
+                ):
+                    raise ApplicationError("RUN_BRANCH_CHANGED", "branch belongs to another run")
+        # Query an exact ref, including symbolic-ref information; an absent branch
+        # is valid both before preparation and after a partially completed deletion.
+        refs = git.call("for-each-ref", "--format=%(refname) %(objectname) %(symref)", ref)
+        target = None
+        for line in refs.splitlines():
+            parts = line.split()
+            if parts[0] == ref:
+                if len(parts) != 2:
+                    raise ApplicationError("RUN_BRANCH_CHANGED", "symbolic branch is not owned")
+                target = parts[1]
+        if target is None:
+            return None
+        expected = run.get("final_sha") or run.get("current_sha") or run["base_sha"]
+        if target != expected:
+            raise ApplicationError("RUN_BRANCH_CHANGED", "branch changed after run execution")
+        for entry in git.call("worktree", "list", "--porcelain", "-z").split("\0\0"):
+            fields = entry.strip("\0").split("\0")
+            if "branch " + ref in fields:
+                path = Path(fields[0].removeprefix("worktree "))
+                if path.resolve() != worktree.resolve():
+                    raise ApplicationError("RUN_BRANCH_CHANGED", "branch is checked out elsewhere")
+        if not worktree.exists() and not (
+            run.get("current_sha") or run.get("final_sha") or run.get("deletion_pending")
+        ):
+            raise ApplicationError("RUN_BRANCH_CHANGED", "branch ownership is not established")
+        return target
+
+    def disposable_reports(self, run, worktree):
+        config = Config.model_validate(run["config"]).tests
+        git = Git(worktree)
+        tracked = set(git.call("ls-files", "-z").split("\0"))
+        outputs = [contained(worktree, path) for path in config.output_paths]
+        reports = set()
+        for command in config.commands.values():
+            if command.junit_report:
+                contained(worktree, command.junit_report)
+                for path in junit_paths(worktree, command.junit_report, outputs):
+                    relative = path.relative_to(worktree).as_posix()
+                    if relative in tracked:
+                        raise ApplicationError("RUN_WORKTREE_DIRTY", "JUnit report is tracked")
+                    reports.add(relative)
+        changed = git.call("diff", "HEAD", "--name-only", "-z")
+        untracked = set(
+            filter(None, git.call("ls-files", "--others", "--exclude-standard", "-z").split("\0"))
+        )
+        if changed or untracked - reports:
+            raise ApplicationError("RUN_WORKTREE_DIRTY", "worktree contains user changes")
+        return [contained(worktree, name) for name in sorted(reports)]
 
     def paths(self, run):
         if not re.fullmatch(r"run-[0-9a-f]{16}", run["id"]):
@@ -103,6 +178,8 @@ class RunDeletionService:
                     raise ApplicationError("VERSION_CONFLICT", "run version changed")
                 self.paths(run)
                 self.check_idle(db, run, directory)
+                self.branch_target(run, worktree)
+                reports = self.disposable_reports(run, worktree) if worktree.exists() else []
                 if not run.get("deletion_pending"):
                     self.store.update(
                         run_id, deletion_pending=True, expected_version=expected_version
@@ -111,15 +188,27 @@ class RunDeletionService:
             # request uses the latest version and repeats the same safe removal.
             try:
                 if worktree.exists():
-                    Git(Path(run["repo"])).remove(worktree)  # Never force or delete the branch.
+                    for report in reports:
+                        contained(worktree, report.relative_to(worktree).as_posix()).unlink(
+                            missing_ok=True
+                        )
+                    Git(Path(run["repo"])).remove(worktree)  # Never force a dirty Worktree.
+                target = self.branch_target(self.store.get(run_id), worktree)
+                if target:
+                    # Compare-and-delete also protects commits added after preflight.
+                    Git(Path(run["repo"])).call(
+                        "update-ref", "--no-deref", "-d", "refs/heads/" + run["branch"], target
+                    )
                 with self.store.transaction() as db:
                     self.check_idle(db, self.store.get(run_id), directory)
                     shutil.rmtree(directory)
                     self.delete_rows(db, run_id)
-            except OSError as error:
+            except ApplicationError:
+                raise
+            except (OSError, PipelineError) as error:
                 raise ApplicationError(
                     "RUN_DELETE_FAILED",
-                    "file removal failed; retry deletion with the latest version",
+                    "file or branch removal failed; retry deletion with the latest version",
                 ) from error
 
     def delete_rows(self, db, run_id):

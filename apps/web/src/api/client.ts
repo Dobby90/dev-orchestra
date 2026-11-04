@@ -12,6 +12,10 @@ export class ApiError extends Error {
   }
 }
 const messages: Record<string, string> = {
+  RUN_WORKTREE_DIRTY:
+    "테스트 결과 파일 외 미커밋 변경이 있어 삭제할 수 없습니다. Worktree의 변경 내용을 보존하거나 정리해 주세요.",
+  RUN_BRANCH_CHANGED:
+    "작업 브랜치에 추가된 커밋이 있거나 다른 작업에서 사용 중이어서 삭제할 수 없습니다. 브랜치 상태를 확인해 주세요.",
   RUN_BUSY:
     "Worker·명령 또는 프로세스 정리가 끝나지 않았습니다. 종료 상태를 확인한 뒤 다시 시도해 주세요.",
   RUN_DELETE_FAILED:

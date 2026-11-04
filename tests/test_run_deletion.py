@@ -59,7 +59,7 @@ def test_cancelled_deletion_preserves_other_runs_and_repository(service, schema)
         assert not db.execute("PRAGMA foreign_key_check").fetchall()
 
 
-def test_completed_deletion_removes_evidence_but_keeps_branch(completed):
+def test_completed_deletion_removes_evidence_and_branch(completed):
     svc, rid, repo, _ = completed
     svc.approve(rid)
     run = svc.store.get(rid)
@@ -96,7 +96,7 @@ def test_completed_deletion_removes_evidence_but_keeps_branch(completed):
     delete(svc, rid)
     assert not Path(run["directory"]).exists()
     assert not Path(run["worktree"]).exists()
-    assert Git(repo).call("rev-parse", "refs/heads/" + run["branch"]) == branch_sha
+    assert not Git(repo).call("for-each-ref", "refs/heads/" + run["branch"])
     assert (repo / "main.py").read_bytes() == original
     with svc.store.connection() as db:
         assert not db.execute("PRAGMA foreign_key_check").fetchall()
@@ -213,7 +213,7 @@ def test_dirty_worktree_is_preserved_and_retry_succeeds(completed):
     with pytest.raises(PipelineError):
         delete(svc, rid)
     assert changed.read_text() == "uncommitted\n"
-    assert svc.store.get(rid)["deletion_pending"]
+    assert not svc.store.get(rid).get("deletion_pending")
     changed.write_text(previous)
     delete(svc, rid)
 
@@ -319,3 +319,186 @@ def test_failure_after_files_removed_keeps_retryable_row(service, monkeypatch):
     assert svc.store.get(rid)["deletion_pending"]
     monkeypatch.setattr(RunDeletionService, "delete_rows", original)
     delete(svc, rid)
+
+
+def prepared_cancelled(service):
+    svc, rid, repo = service
+    run = svc.store.get(rid)
+    worktree = Path(run["worktree"])
+    Git(repo).create(worktree, run["branch"], run["base_sha"])
+    svc.cancel(rid)
+    return svc, rid, repo, worktree, run
+
+
+def test_deletion_removes_only_configured_junit_reports(service):
+    svc, rid, repo, worktree, run = prepared_cancelled(service)
+    report = worktree / "build/results.xml"
+    report.parent.mkdir()
+    report.write_text("test result")
+    delete(svc, rid)
+    assert not worktree.exists()
+    assert not Git(repo).call("for-each-ref", "refs/heads/" + run["branch"])
+    assert (repo / "main.py").read_text() == "developer local edits\n"
+
+
+@pytest.mark.parametrize("relative", ["notes.txt", "build/notes.txt", "main.py"])
+def test_user_changes_block_deletion_before_report_removal(service, relative):
+    svc, rid, repo, worktree, run = prepared_cancelled(service)
+    report = worktree / "build/results.xml"
+    report.parent.mkdir()
+    report.write_text("test result")
+    changed = worktree / relative
+    changed.write_text("user content")
+    with pytest.raises(PipelineError, match="user changes"):
+        delete(svc, rid)
+    assert report.exists() and changed.read_text() == "user content"
+    assert not svc.store.get(rid).get("deletion_pending")
+    assert Git(repo).call("rev-parse", run["branch"]) == run["base_sha"]
+
+
+def test_added_branch_commit_is_preserved(service):
+    svc, rid, repo, worktree, run = prepared_cancelled(service)
+    (worktree / "extra.txt").write_text("user commit")
+    sha = Git(worktree).commit("user commit")
+    with pytest.raises(PipelineError, match="branch changed"):
+        delete(svc, rid)
+    assert worktree.exists()
+    assert Git(repo).call("rev-parse", run["branch"]) == sha
+
+
+def test_branch_checked_out_elsewhere_is_preserved(service, tmp_path):
+    svc, rid, repo, worktree, run = prepared_cancelled(service)
+    Git(repo).remove(worktree)
+    elsewhere = tmp_path / "elsewhere"
+    Git(repo).call("worktree", "add", str(elsewhere), run["branch"])
+    with pytest.raises(PipelineError, match="checked out elsewhere"):
+        delete(svc, rid)
+    assert elsewhere.exists()
+    assert svc.store.get(rid)
+
+
+def test_base_branch_is_never_deleted(service):
+    svc, rid, repo = service
+    svc.cancel(rid)
+    svc.store.update(rid, branch="main")
+    with pytest.raises(PipelineError, match="base branch"):
+        delete(svc, rid)
+    assert Git(repo).call("rev-parse", "main")
+
+
+def test_tracked_junit_report_is_preserved(service):
+    svc, rid, repo, worktree, run = prepared_cancelled(service)
+    report = worktree / "build/results.xml"
+    report.parent.mkdir()
+    report.write_text("tracked report")
+    sha = Git(worktree).commit("tracked report")
+    svc.store.update(rid, current_sha=sha)
+    with pytest.raises(PipelineError, match="report is tracked"):
+        delete(svc, rid)
+    assert report.exists()
+
+
+def test_junit_symlink_is_preserved(service, tmp_path):
+    svc, rid, repo, worktree, run = prepared_cancelled(service)
+    outside = tmp_path / "outside.xml"
+    outside.write_text("preserve")
+    report = worktree / "build/results.xml"
+    report.parent.mkdir()
+    report.symlink_to(outside)
+    with pytest.raises(PipelineError):
+        delete(svc, rid)
+    assert outside.read_text() == "preserve" and report.is_symlink()
+
+
+def test_branch_deletion_failure_can_be_retried(service, monkeypatch):
+    svc, rid, repo, worktree, run = prepared_cancelled(service)
+    original = Git.call
+
+    def fail(self, *args, **kwargs):
+        if args[0] == "update-ref":
+            raise PipelineError("injected branch failure")
+        return original(self, *args, **kwargs)
+
+    monkeypatch.setattr(Git, "call", fail)
+    with pytest.raises(PipelineError, match="retry deletion"):
+        delete(svc, rid)
+    assert not worktree.exists() and svc.store.get(rid)["deletion_pending"]
+    monkeypatch.setattr(Git, "call", original)
+    delete(svc, rid)
+    assert not Git(repo).call("for-each-ref", "refs/heads/" + run["branch"])
+
+
+def test_junit_glob_removes_reports_but_not_unrelated_files(service):
+    svc, rid, repo, worktree, run = prepared_cancelled(service)
+    config = run["config"]
+    config["tests"]["commands"]["unit"]["junit_report"] = "build/TEST-*.xml"
+    svc.store.update(rid, config=config)
+    (worktree / "build").mkdir()
+    for name in ["TEST-one.xml", "TEST-two.xml"]:
+        (worktree / "build" / name).write_text("report")
+    delete(svc, rid)
+    assert not worktree.exists()
+
+
+def test_switched_worktree_branch_is_preserved(service):
+    svc, rid, repo, worktree, run = prepared_cancelled(service)
+    Git(worktree).call("checkout", "-b", "user-work")
+    with pytest.raises(PipelineError, match="worktree branch changed"):
+        delete(svc, rid)
+    assert worktree.exists()
+    assert Git(repo).call("rev-parse", run["branch"]) == run["base_sha"]
+
+
+def test_branch_shared_with_another_run_is_preserved(service):
+    svc, rid, repo, worktree, run = prepared_cancelled(service)
+    other = svc.create(repo, Path(run["directory"]) / "spec.md")
+    svc.store.update(other, branch=run["branch"])
+    with pytest.raises(PipelineError, match="another run"):
+        delete(svc, rid)
+    assert worktree.exists()
+
+
+def test_branch_deleted_before_database_failure_is_retryable(service, monkeypatch):
+    svc, rid, repo, worktree, run = prepared_cancelled(service)
+    original = RunDeletionService.delete_rows
+
+    def fail(*args):
+        raise OSError("injected")
+
+    monkeypatch.setattr(RunDeletionService, "delete_rows", fail)
+    with pytest.raises(PipelineError):
+        delete(svc, rid)
+    assert not worktree.exists()
+    assert not Git(repo).call("for-each-ref", "refs/heads/" + run["branch"])
+    assert svc.store.get(rid)["deletion_pending"]
+    monkeypatch.setattr(RunDeletionService, "delete_rows", original)
+    delete(svc, rid)
+
+
+def test_unprepared_run_cannot_delete_an_existing_branch(service):
+    svc, rid, repo = service
+    run = svc.store.get(rid)
+    Git(repo).call("branch", run["branch"], run["base_sha"])
+    svc.cancel(rid)
+    with pytest.raises(PipelineError, match="ownership is not established"):
+        delete(svc, rid)
+    assert Git(repo).call("rev-parse", run["branch"]) == run["base_sha"]
+
+
+def test_branch_moved_during_deletion_is_not_deleted(service, monkeypatch):
+    svc, rid, repo, worktree, run = prepared_cancelled(service)
+    git = Git(repo)
+    tree = git.call("rev-parse", run["base_sha"] + "^{tree}")
+    added = git.call("commit-tree", tree, "-p", run["base_sha"], input="later commit\n")
+    original = Git.call
+
+    def move(self, *args, **kwargs):
+        if args[:3] == ("update-ref", "--no-deref", "-d"):
+            original(self, "update-ref", "refs/heads/" + run["branch"], added)
+        return original(self, *args, **kwargs)
+
+    monkeypatch.setattr(Git, "call", move)
+    with pytest.raises(PipelineError, match="retry deletion"):
+        delete(svc, rid)
+    assert git.call("rev-parse", run["branch"]) == added
+    assert svc.store.get(rid)["deletion_pending"]

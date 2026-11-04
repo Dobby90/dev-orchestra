@@ -58,7 +58,10 @@ describe("작업 기록 삭제", () => {
     expect(await screen.findByRole("dialog")).toHaveTextContent("로그·보고서");
     expect(screen.getByRole("dialog")).toHaveTextContent("승인 근거");
     expect(screen.getByRole("dialog")).toHaveTextContent(
-      "원본 저장소와 작업 브랜치는 보존",
+      "로컬 작업 브랜치를 영구",
+    );
+    expect(screen.getByRole("dialog")).toHaveTextContent(
+      "삭제할 로컬 브랜치: feature/run",
     );
     expect(remove).not.toHaveBeenCalled();
     fireEvent.click(screen.getByRole("button", { name: "영구 삭제 확인" }));

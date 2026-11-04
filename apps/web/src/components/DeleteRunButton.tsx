@@ -69,12 +69,14 @@ export function DeleteRunButton({ run }: { run: RunDetail }) {
       >
         <p className="notice">
           이 작업의 실행 단계·요구사항·로그·보고서·테스트 및 리뷰 결과·승인
-          근거와 격리된 Worktree를 영구 삭제합니다. 원본 저장소와 작업 브랜치는
-          보존합니다. 미커밋 변경이 있는 Worktree는 강제로 삭제하지 않습니다.
-          파일 삭제가 중단되면 일부 파일이 이미 삭제되었을 수 있으며, 기록
-          삭제를 재시도할 수 있습니다.
+          근거·테스트 결과 파일·격리된 Worktree와 로컬 작업 브랜치를 영구
+          삭제합니다. 원본 작업 디렉터리와 원격 브랜치는 보존합니다. 테스트 결과
+          파일 외 미커밋 변경이 있거나 작업 브랜치에 추가된 커밋이 있으면
+          삭제하지 않습니다. 파일 삭제가 중단되면 일부 파일이 이미 삭제되었을 수
+          있으며, 기록 삭제를 재시도할 수 있습니다.
         </p>
         <p className="mono">{run.id}</p>
+        <p className="mono">삭제할 로컬 브랜치: {target?.branch}</p>
         <Button
           variant="danger"
           disabled={
