@@ -4,7 +4,7 @@ import uuid
 from pathlib import Path
 
 from dev_orchestra.application.approvals import ApprovalService
-from dev_orchestra.application.contracts import CreateRun
+from dev_orchestra.application.contracts import CreateRun, RepositoryInfo
 from dev_orchestra.application.events import EventService
 from dev_orchestra.application.execution import ExecutionService
 from dev_orchestra.application.queries import RunQueryService
@@ -59,6 +59,17 @@ class RunService:
         git = Git(repo)
         base = base or config.project.default_base_branch
         sha = git.baseline(base)
+        from dev_orchestra.application.validation import complete_run_validation
+
+        config = complete_run_validation(
+            config,
+            RepositoryInfo(
+                repository_path=repo,
+                git_common_directory=git.common(),
+                base_branch=base,
+                base_sha=sha,
+            ),
+        )
         spec_text = spec.expanduser().resolve(strict=True).read_text()
         if not spec_text.strip():
             raise PipelineError("PRD must not be empty")

@@ -126,6 +126,62 @@ def test_vite_build_detects_only_temporary_cache_output_and_warns_for_old_policy
     assert not any(cache in warning for warning in policy_warnings(cfg, info))
 
 
+@pytest.mark.parametrize("directory", [".", "web"])
+def test_new_run_completes_vite_outputs_without_changing_existing_policy(service, directory):
+    svc, old_id, repo = service
+    before = svc.store.get(old_id)["config"]
+    prefix = "" if directory == "." else directory + "/"
+    commit_files(
+        repo,
+        {
+            prefix + "package.json": json.dumps({"scripts": {"build": "vite build"}}),
+            prefix + "vite.config.ts": "export default {};",
+        },
+    )
+    svc.config.tests.commands["build"] = Command(
+        kind="check", argv=["npm", "run", "build"], working_directory=directory
+    )
+    # Uncommitted manifest changes must not affect the new Run's committed policy.
+    (repo / (prefix + "package.json")).write_text('{"scripts":{}}')
+    spec = Path(svc.store.get(old_id)["directory"]) / "spec.md"
+    new_id = svc.create(repo, spec)
+    cache = prefix + "node_modules/.vite-temp"
+    outputs = svc.store.get(new_id)["config"]["tests"]["output_paths"]
+    assert cache in outputs and prefix + "node_modules" not in outputs
+    assert cache not in svc.config.tests.output_paths
+    assert svc.store.get(old_id)["config"] == before
+
+
+def test_web_preview_and_submission_complete_old_project_vite_policy(web):
+    client, svc, _, repo, _ = web
+    commit_files(
+        repo,
+        {
+            "package.json": json.dumps({"scripts": {"build": "vite build"}}),
+            "vite.config.ts": "export default {};",
+        },
+    )
+    svc.config.tests.commands["build"] = Command(kind="check", argv=["npm", "run", "build"])
+    p = project(client, svc, repo)
+    proposal = {"project_id": p["id"], "spec": {"kind": "text", "text": "PRD"}}
+    preview = client.post(f"/api/projects/{p['id']}/run-previews", json=proposal)
+    assert preview.status_code == 200, preview.text
+    assert not any(".vite-temp" in w for w in preview.json()["validation_warnings"])
+    response = client.post(
+        "/api/runs",
+        json={
+            **proposal,
+            "preview_token": preview.json()["preview_token"],
+        },
+        headers={"Idempotency-Key": "auto-vite"},
+    )
+    assert response.status_code == 202, response.text
+    cfg = svc.store.get(response.json()["run_id"])["config"]
+    assert "node_modules/.vite-temp" in cfg["tests"]["output_paths"]
+    current = client.get(f"/api/projects/{p['id']}").json()
+    assert "node_modules/.vite-temp" not in current["policy"]["tests"]["output_paths"]
+
+
 def test_detect_wrappers_package_managers_and_distinct_reports(service):
     _, _, repo = service
     commit_files(

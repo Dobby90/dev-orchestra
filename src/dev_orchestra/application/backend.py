@@ -183,6 +183,9 @@ class BackendService:
         config.project.default_base_branch = p["default_base_branch"]
         base = proposal.base_branch or p["default_base_branch"]
         info = self.projects.validate_repository(Path(p["repository_path"]), base)
+        from dev_orchestra.application.validation import complete_run_validation
+
+        config = complete_run_validation(config, info)
         rid = "run-" + uuid.uuid4().hex[:16]
         branch = proposal.feature_branch or config.project.branch_prefix + "/" + rid
         if not branch.startswith(config.project.branch_prefix + "/"):

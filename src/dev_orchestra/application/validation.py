@@ -13,6 +13,7 @@ from dev_orchestra.domain.models import PipelineError
 from dev_orchestra.infrastructure.dependencies import vite_cache_output
 from dev_orchestra.infrastructure.files import relative_path
 from dev_orchestra.infrastructure.git import Git
+from dev_orchestra.infrastructure.playwright import browser_cache
 
 
 def script_tokens(value):
@@ -141,24 +142,20 @@ def candidate(tool, directory=".", *, argv=None, evidence=(), label=None):
             "테스트 스크립트가 단발 실행하고 build/unit.xml에 JUnit을 생성하도록 설정하세요."
         )
     elif tool == "playwright":
-        browser_cache = Path.home() / (
-            "Library/Caches/ms-playwright"
-            if platform.system() == "Darwin"
-            else ".cache/ms-playwright"
-        )
         command.update(
             argv=argv or ["npm", "run", "test:browser", "--", "--reporter=junit"],
             junit_report=prefix + "build/browser.xml",
             env={
                 "PLAYWRIGHT_JUNIT_OUTPUT_FILE": "build/browser.xml",
-                "PLAYWRIGHT_BROWSERS_PATH": str(browser_cache),
+                "PLAYWRIGHT_BROWSERS_PATH": str(browser_cache()),
             },
             network="loopback",
         )
         outputs += [prefix + "test-results", prefix + "playwright-report"]
         writes = [prefix + "tests", prefix + "e2e"]
         warnings.append(
-            "Playwright 브라우저를 미리 설치하세요. 서버는 127.0.0.1을 사용해야 합니다."
+            "기본 캐시의 Playwright 브라우저는 실행 전에 버전에 맞춰 자동 준비합니다. "
+            "최초 준비에는 외부 네트워크가 필요하며 서버는 127.0.0.1을 사용해야 합니다."
         )
         if platform.system() != "Darwin":
             warnings.append(
@@ -483,6 +480,28 @@ def script_identity(argv):
     if len(tail) >= 2 and tail[0] == "run":
         return manager, tail[1]
     return None
+
+
+def complete_run_validation(config, info):
+    """Complete derived outputs before freezing a new Run; never edit saved policies."""
+    snapshot = config.model_copy(deep=True)
+    selected = [c for c in snapshot.tests.commands.values() if script_identity(c.argv)]
+    if not selected:
+        return snapshot
+    detected = detect_validation(info)
+    for command in selected:
+        for item in detected.candidates:
+            if command.working_directory != item.command.working_directory or script_identity(
+                command.argv
+            ) != script_identity(item.command.argv):
+                continue
+            for output in item.output_paths:
+                if output.endswith("node_modules/.vite-temp") and not any(
+                    PurePosixPath(output).is_relative_to(PurePosixPath(p))
+                    for p in snapshot.tests.output_paths
+                ):
+                    snapshot.tests.output_paths.append(output)
+    return snapshot
 
 
 def report_warning(command, candidates):

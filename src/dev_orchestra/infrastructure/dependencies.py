@@ -8,6 +8,7 @@ from pathlib import Path
 from dev_orchestra.domain.models import PipelineError, StopRequested
 from dev_orchestra.infrastructure.files import contained, digest, write
 from dev_orchestra.infrastructure.git import Git
+from dev_orchestra.infrastructure.playwright import browser_cache, prepare_browsers
 from dev_orchestra.infrastructure.process import environment, execute, sanitize
 from dev_orchestra.infrastructure.test_runner import sandbox_command
 
@@ -41,7 +42,7 @@ def prepare_dependencies(worktree, config, directory, stop=lambda: None):
     roots = {}
     for command_id, command in config.commands.items():
         browsers = command.env.get("PLAYWRIGHT_BROWSERS_PATH")
-        if browsers and browsers != "0":
+        if browsers and browsers not in {"0", str(browser_cache())}:
             cwd = (
                 worktree
                 if command.working_directory == "."
@@ -73,6 +74,7 @@ def prepare_dependencies(worktree, config, directory, stop=lambda: None):
         root = next((p for p in packages if (p / "package-lock.json").exists()), packages[0])
         roots.setdefault(root, []).append(command_id)
     if not roots:
+        prepare_browsers(worktree, config, directory, stop)
         return
     directory.mkdir(parents=True, exist_ok=True)
     tracked = Git(worktree).call("ls-files").splitlines()
@@ -221,3 +223,4 @@ def prepare_dependencies(worktree, config, directory, stop=lambda: None):
             raise
         except (PipelineError, OSError, ValueError, KeyError, TypeError, AttributeError) as error:
             raise PipelineError(sanitize(f"{hint} {error}")) from error
+    prepare_browsers(worktree, config, directory, stop)

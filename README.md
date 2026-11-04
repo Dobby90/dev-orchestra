@@ -95,9 +95,11 @@ Node는 실제 등록된 scripts만 추천하며 npm·pnpm·Yarn을 구분합니
 
 Node 검증 명령이 있는 Run은 모델 작업 전에 실행용 Worktree의 의존성을 확인합니다. npm 프로젝트에 `package-lock.json`이 있고 `node_modules`가 없으면 `npm ci --offline --ignore-scripts --include=dev --include=optional`로 로컬 npm 캐시에서 준비합니다. 외부 네트워크·설치 스크립트는 차단하고 해당 Worktree의 `node_modules`에만 쓰기를 허용합니다. npm workspaces도 지원하며 원본 프로젝트의 `node_modules`를 공유하지 않습니다. 자동 준비한 의존성은 manifest 변경 시 다시 준비하고, 수동으로 준비한 기존 디렉터리는 검사만 합니다.
 
-Vite 설정 파일이 있는 빌드 후보에는 `node_modules/.vite-temp`만 임시 출력 경로로 제안합니다. `node_modules` 전체를 테스트 쓰기 경로로 허용하지 않습니다. 기존 정책에 이 경로가 없으면 사전 검사와 실행 미리보기에서 프로젝트 정책을 수정하고 새 Run을 만들도록 안내합니다. 기존 Run의 명령·출력 허용 경로는 자동 변경하지 않습니다.
+Vite 설정 파일이 있는 빌드 후보에는 `node_modules/.vite-temp`만 임시 출력 경로로 제안합니다. 새 Run 생성 시 선택한 명령과 기준 커밋을 비교해 이 경로를 자동 보완하므로, 기존 프로젝트 정책을 수동 수정할 필요가 없습니다. `node_modules` 전체를 테스트 쓰기 경로로 허용하지 않습니다. 저장된 프로젝트 정책과 기존 Run의 명령·출력 허용 경로는 자동 변경하지 않습니다.
 
-캐시 누락·잠금 파일 누락·의존성 검사 실패는 모델 작업 전에 `needs_input`으로 중단하며 명령 ID·작업 경로·원인을 표시합니다. 지정한 `PLAYWRIGHT_BROWSERS_PATH` 디렉터리가 없는 경우도 미리 중단합니다. 실행 디렉터리의 `preflight/dependencies-*-install.log`·`dependencies-*-check.log`에서 상세 내용을 확인하세요. 해당 Run의 Worktree에서 의존성과 Git 제외 설정을 준비한 뒤 재개할 수 있습니다. pnpm·Yarn과 설치 스크립트가 필요한 패키지·Playwright 브라우저는 별도로 준비해야 합니다. 원본 프로젝트에만 설치한 의존성은 새 Worktree에 자동으로 전달되지 않습니다.
+macOS에서 기본 `PLAYWRIGHT_BROWSERS_PATH`를 사용하는 Playwright 검증은 npm 의존성 준비 후 설치된 `playwright-core`의 안정 버전 `1.x`에 맞는 브라우저를 자동 준비합니다. 공식 npm 레지스트리에서 같은 버전의 설치 도구를 받아 SHA-512 무결성을 확인하고, 프로젝트·사용자 파일 읽기를 허용하지 않는 별도 설치 샌드박스에서 실행합니다. 최초 준비에는 외부 네트워크가 필요합니다. 설치 도구와 브라우저는 기본 Playwright 캐시에 보관해 프로젝트 간 재사용하며 버전별 브라우저를 자동 삭제하지 않습니다. 테스트 자체의 네트워크·쓰기 권한은 유지합니다. 사용자 지정 브라우저 경로와 `PLAYWRIGHT_BROWSERS_PATH=0`은 기존 수동 준비 방식을 유지합니다.
+
+npm 캐시 누락·잠금 파일 누락·의존성 검사 실패·브라우저 다운로드 실패는 모델 작업 전에 `needs_input`으로 중단하며 원인을 표시합니다. 실행 디렉터리의 `preflight/dependencies-*-install.log`·`dependencies-*-check.log`·`COMMAND_ID-browsers.log`에서 실행된 설치 명령의 상세 내용을 확인하세요. 실패 원인을 해결한 뒤 재개하면 준비를 다시 시도합니다. 사용자 지정 브라우저 디렉터리가 없으면 미리 중단합니다. pnpm·Yarn과 설치 스크립트가 필요한 패키지는 별도로 준비해야 합니다. 원본 프로젝트에만 설치한 의존성은 새 Worktree에 자동으로 전달되지 않습니다.
 
 Vitest 스크립트에는 단발 실행·JUnit 인자를 제안하고 Playwright에는 JUnit 출력 파일을 지정합니다. 복합 스크립트·별도 npm 설정·생명주기 훅·자동 설정이 어려운 패키지 관리자 조합은 기존 실행 방식을 유지하고 필요한 보고서 옵션과 경로를 안내합니다. 추적 소스에 대한 쓰기를 자동 허용하지 않습니다. 숨김 디렉터리는 명시한 Vite 임시 캐시 경로 외에 자동 추가하지 않습니다. 다른 Node 도구는 해당 스크립트에서 JUnit을 생성하도록 준비해야 합니다. Java는 Wrapper가 있으면 우선 사용하며 Maven Surefire·Gradle의 파일별 `TEST-*.xml` 보고서를 수집합니다. 사용자 정의 테스트 태스크·멀티모듈 설정은 실제 명령과 출력 경로를 확인하세요.
 
@@ -106,7 +108,7 @@ CLI에서는 설정의 `tests.commands`를 대상 프로젝트에 맞게 수정�
 - `tests.commands`: 호스트가 신뢰하는 명령 ID와 `argv` 인자 배열, 제한 시간을 지정합니다. `kind: test`(기본값)는 단일 파일 또는 glob인 `junit_report`에 매번 새 JUnit XML을 생성해야 합니다. `kind: check`는 빌드·타입·정적 검사를 종료 코드로 판정하며 JUnit을 지정하지 않습니다. 테스트 명령은 반드시 하나 이상 있어야 하고 모든 선택 명령이 통과해야 합니다.
 - `working_directory`: 명령을 실행할 저장소 기준 상대 경로이며 기본값은 `.`입니다. `junit_report`, `tests.write_paths`, `tests.output_paths`는 작업 경로와 관계없이 저장소 루트를 기준으로 지정합니다.
 - `network`: 기본값 `none`은 네트워크를 차단합니다. macOS의 `loopback`은 브라우저 검사·Gradle 내부 통신에 필요한 localhost 통신을 허용하고 외부 네트워크는 차단합니다. 서버 주소는 `127.0.0.1`을 사용하세요. Linux의 loopback 모드는 모델 호출 전에 실행을 거부하며 일반 오프라인 검증은 기존 격리를 유지합니다.
-- `env`: 명령별 `JAVA_HOME`, `PLAYWRIGHT_JUNIT_OUTPUT_FILE`, `PLAYWRIGHT_BROWSERS_PATH`만 지정할 수 있습니다. JDK·의존성·브라우저는 미리 준비하세요. Java 예시는 Worktree의 `.devorchestra-cache`를 사용하며 Wrapper 배포본·오프라인 캐시도 필요합니다.
+- `env`: 명령별 `JAVA_HOME`, `PLAYWRIGHT_JUNIT_OUTPUT_FILE`, `PLAYWRIGHT_BROWSERS_PATH`만 지정할 수 있습니다. JDK·의존성·사용자 지정 경로의 브라우저는 미리 준비하세요. macOS 기본 경로의 Playwright 브라우저는 자동 준비합니다. Java 예시는 Worktree의 `.devorchestra-cache`를 사용하며 Wrapper 배포본·오프라인 캐시도 필요합니다.
 - `tests.write_paths`: 테스트 파일을 추가·수정할 수 있는 경로이며 기존 테스트 변경 근거의 검증 범위입니다. 기존 파일에 내용을 추가하는 경우도 변경 사유와 인수 조건 ID를 검증합니다.
 - `tests.output_paths`: 테스트 격리 중 쓰기를 허용하는 빌드·보고서 경로입니다. Git이 추적하는 소스 파일이 포함된 디렉터리는 허용하지 않습니다.
 - `storage`: 기본 위치는 저장소 외부의 `~/.devorchestra`입니다. DB·실행 산출물·Worktree를 대상 저장소 내부에 두면 실행을 거부합니다. 상대 저장 경로는 YAML 파일 위치를 기준으로 해석합니다.

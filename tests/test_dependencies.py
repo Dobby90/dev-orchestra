@@ -184,6 +184,40 @@ def test_missing_configured_browser_cache_is_reported_before_model_work(service,
     assert "unit" in result["error"] and "PLAYWRIGHT_BROWSERS_PATH" in result["error"]
 
 
+@pytest.mark.parametrize("install_fails", [False, True])
+def test_default_browser_cache_is_prepared_only_after_npm_is_ready(
+    service, tmp_path, monkeypatch, install_fails
+):
+    _, _, repo = service
+    cfg = package(repo)
+    cache = tmp_path / "not-installed-yet"
+    cfg.commands["node-test"].env["PLAYWRIGHT_BROWSERS_PATH"] = str(cache)
+    before = cfg.model_dump()
+    monkeypatch.setattr(dependencies, "browser_cache", lambda: cache)
+    monkeypatch.setattr(dependencies, "sandbox_command", lambda w, o, s, argv: argv)
+    calls = []
+
+    def execute(argv, *args, **kwargs):
+        calls.append(argv[1])
+        assert not cache.exists()
+        return (1, "offline dependency missing") if install_fails else (0, "ok")
+
+    def browsers(worktree, config, directory, stop):
+        assert calls == ["ci", "ls"]
+        calls.append("browsers")
+
+    monkeypatch.setattr(dependencies, "execute", execute)
+    monkeypatch.setattr(dependencies, "prepare_browsers", browsers)
+    if install_fails:
+        with pytest.raises(PipelineError, match="offline dependency missing"):
+            prepare_dependencies(repo, cfg, tmp_path / "preflight")
+        assert calls == ["ci"]
+    else:
+        prepare_dependencies(repo, cfg, tmp_path / "preflight")
+        assert calls == ["ci", "ls", "browsers"]
+    assert cfg.model_dump() == before
+
+
 @pytest.mark.skipif(not shutil.which("npm"), reason="npm required")
 def test_real_offline_workspace_install_disables_lifecycle_scripts(service, tmp_path):
     _, _, repo = service
