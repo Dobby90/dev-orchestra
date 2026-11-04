@@ -101,14 +101,20 @@ macOS에서 기본 `PLAYWRIGHT_BROWSERS_PATH`를 사용하는 Playwright 검증�
 
 npm 캐시 누락·잠금 파일 누락·의존성 검사 실패·브라우저 다운로드 실패는 모델 작업 전에 `needs_input`으로 중단하며 원인을 표시합니다. 실행 디렉터리의 `preflight/dependencies-*-install.log`·`dependencies-*-check.log`·`COMMAND_ID-browsers.log`에서 실행된 설치 명령의 상세 내용을 확인하세요. 실패 원인을 해결한 뒤 재개하면 준비를 다시 시도합니다. 사용자 지정 브라우저 디렉터리가 없으면 미리 중단합니다. pnpm·Yarn과 설치 스크립트가 필요한 패키지는 별도로 준비해야 합니다. 원본 프로젝트에만 설치한 의존성은 새 Worktree에 자동으로 전달되지 않습니다.
 
-Vitest 스크립트에는 단발 실행·JUnit 인자를 제안하고 Playwright에는 JUnit 출력 파일을 지정합니다. 복합 스크립트·별도 npm 설정·생명주기 훅·자동 설정이 어려운 패키지 관리자 조합은 기존 실행 방식을 유지하고 필요한 보고서 옵션과 경로를 안내합니다. 추적 소스에 대한 쓰기를 자동 허용하지 않습니다. 숨김 디렉터리는 명시한 Vite 임시 캐시 경로 외에 자동 추가하지 않습니다. 다른 Node 도구는 해당 스크립트에서 JUnit을 생성하도록 준비해야 합니다. Java는 Wrapper가 있으면 우선 사용하며 Maven Surefire·Gradle의 파일별 `TEST-*.xml` 보고서를 수집합니다. 사용자 정의 테스트 태스크·멀티모듈 설정은 실제 명령과 출력 경로를 확인하세요.
+Vitest 스크립트에는 단발 실행·JUnit 인자를 제안하고 Playwright에는 JUnit 출력 파일을 지정합니다. 복합 스크립트·별도 npm 설정·생명주기 훅·자동 설정이 어려운 패키지 관리자 조합은 기존 실행 방식을 유지하고 필요한 보고서 옵션과 경로를 안내합니다. 추적 소스에 대한 쓰기를 자동 허용하지 않습니다. 숨김 디렉터리는 명시한 Vite 임시 캐시와 Java 격리 캐시 경로 외에 자동 추가하지 않습니다. 다른 Node 도구는 해당 스크립트에서 JUnit을 생성하도록 준비해야 합니다. Java는 Wrapper가 있으면 우선 사용하며 Maven Surefire·Gradle의 파일별 `TEST-*.xml` 보고서를 수집합니다. 사용자 정의 테스트 태스크·멀티모듈 설정은 실제 명령과 출력 경로를 확인하세요.
+
+Java 하위 모듈은 상위 디렉터리의 `mvnw`·`gradlew`도 찾아 사용합니다. 새 Run을 만들 때 Maven·Gradle 명령에 누락된 오프라인 옵션, Worktree 내부 캐시 경로와 출력 권한을 보완합니다. 커밋된 POM의 Java 버전 속성이나 Gradle의 리터럴 toolchain·`sourceCompatibility` 선언을 읽어 설치된 JDK를 선택하고 `JAVA_HOME`을 실행 설정에 저장합니다. 명시한 `JAVA_HOME`은 교체하지 않습니다. Gradle Wrapper 버전의 JVM 호환성도 확인하며, 컴파일 toolchain과 실행 JVM이 다르면 설치된 JDK 경로를 Gradle에 전달합니다. JDK를 자동 다운로드하거나 프로젝트의 빌드 파일을 수정하지는 않습니다.
+
+실행 전 Maven은 로컬 `~/.m2/repository`와 해당 버전의 Wrapper 배포본을, Gradle은 `~/.gradle/caches/modules-2`와 해당 버전의 Wrapper 배포본을 격리된 Worktree 캐시에 복사합니다. 호스트의 `MAVEN_USER_HOME`·`GRADLE_USER_HOME`을 지정했다면 그 아래 캐시를 사용합니다. 원본 캐시와 쓰기 가능한 파일을 공유하지 않으며 기존 실행 캐시 파일도 덮어쓰지 않습니다. 인증 설정·사용자 Gradle 초기화 스크립트·잠금 파일·`gc.properties`·심볼릭 링크는 복사하지 않습니다. Gradle 캐시 복사 범위와 버전별 호환성은 [공식 캐시 문서](https://docs.gradle.org/current/userguide/dependency_caching.html), JVM 호환성은 [공식 호환성 표](https://docs.gradle.org/current/userguide/compatibility.html)를 기준으로 합니다.
+
+JDK·빌드 도구·Wrapper 준비 실패와 명시적으로 확인 가능한 의존성 캐시 누락은 모델 호출 전에 `needs_input`으로 중단합니다. `preflight/COMMAND_ID-jdk.log`·`COMMAND_ID-tool.log`에서 실행된 버전 점검 결과를 확인할 수 있습니다. 상위 POM·BOM·버전 카탈로그·동적 빌드 스크립트를 모두 해석하는 의존성 해결기는 아니므로 간접 의존성·플러그인 누락은 실제 빌드에서 발견될 수 있습니다. 필요한 JDK·배포본·의존성이 로컬에 없으면 호스트 또는 해당 Run의 격리 캐시에 준비한 뒤 재개해야 합니다. 외부 저장소 접근을 위해 프로젝트 빌드를 네트워크 권한으로 실행하거나 개인 인증 설정을 가져오지 않습니다. DB·Redis·Docker 같은 통합 테스트 서비스도 자동 기동하거나 접근 권한을 확대하지 않습니다. 기존 Run의 고정된 명령·출력 권한은 유지하므로 캐시 옵션이 빠진 기존 Run은 새로 생성해야 합니다.
 
 CLI에서는 설정의 `tests.commands`를 대상 프로젝트에 맞게 수정한 뒤 실행합니다. 별도 설정 파일을 전달하지 않은 내장 기본값에는 테스트 명령이 없으므로 작업 실행 전에 설정이 필요합니다.
 
 - `tests.commands`: 호스트가 신뢰하는 명령 ID와 `argv` 인자 배열, 제한 시간을 지정합니다. `kind: test`(기본값)는 단일 파일 또는 glob인 `junit_report`에 매번 새 JUnit XML을 생성해야 합니다. `kind: check`는 빌드·타입·정적 검사를 종료 코드로 판정하며 JUnit을 지정하지 않습니다. 테스트 명령은 반드시 하나 이상 있어야 하고 모든 선택 명령이 통과해야 합니다.
 - `working_directory`: 명령을 실행할 저장소 기준 상대 경로이며 기본값은 `.`입니다. `junit_report`, `tests.write_paths`, `tests.output_paths`는 작업 경로와 관계없이 저장소 루트를 기준으로 지정합니다.
 - `network`: 기본값 `none`은 네트워크를 차단합니다. macOS의 `loopback`은 브라우저 검사·Gradle 내부 통신에 필요한 localhost 통신을 허용하고 외부 네트워크는 차단합니다. 서버 주소는 `127.0.0.1`을 사용하세요. Linux의 loopback 모드는 모델 호출 전에 실행을 거부하며 일반 오프라인 검증은 기존 격리를 유지합니다.
-- `env`: 명령별 `JAVA_HOME`, `PLAYWRIGHT_JUNIT_OUTPUT_FILE`, `PLAYWRIGHT_BROWSERS_PATH`만 지정할 수 있습니다. JDK·의존성·사용자 지정 경로의 브라우저는 미리 준비하세요. macOS 기본 경로의 Playwright 브라우저는 자동 준비합니다. Java 예시는 Worktree의 `.devorchestra-cache`를 사용하며 Wrapper 배포본·오프라인 캐시도 필요합니다.
+- `env`: 명령별 `JAVA_HOME`, `PLAYWRIGHT_JUNIT_OUTPUT_FILE`, `PLAYWRIGHT_BROWSERS_PATH`만 지정할 수 있습니다. Java는 설치된 JDK와 로컬 의존성·Wrapper 캐시를 자동 선택·복사하며, 로컬에 없는 항목은 미리 준비해야 합니다. 사용자 지정 경로의 브라우저는 수동 준비하고 macOS 기본 경로의 Playwright 브라우저는 자동 준비합니다. Java 실행 캐시는 Worktree의 `.devorchestra-cache`를 사용합니다.
 - `tests.write_paths`: 테스트 파일을 추가·수정할 수 있는 경로이며 기존 테스트 변경 근거의 검증 범위입니다. 기존 파일에 내용을 추가하는 경우도 변경 사유와 인수 조건 ID를 검증합니다.
 - `tests.output_paths`: 테스트 격리 중 쓰기를 허용하는 빌드·보고서 경로입니다. Git이 추적하는 소스 파일이 포함된 디렉터리는 허용하지 않습니다.
 - `storage`: 기본 위치는 저장소 외부의 `~/.devorchestra`입니다. DB·실행 산출물·Worktree를 대상 저장소 내부에 두면 실행을 거부합니다. 상대 저장 경로는 YAML 파일 위치를 기준으로 해석합니다.

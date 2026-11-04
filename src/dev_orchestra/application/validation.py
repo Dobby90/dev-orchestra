@@ -2,6 +2,7 @@
 
 import json
 import platform
+import posixpath
 import re
 import shlex
 from pathlib import Path, PurePosixPath
@@ -13,6 +14,12 @@ from dev_orchestra.domain.models import PipelineError
 from dev_orchestra.infrastructure.dependencies import vite_cache_output
 from dev_orchestra.infrastructure.files import relative_path
 from dev_orchestra.infrastructure.git import Git
+from dev_orchestra.infrastructure.java import (
+    cache_paths,
+    choose_project_jdk,
+    java_tool,
+    option,
+)
 from dev_orchestra.infrastructure.playwright import browser_cache
 
 
@@ -173,7 +180,8 @@ def candidate(tool, directory=".", *, argv=None, evidence=(), label=None):
         outputs = [prefix + "target", prefix + ".devorchestra-cache/maven"]
         writes = [prefix + "src/test"]
         warnings.append(
-            "JDK·Maven과 오프라인 의존성 캐시(.devorchestra-cache/maven)를 Worktree에 미리 준비하세요."
+            "설치된 JDK를 자동 선택하고 로컬 Maven 의존성·Wrapper 캐시를 Worktree에 복사합니다. "
+            "필요한 JDK·Maven 배포본·의존성이 로컬에 없으면 준비 후 재개해야 합니다."
         )
     elif tool in {"gradle", "gradle-build"}:
         command.update(
@@ -195,7 +203,8 @@ def candidate(tool, directory=".", *, argv=None, evidence=(), label=None):
         outputs += [prefix + ".devorchestra-cache"]
         writes = [prefix + "src/test"]
         warnings.append(
-            "JDK·Gradle 배포본과 의존성 캐시(.devorchestra-cache/gradle)를 Worktree에 미리 준비하세요."
+            "설치된 JDK를 자동 선택하고 로컬 Gradle 의존성·Wrapper 캐시를 Worktree에 복사합니다. "
+            "필요한 JDK·Gradle 배포본·의존성이 로컬에 없으면 준비 후 재개해야 합니다."
         )
         warnings.append(
             "Gradle 내부 잠금·프로세스 통신에는 loopback 허용이 필요합니다. 현재 macOS에서 지원합니다."
@@ -279,6 +288,15 @@ def detect_validation(info):
         item.id = re.sub(r"[^A-Za-z0-9_-]", "_", f"{tool}_{len(found) + 1}")
         found.append(item)
         return item
+
+    def wrapper(directory, name, fallback):
+        parent = PurePosixPath(directory)
+        for ancestor in [parent, *parent.parents]:
+            path = str(ancestor / name)
+            if path in files:
+                value = posixpath.relpath(path, directory)
+                return value if value.startswith(".") else "./" + value
+        return fallback
 
     for path in manifests:
         relative_path(path)
@@ -366,11 +384,7 @@ def detect_validation(info):
             except (ValueError, TypeError, AttributeError):
                 warnings.append(f"{path}: package.json 형식을 확인해 주세요.")
         elif name == "pom.xml":
-            argv = [
-                "./mvnw"
-                if ("" if directory == "." else directory + "/") + "mvnw" in files
-                else "mvn"
-            ]
+            argv = [wrapper(directory, "mvnw", "mvn")]
             item = add(
                 "maven",
                 path,
@@ -386,8 +400,7 @@ def detect_validation(info):
         elif name.startswith("build.gradle"):
             prefix = "" if directory == "." else directory + "/"
             item = add("gradle", path, label=f"{directory} · Gradle 테스트")
-            if prefix + "gradlew" in files:
-                item.command.argv[0] = "./gradlew"
+            item.command.argv[0] = wrapper(directory, "gradlew", "gradle")
             add(
                 "gradle-build",
                 path,
@@ -485,6 +498,9 @@ def script_identity(argv):
 def complete_run_validation(config, info):
     """Complete derived outputs before freezing a new Run; never edit saved policies."""
     snapshot = config.model_copy(deep=True)
+    java_commands = [c for c in snapshot.tests.commands.values() if java_tool(c)]
+    for command in java_commands:
+        complete_java_command(command, snapshot.tests.output_paths, info)
     selected = [c for c in snapshot.tests.commands.values() if script_identity(c.argv)]
     if not selected:
         return snapshot
@@ -502,6 +518,58 @@ def complete_run_validation(config, info):
                 ):
                     snapshot.tests.output_paths.append(output)
     return snapshot
+
+
+def committed_java_files(info, directory):
+    git = Git(info.repository_path)
+    parent = PurePosixPath(directory)
+    names = [
+        str(p / name)
+        for p in [parent, *parent.parents]
+        for name in (
+            "pom.xml",
+            "build.gradle",
+            "build.gradle.kts",
+            "gradle/wrapper/gradle-wrapper.properties",
+        )
+    ]
+    files = {}
+    for line in git.call("ls-tree", "-rlz", info.base_sha, "--", *names).split("\0"):
+        if not line:
+            continue
+        metadata, name = line.split("\t", 1)
+        mode, kind, oid, size = metadata.split()
+        if kind == "blob" and mode != "120000" and int(size) <= 2**20:
+            files[name] = git.call("cat-file", "blob", oid)
+    return files
+
+
+def complete_java_command(command, outputs, info):
+    """Freeze derived cache options and JDK selection only in the new Run snapshot."""
+    if java_tool(command) == "maven":
+        if not any(arg in {"-o", "--offline"} for arg in command.argv):
+            command.argv.append("--offline")
+        if not option(command.argv, (), "-Dmaven.repo.local="):
+            command.argv.append("-Dmaven.repo.local=.devorchestra-cache/maven")
+    else:
+        for flag in ("--offline", "--no-daemon"):
+            if flag not in command.argv:
+                command.argv.append(flag)
+        for flags, value in [
+            (("--gradle-user-home", "-g"), ".devorchestra-cache/gradle"),
+            (("--project-cache-dir",), ".devorchestra-cache/project"),
+        ]:
+            if not option(command.argv, flags):
+                command.argv += [flags[0], value]
+    prefix = PurePosixPath(command.working_directory)
+    for path in cache_paths(command):
+        output = str(prefix / path)
+        if not any(PurePosixPath(output).is_relative_to(PurePosixPath(p)) for p in outputs):
+            outputs.append(output)
+    if "JAVA_HOME" not in command.env:
+        files = committed_java_files(info, command.working_directory)
+        if jdk := choose_project_jdk(files.get, command.working_directory, java_tool(command)):
+            command.env["JAVA_HOME"] = jdk
 
 
 def report_warning(command, candidates):

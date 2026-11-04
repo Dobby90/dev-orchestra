@@ -196,7 +196,7 @@ class TestRunner:
             # Never grant write access to any tracked production/test file via output paths.
             from dev_orchestra.infrastructure.git import Git
 
-            tracked = Git(worktree).call("ls-files").splitlines()
+            tracked = [name for name in Git(worktree).call("ls-files", "-z").split("\0") if name]
             if any((worktree / name).is_relative_to(p) for name in tracked for p in outputs):
                 raise PipelineError("output path contains tracked source files")
             for p in outputs:
@@ -240,6 +240,9 @@ class TestRunner:
                         "JAVA_TOOL_OPTIONS": f'-Duser.home="{scratch}" -Djava.io.tmpdir="{scratch}"',
                     }
                     env.update(command.env)
+                    from dev_orchestra.infrastructure.java import java_environment
+
+                    env.update(java_environment(worktree, command))
                     argv = sandbox_command(
                         worktree, outputs, scratch, command.argv, command.network
                     )

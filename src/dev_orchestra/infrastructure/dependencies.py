@@ -8,6 +8,7 @@ from pathlib import Path
 from dev_orchestra.domain.models import PipelineError, StopRequested
 from dev_orchestra.infrastructure.files import contained, digest, write
 from dev_orchestra.infrastructure.git import Git
+from dev_orchestra.infrastructure.java import prepare_java
 from dev_orchestra.infrastructure.playwright import browser_cache, prepare_browsers
 from dev_orchestra.infrastructure.process import environment, execute, sanitize
 from dev_orchestra.infrastructure.test_runner import sandbox_command
@@ -39,6 +40,7 @@ def read_package(path):
 
 def prepare_dependencies(worktree, config, directory, stop=lambda: None):
     worktree = worktree.resolve()
+    prepare_java(worktree, config, directory, stop)
     roots = {}
     for command_id, command in config.commands.items():
         browsers = command.env.get("PLAYWRIGHT_BROWSERS_PATH")
@@ -77,7 +79,7 @@ def prepare_dependencies(worktree, config, directory, stop=lambda: None):
         prepare_browsers(worktree, config, directory, stop)
         return
     directory.mkdir(parents=True, exist_ok=True)
-    tracked = Git(worktree).call("ls-files").splitlines()
+    tracked = [name for name in Git(worktree).call("ls-files", "-z").split("\0") if name]
     for root, command_ids in roots.items():
         label = root.relative_to(worktree).as_posix()
         hint = (
