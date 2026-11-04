@@ -19,6 +19,16 @@ from dev_orchestra.infrastructure.process_owner import identity
 
 
 def redact(text):
+    def assignment(match):
+        # Preserve JavaScript request counters used as unified-diff context.
+        if (
+            re.fullmatch(r"token[ \t]*=[ \t]*", match[1], re.IGNORECASE)
+            and re.search(r"\b(?:const|let|var)[ \t]+$", text[: match.start()])
+            and re.fullmatch(r"(?:\+\+|--)[A-Za-z_$][\w$]*(?:\.[A-Za-z_$][\w$]*)*;?", match[2])
+        ):
+            return match[0]
+        return match[1] + '"[REDACTED]"'
+
     text = re.sub(r"(?i)(https?://)[^\s/@]+:[^\s/@]+@", r"\1[REDACTED]@", text)
     text = re.sub(
         r"""(?i)(\b(?:username|password|token|secret)\s+)(["'])([^\r\n]*?)\2""",
@@ -27,8 +37,8 @@ def redact(text):
     )
     text = re.sub(r"(?i)\bBearer\s+[A-Za-z0-9._~+/-]+=*", "Bearer [REDACTED]", text)
     text = re.sub(
-        r'(?i)(["\']?(?:api[_-]?key|token|username|password|secret|authorization)["\']?\s*[:=]\s*)(?:"[^"\n]*"|\'[^\'\n]*\'|[^\s,}]+)',
-        r'\1"[REDACTED]"',
+        r'(?i)(["\']?(?:api[_-]?key|token|username|password|secret|authorization)["\']?\s*[:=]\s*)("[^"\n]*"|\'[^\'\n]*\'|[^\s,}]+)',
+        assignment,
         text,
     )
     text = re.sub(r"(?i)\bBearer\s+[A-Za-z0-9._~+/-]+=*", "Bearer [REDACTED]", text)

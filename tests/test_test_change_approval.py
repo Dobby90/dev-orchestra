@@ -64,9 +64,9 @@ class XmlAgent(FakeAgent):
         return value
 
 
-def create_xml_run(svc, old, repo):
+def create_xml_run(svc, old, repo, prefix=""):
     (repo / "tests").mkdir()
-    (repo / TEST_FILE).write_text(OLD_TEST)
+    (repo / TEST_FILE).write_text(prefix + OLD_TEST)
     git = Git(repo)
     git.call("add", TEST_FILE)
     git.call("commit", "-m", "기존 XML 기대값 준비")
@@ -130,6 +130,35 @@ def test_requirement_test_changes_run_through_to_final_approval(service):
     assert TEST_FILE in report and "XML 활성화 요구사항" in report
     svc.approve(rid)
     assert svc.store.get(rid)["state"] == "completed"
+
+
+def test_protected_test_patch_preserves_request_counter_context(service):
+    svc, old, repo = service
+    counter = "const token = ++fileRequest.current, inputVersion = version.current;\n"
+    rid = create_xml_run(svc, old, repo, prefix=counter)
+    patch = PATCH.replace("@@ -1 +1 @@\n-assert", "@@ -1,2 +1,2 @@\n " + counter + "-assert")
+    Runner(svc.store, XmlAgent(patch=patch), FakeTests()).execute(rid)
+    run = svc.store.get(rid)
+    assert run["state"] == "waiting_approval", run.get("error")
+    assert (Path(run["worktree"]) / TEST_FILE).read_text() == counter + NEW_TEST
+    assert (repo / TEST_FILE).read_text() == counter + OLD_TEST
+    assert Changes(svc.store).view(rid)["history"][0]["patch"] == patch
+    checkpoints(svc.store, run)
+    svc.approve(rid)
+    assert svc.store.get(rid)["state"] == "completed"
+
+
+def test_protected_test_patch_with_secret_is_rejected_before_application(service):
+    svc, old, repo = service
+    rid = create_xml_run(svc, old, repo)
+    patch = PATCH.replace("+xml enabled", '+const token = "CANARY";')
+    Runner(svc.store, XmlAgent(patch=patch), FakeTests()).execute(rid)
+    run = svc.store.get(rid)
+    assert run["state"] == "failed"
+    assert run["error"] == "protected test patch contains redacted data"
+    assert not run.get("test_change_records")
+    assert (Path(run["worktree"]) / TEST_FILE).read_text() == OLD_TEST
+    assert (Path(run["worktree"]) / "main.py").read_text() == "original\n"
 
 
 @pytest.mark.parametrize("approved", [False, True])

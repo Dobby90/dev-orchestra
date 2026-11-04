@@ -80,10 +80,27 @@ def test_resume_detects_prior_evidence_corruption(service):
         "password='CANARY'",
         "Authorization: Bearer CANARY",
         '{"Authorization":"Bearer CANARY"}',
+        'const token = "CANARY";',
+        "let token = 'CANARY';",
+        "token=++CANARY",
+        '{"token":"++CANARY"}',
+        'const token = ++counter.current, password = "CANARY";',
     ],
 )
 def test_redacts_common_secret_formats(text):
     assert "CANARY" not in redact(text)
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        " const token = ++fileRequest.current, inputVersion = version.current;",
+        "+  let token = ++requestId;",
+        "-  var token = --pending.current;",
+    ],
+)
+def test_redaction_preserves_javascript_request_counters(text):
+    assert redact(text) == text
 
 
 def test_filter_execution_is_rejected(service, tmp_path):
