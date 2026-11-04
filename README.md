@@ -93,19 +93,27 @@ GUI의 프로젝트 등록·설정에서 **검증 자동 감지**를 누르면 �
 
 Node는 실제 등록된 scripts만 추천하며 npm·pnpm·Yarn을 구분합니다. 별도 reporter·생명주기 훅·`.npmrc` 설정이 없는 단일 npm `node --test` 스크립트에는 npm의 `--node-options`로 콘솔 결과와 JUnit 파일 출력을 함께 설정합니다. 테스트 파일 뒤에 Node 옵션을 덧붙이지 않으며 원래 스크립트와 파일 선택 범위를 유지합니다. 이미 JUnit 파일 출력을 설정한 Node 스크립트는 실제 경로를 인식해 하위 프로젝트의 수집 경로와 출력 디렉터리를 맞춥니다.
 
-Node 검증 명령이 있는 Run은 모델 작업 전에 실행용 Worktree의 의존성을 확인합니다. npm 프로젝트에 `package-lock.json`이 있고 `node_modules`가 없으면 `npm ci --offline --ignore-scripts --include=dev --include=optional`로 로컬 npm 캐시에서 준비합니다. 외부 네트워크·설치 스크립트는 차단하고 해당 Worktree의 `node_modules`에만 쓰기를 허용합니다. npm workspaces도 지원하며 원본 프로젝트의 `node_modules`를 공유하지 않습니다. 자동 준비한 의존성은 manifest 변경 시 다시 준비하고, 수동으로 준비한 기존 디렉터리는 검사만 합니다.
+Node 검증 명령이 있는 Run은 모델 작업 전에 실행용 Worktree의 의존성을 확인합니다. npm 프로젝트는 `package-lock.json`을 기준으로 `npm ci --offline --ignore-scripts --include=dev --include=optional`을 실행합니다. 로컬 캐시에 없는 공개 패키지는 호스트가 공식 npm·Yarn 레지스트리에서 받아 잠금 파일의 무결성을 확인한 뒤 오프라인 캐시에 넣습니다. 설치 프로세스의 외부 네트워크·설치 스크립트는 차단하고 해당 Worktree의 의존성 디렉터리에만 쓰기를 허용합니다. npm workspaces도 지원하며 원본 프로젝트의 `node_modules`를 공유하지 않습니다. 자동 준비한 의존성은 manifest 변경이나 설치 실패 후 다시 준비하고, 수동으로 준비한 기존 디렉터리는 검사만 합니다.
 
-Vite 설정 파일이 있는 빌드 후보에는 `node_modules/.vite-temp`만 임시 출력 경로로 제안합니다. 새 Run 생성 시 선택한 명령과 기준 커밋을 비교해 이 경로를 자동 보완하므로, 기존 프로젝트 정책을 수동 수정할 필요가 없습니다. `node_modules` 전체를 테스트 쓰기 경로로 허용하지 않습니다. 저장된 프로젝트 정책과 기존 Run의 명령·출력 허용 경로는 자동 변경하지 않습니다.
+Yarn Classic 1.x가 설치된 호스트에서는 `yarn.lock`을 감지해 공개 패키지로 실행 전용 오프라인 미러를 구성하고 `--offline --frozen-lockfile --ignore-scripts`로 설치합니다. 공개 GitHub 의존성은 전체 40자리 커밋 ID로 고정된 공식 아카이브만 사용하며 아카이브의 커밋 메타데이터를 확인합니다. GitHub 아카이브에 잠금 파일의 무결성 값이 없다면 레지스트리 패키지처럼 바이트 체크섬이 고정된 것은 아닙니다. 개인 인증·사용자별 Yarn 설정은 가져오지 않습니다. 비공개 의존성·Yarn Berry·Yarn workspaces·pnpm 및 설치 스크립트가 필요한 패키지는 별도 준비가 필요합니다.
+
+Vite 설정 파일이 있는 빌드 후보에는 `node_modules/.vite-temp`를, Vue CLI 빌드에는 `node_modules/.cache`를 임시 출력 경로로 제안합니다. 새 Run 생성 시 선택한 명령과 기준 커밋을 비교해 필요한 경로를 보완합니다. Vue CLI 빌드가 사용하는 `eslint-webpack-plugin`은 호스트 실행 어댑터로 자동 수정·캐시 쓰기를 끄며 lint 오류 검사는 유지합니다. `--fix`·`--write`가 붙은 스크립트는 자동 검증 후보에서 제외합니다. `node_modules` 전체에 대한 테스트 쓰기 권한과 기존 Run의 고정 정책은 확대하지 않습니다.
 
 macOS에서 기본 `PLAYWRIGHT_BROWSERS_PATH`를 사용하는 Playwright 검증은 npm 의존성 준비 후 설치된 `playwright-core`의 안정 버전 `1.x`에 맞는 브라우저를 자동 준비합니다. 공식 npm 레지스트리에서 같은 버전의 설치 도구를 받아 SHA-512 무결성을 확인하고, 프로젝트·사용자 파일 읽기를 허용하지 않는 별도 설치 샌드박스에서 실행합니다. 최초 준비에는 외부 네트워크가 필요합니다. 설치 도구와 브라우저는 기본 Playwright 캐시에 보관해 프로젝트 간 재사용하며 버전별 브라우저를 자동 삭제하지 않습니다. 테스트 자체의 네트워크·쓰기 권한은 유지합니다. 사용자 지정 브라우저 경로와 `PLAYWRIGHT_BROWSERS_PATH=0`은 기존 수동 준비 방식을 유지합니다.
 
-npm 캐시 누락·잠금 파일 누락·의존성 검사 실패·브라우저 다운로드 실패는 모델 작업 전에 `needs_input`으로 중단하며 원인을 표시합니다. 실행 디렉터리의 `preflight/dependencies-*-install.log`·`dependencies-*-check.log`·`COMMAND_ID-browsers.log`에서 실행된 설치 명령의 상세 내용을 확인하세요. 실패 원인을 해결한 뒤 재개하면 준비를 다시 시도합니다. 사용자 지정 브라우저 디렉터리가 없으면 미리 중단합니다. pnpm·Yarn과 설치 스크립트가 필요한 패키지는 별도로 준비해야 합니다. 원본 프로젝트에만 설치한 의존성은 새 Worktree에 자동으로 전달되지 않습니다.
+브라우저 실행에는 Chromium의 전원 상태 알림에 필요한 IOKit 클라이언트 하나만 허용하며, 임의의 IOKit 접근은 차단합니다. Chromium 전용 `MAC_CHROMIUM_TMPDIR`도 검증용 임시 디렉터리로 지정해 다운로드가 사용자 임시 경로 쓰기 때문에 취소되지 않도록 합니다. 검증 프로세스는 자신과 자식 프로세스에만 종료 신호를 보낼 수 있어 서버·브라우저를 정상 종료하면서 다른 프로세스는 보호합니다.
 
-Vitest 스크립트에는 단발 실행·JUnit 인자를 제안하고 Playwright에는 JUnit 출력 파일을 지정합니다. 복합 스크립트·별도 npm 설정·생명주기 훅·자동 설정이 어려운 패키지 관리자 조합은 기존 실행 방식을 유지하고 필요한 보고서 옵션과 경로를 안내합니다. 추적 소스에 대한 쓰기를 자동 허용하지 않습니다. 숨김 디렉터리는 명시한 Vite 임시 캐시와 Java 격리 캐시 경로 외에 자동 추가하지 않습니다. 다른 Node 도구는 해당 스크립트에서 JUnit을 생성하도록 준비해야 합니다. Java는 Wrapper가 있으면 우선 사용하며 Maven Surefire·Gradle의 파일별 `TEST-*.xml` 보고서를 수집합니다. 사용자 정의 테스트 태스크·멀티모듈 설정은 실제 명령과 출력 경로를 확인하세요.
+잠금 파일 누락·의존성 검사 실패·다운로드 실패는 모델 작업 전에 `needs_input`으로 중단하며 원인을 표시합니다. 실행 디렉터리의 `preflight/dependencies-*-install.log`·`dependencies-*-check.log`·`yarn-*-install.log`·`COMMAND_ID-browsers.log`에서 상세 내용을 확인하세요. 실패 원인을 해결한 뒤 재개하면 준비를 다시 시도합니다. 사용자 지정 브라우저 디렉터리가 없으면 미리 중단합니다. 원본 프로젝트에만 설치한 의존성은 새 Worktree에 자동으로 전달되지 않습니다.
+
+Vitest 스크립트에는 단발 실행·JUnit 인자를 제안하고 Playwright에는 JUnit 출력 파일을 지정합니다. 단일 Jest 스크립트는 CI 모드의 실제 JSON 결과를 수집해 테스트별 성공·실패·건너뛰기와 집계 수치를 확인한 뒤 JUnit으로 변환합니다. 복합 스크립트·별도 npm 설정·생명주기 훅·자동 설정이 어려운 조합은 필요한 보고서 옵션과 경로를 안내합니다. 추적 소스에 대한 쓰기는 허용하지 않습니다. Java는 Wrapper가 있으면 우선 사용하며 Maven Surefire·Gradle의 파일별 `TEST-*.xml` 보고서를 수집합니다. 사용자 정의 테스트 태스크·멀티모듈 설정은 실제 명령과 출력 경로를 확인하세요.
 
 Java 하위 모듈은 상위 디렉터리의 `mvnw`·`gradlew`도 찾아 사용합니다. 새 Run을 만들 때 Maven·Gradle 명령에 누락된 오프라인 옵션, Worktree 내부 캐시 경로와 출력 권한을 보완합니다. 커밋된 POM의 Java 버전 속성이나 Gradle의 리터럴 toolchain·`sourceCompatibility` 선언을 읽어 설치된 JDK를 선택하고 `JAVA_HOME`을 실행 설정에 저장합니다. 명시한 `JAVA_HOME`은 교체하지 않습니다. Gradle Wrapper 버전의 JVM 호환성도 확인하며, 컴파일 toolchain과 실행 JVM이 다르면 설치된 JDK 경로를 Gradle에 전달합니다. JDK를 자동 다운로드하거나 프로젝트의 빌드 파일을 수정하지는 않습니다.
 
 실행 전 Maven은 로컬 `~/.m2/repository`와 해당 버전의 Wrapper 배포본을, Gradle은 `~/.gradle/caches/modules-2`와 해당 버전의 Wrapper 배포본을 격리된 Worktree 캐시에 복사합니다. 호스트의 `MAVEN_USER_HOME`·`GRADLE_USER_HOME`을 지정했다면 그 아래 캐시를 사용합니다. 원본 캐시와 쓰기 가능한 파일을 공유하지 않으며 기존 실행 캐시 파일도 덮어쓰지 않습니다. 인증 설정·사용자 Gradle 초기화 스크립트·잠금 파일·`gc.properties`·심볼릭 링크는 복사하지 않습니다. Gradle 캐시 복사 범위와 버전별 호환성은 [공식 캐시 문서](https://docs.gradle.org/current/userguide/dependency_caching.html), JVM 호환성은 [공식 호환성 표](https://docs.gradle.org/current/userguide/compatibility.html)를 기준으로 합니다.
+
+실행 비트가 없는 POSIX Wrapper는 `/bin/sh`로 실행하며 원본 파일 권한을 바꾸지 않습니다. 루트에 `settings.gradle`만 있는 멀티모듈도 새 Run에 루트 `build` 출력 경로를 포함합니다. Gradle 테스트의 Mockito는 실제 클래스패스에 있는 Mockito 또는 Byte Buddy 에이전트를 JVM 시작 시 연결해 샌드박스의 동적 자기 연결 제한을 유지합니다. 실행 어댑터의 해시와 실제 실행 인자는 검증 결과에 기록합니다.
+
+Gradle에 리터럴 버전으로 선언된 `com.google.protobuf:protoc`·`io.grpc:protoc-gen-grpc-java`는 공식 Maven 저장소의 체크섬을 확인해 격리 캐시에 준비하고 호스트 초기화 스크립트로 실행 경로를 전달합니다. 기존 Gradle 검증 메타데이터가 있으면 해당 바이너리의 체크섬을 요구하며 우회하지 않습니다. 프로젝트의 저장소·빌드 파일은 변경하지 않습니다. 배포본의 실제 CPU 아키텍처와 호스트가 다르면 별도의 호환 실행 환경이 필요합니다. macOS에서 일부 과거 gRPC 배포본은 ARM 분류자에도 x86_64 바이너리가 들어 있어 Rosetta 또는 호환 버전이 필요할 수 있으며 자동으로 설치하거나 버전을 교체하지 않습니다.
 
 JDK·빌드 도구·Wrapper 준비 실패와 명시적으로 확인 가능한 의존성 캐시 누락은 모델 호출 전에 `needs_input`으로 중단합니다. `preflight/COMMAND_ID-jdk.log`·`COMMAND_ID-tool.log`에서 실행된 버전 점검 결과를 확인할 수 있습니다. 상위 POM·BOM·버전 카탈로그·동적 빌드 스크립트를 모두 해석하는 의존성 해결기는 아니므로 간접 의존성·플러그인 누락은 실제 빌드에서 발견될 수 있습니다. 필요한 JDK·배포본·의존성이 로컬에 없으면 호스트 또는 해당 Run의 격리 캐시에 준비한 뒤 재개해야 합니다. 외부 저장소 접근을 위해 프로젝트 빌드를 네트워크 권한으로 실행하거나 개인 인증 설정을 가져오지 않습니다. DB·Redis·Docker 같은 통합 테스트 서비스도 자동 기동하거나 접근 권한을 확대하지 않습니다. 기존 Run의 고정된 명령·출력 권한은 유지하므로 캐시 옵션이 빠진 기존 Run은 새로 생성해야 합니다.
 
@@ -128,7 +136,7 @@ UI에서 저장한 설정은 DB 옆의 `.agents.json` 확장자 파일에 보관
 
 저장한 정책은 **새 작업**에 적용됩니다. 기존 작업은 생성 당시의 검증 계약을 보존하며, 재개 답변으로 명령이 바뀌지 않습니다. 정책 불일치가 있으면 작업 화면의 **프로젝트 검증 설정 열기**에서 수정한 뒤 **수정한 정책으로 새 작업 만들기**를 사용하세요. 이전 작업의 변경 내용과 이력은 보존되며 새 작업으로 자동 이전하지 않습니다.
 
-테스트는 셸 없이 실행하고 외부 네트워크를 차단합니다. 필요한 의존성은 실행 전에 오프라인에서 사용할 수 있도록 준비하세요. Maven·Gradle·JavaScript 도구도 JUnit XML을 생성하면 사용할 수 있지만, 프로젝트별 캐시·출력 경로 설정이 필요할 수 있습니다. npm 잠금 파일 기반의 오프라인 준비 외에는 대상 프로젝트 의존성을 자동 설치하지 않습니다. 테스트 0건, 전체 건너뛰기, 보고서 누락·형식 오류를 통과로 처리하지 않습니다. 보고서 누락 등으로 멈추면 오류에 실패한 명령 ID·상태·종료 코드와 진단 출력을 함께 표시합니다.
+테스트는 셸 명령 문자열을 해석하지 않고 외부 네트워크를 차단합니다. 필요한 의존성은 위에서 설명한 자동 준비 범위 안에서 설치하며, 그 밖의 의존성·실행 환경은 미리 준비해야 합니다. Maven·Gradle·JavaScript 도구도 JUnit XML을 생성하면 사용할 수 있지만 프로젝트별 출력 경로 설정이 필요할 수 있습니다. 테스트 0건, 전체 건너뛰기, 보고서 누락·형식 오류를 통과로 처리하지 않습니다. 보고서 누락 등으로 멈추면 실패한 명령 ID·상태·종료 코드와 진단 출력을 함께 표시합니다.
 
 `--config`·`--database`는 하위 명령 앞에 지정합니다. 아래 예시는 모든 명령에서 같은 설정을 사용합니다.
 

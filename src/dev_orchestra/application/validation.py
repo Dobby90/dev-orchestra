@@ -334,6 +334,11 @@ def detect_validation(info):
                     if not isinstance(value, str) or not isinstance(script, str):
                         continue
                     if script == "build" or script in {"typecheck", "lint"}:
+                        if re.search(r"(?:^|\s)--(?:fix|write)(?:\s|=|$)", value):
+                            warnings.append(
+                                f"{path}: {script}는 소스를 수정하는 옵션이 있어 자동 검증에서 제외했습니다."
+                            )
+                            continue
                         item = add(
                             "build", path, argv=[pm, "run", script], label=f"{directory} · {script}"
                         )
@@ -342,6 +347,8 @@ def detect_validation(info):
                             p.startswith(vite_cache + "/") or p == vite_cache for p in files
                         ):
                             item.output_paths.append(vite_cache)
+                        if re.search(r"(?:^|\s)vue-cli-service\s+build(?:\s|$)", value):
+                            item.output_paths.append(prefix + "node_modules/.cache")
                     elif script == "test" or script.startswith(("test:", "test-")):
                         argv = [pm, "run", script]
                         separator = ["--"] if pm == "npm" else []
@@ -381,6 +388,19 @@ def detect_validation(info):
                                 configure_node_test(
                                     item, tokens, pm, script, scripts, prefix, files
                                 )
+                            if tokens and tokens[0] == "jest" and "jest" in dependencies:
+                                if not any(
+                                    t.startswith(("--watch", "--outputFile", "--json"))
+                                    for t in tokens
+                                ):
+                                    item.command.argv += separator + [
+                                        "--ci",
+                                        "--runInBand",
+                                        "--json",
+                                        f"--outputFile=build/{safe_script}-jest.json",
+                                        "--cacheDirectory=build/jest-cache",
+                                    ]
+                                    item.warnings = []
             except (ValueError, TypeError, AttributeError):
                 warnings.append(f"{path}: package.json 형식을 확인해 주세요.")
         elif name == "pom.xml":
@@ -444,6 +464,17 @@ def detect_validation(info):
         if tool not in {"maven", "maven-build", "gradle", "gradle-build"}:
             continue
         is_maven = tool.startswith("maven")
+        if not is_maven:
+            for parent in [
+                PurePosixPath(item.command.working_directory),
+                *PurePosixPath(item.command.working_directory).parents,
+            ]:
+                if any(
+                    str(parent / name) in files
+                    for name in ("settings.gradle", "settings.gradle.kts")
+                ):
+                    item.output_paths.append(str(parent / "build"))
+                    break
         nested = [
             p
             for p in manifests
@@ -512,7 +543,7 @@ def complete_run_validation(config, info):
             ) != script_identity(item.command.argv):
                 continue
             for output in item.output_paths:
-                if output.endswith("node_modules/.vite-temp") and not any(
+                if output.endswith(("node_modules/.vite-temp", "node_modules/.cache")) and not any(
                     PurePosixPath(output).is_relative_to(PurePosixPath(p))
                     for p in snapshot.tests.output_paths
                 ):
@@ -531,6 +562,8 @@ def committed_java_files(info, directory):
             "build.gradle",
             "build.gradle.kts",
             "gradle/wrapper/gradle-wrapper.properties",
+            "settings.gradle",
+            "settings.gradle.kts",
         )
     ]
     files = {}
@@ -546,12 +579,24 @@ def committed_java_files(info, directory):
 
 def complete_java_command(command, outputs, info):
     """Freeze derived cache options and JDK selection only in the new Run snapshot."""
+    files = committed_java_files(info, command.working_directory)
     if java_tool(command) == "maven":
         if not any(arg in {"-o", "--offline"} for arg in command.argv):
             command.argv.append("--offline")
         if not option(command.argv, (), "-Dmaven.repo.local="):
             command.argv.append("-Dmaven.repo.local=.devorchestra-cache/maven")
     else:
+        for parent in [
+            PurePosixPath(command.working_directory),
+            *PurePosixPath(command.working_directory).parents,
+        ]:
+            if any(
+                str(parent / name) in files for name in ("settings.gradle", "settings.gradle.kts")
+            ):
+                output = str(parent / "build")
+                if output not in outputs:
+                    outputs.append(output)
+                break
         for flag in ("--offline", "--no-daemon"):
             if flag not in command.argv:
                 command.argv.append(flag)
@@ -567,7 +612,6 @@ def complete_java_command(command, outputs, info):
         if not any(PurePosixPath(output).is_relative_to(PurePosixPath(p)) for p in outputs):
             outputs.append(output)
     if "JAVA_HOME" not in command.env:
-        files = committed_java_files(info, command.working_directory)
         if jdk := choose_project_jdk(files.get, command.working_directory, java_tool(command)):
             command.env["JAVA_HOME"] = jdk
 

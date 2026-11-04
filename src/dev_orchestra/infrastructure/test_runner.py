@@ -13,7 +13,7 @@ from dev_orchestra.infrastructure.files import contained, digest, write
 from dev_orchestra.infrastructure.process import environment, execute, execution_directory, sanitize
 
 
-def sandbox_command(worktree, outputs, scratch, argv, network="none"):
+def sandbox_command(worktree, outputs, scratch, argv, network="none", *, browser=False):
     if platform.system() == "Darwin":
         # Seatbelt applies to every descendant, including repository test/build scripts.
         import json
@@ -22,6 +22,9 @@ def sandbox_command(worktree, outputs, scratch, argv, network="none"):
             return "(subpath " + json.dumps(str(p.resolve())) + ")"
 
         profile = "(version 1)(deny default)(allow process*)(allow sysctl-read)(allow mach-lookup)(allow file-read*)"
+        # Test servers and browser subprocesses must be able to stop their own
+        # descendants. Other processes remain outside this signal permission.
+        profile += "(allow signal (target self) (target children))"
         for name in [
             ".ssh",
             ".aws",
@@ -39,6 +42,10 @@ def sandbox_command(worktree, outputs, scratch, argv, network="none"):
             + ' (literal "/dev/null"))'
         )
         if network == "loopback":
+            if browser:
+                # Chromium's macOS power monitor needs this specific notification client.
+                # Keep all other IOKit services/user clients denied by default.
+                profile += '(allow iokit-open (iokit-user-client-class "RootDomainUserClient"))'
             # Chromium registers a per-process rendezvous service for child IPC.
             profile += '(allow mach-register (global-name-regex #"^org[.]chromium[.]Chromium[.]MachPortRendezvousServer[.][0-9]+$"))'
             profile += '(allow mach-register (global-name-regex #"^com[.]google[.]chrome[.]for[.]testing[.]MachPortRendezvousServer[.][0-9]+$"))'
@@ -201,6 +208,17 @@ class TestRunner:
                 raise PipelineError("output path contains tracked source files")
             for p in outputs:
                 p.mkdir(parents=True, exist_ok=True)
+            from dev_orchestra.infrastructure.runtime_adapters import (
+                convert_jest_report,
+                jest_json_path,
+                runtime_command,
+            )
+
+            jest_json = jest_json_path(worktree, command)
+            if jest_json:
+                if not any(jest_json.is_relative_to(p) for p in outputs):
+                    raise PipelineError("Jest JSON report must be inside an allowed output")
+                jest_json.unlink(missing_ok=True)
             if command.junit_report:
                 report_pattern = contained(worktree, command.junit_report)
                 if not any(report_pattern.is_relative_to(p) for p in outputs) and not any(
@@ -237,14 +255,20 @@ class TestRunner:
                         "TMPDIR": str(scratch),
                         "TMP": str(scratch),
                         "TEMP": str(scratch),
+                        # Chromium on macOS ignores TMPDIR for some temporary files.
+                        "MAC_CHROMIUM_TMPDIR": str(scratch),
                         "JAVA_TOOL_OPTIONS": f'-Duser.home="{scratch}" -Djava.io.tmpdir="{scratch}"',
                     }
                     env.update(command.env)
                     from dev_orchestra.infrastructure.java import java_environment
 
                     env.update(java_environment(worktree, command))
+                    runtime_argv, adapters = runtime_command(worktree, command, directory, env)
+                    result["runtime_argv"] = runtime_argv
+                    result["runtime_adapters"] = adapters
+                    options = {"browser": True} if "PLAYWRIGHT_BROWSERS_PATH" in command.env else {}
                     argv = sandbox_command(
-                        worktree, outputs, scratch, command.argv, command.network
+                        worktree, outputs, scratch, runtime_argv, command.network, **options
                     )
                     rc, output = execute(
                         argv,
@@ -262,6 +286,11 @@ class TestRunner:
                     result.update(passed=rc == 0, status="passed" if rc == 0 else "failed")
                 else:
                     result["status"] = "parse_error"
+                    if jest_json:
+                        target = contained(worktree, command.junit_report)
+                        if not any(target.is_relative_to(p) for p in outputs):
+                            raise PipelineError("JUnit report must be inside an allowed output")
+                        convert_jest_report(jest_json, target)
                     reports = junit_paths(worktree, command.junit_report, outputs)
                     if not reports:
                         raise PipelineError(

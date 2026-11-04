@@ -87,3 +87,26 @@ else:
     rc, text = execute(argv, source, 10, tmp_path / "sandbox.log")
     assert rc == 0, text
     assert file.read_text() == "protected"
+
+
+@pytest.mark.skipif(
+    os.getenv("DEVORCHESTRA_TEST_SANDBOX") != "1" or sys.platform != "darwin",
+    reason="opt-in macOS sandbox signal test",
+)
+def test_sandbox_can_stop_children_but_cannot_signal_external_process(tmp_path):
+    script = f"""
+import os, subprocess, sys
+child = subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(30)'])
+child.terminate()
+assert child.wait(timeout=5) != 0
+os.kill(os.getpid(), 0)
+try:
+    os.kill({os.getpid()}, 0)
+except PermissionError:
+    pass
+else:
+    raise AssertionError('external process signal allowed')
+"""
+    argv = sandbox_command(tmp_path, [], tmp_path, [sys.executable, "-c", script])
+    rc, output = execute(argv, tmp_path, 10, tmp_path / "signal.log")
+    assert rc == 0, output

@@ -9,6 +9,7 @@ from dev_orchestra.domain.models import PipelineError, StopRequested
 from dev_orchestra.infrastructure.files import contained, digest, write
 from dev_orchestra.infrastructure.git import Git
 from dev_orchestra.infrastructure.java import prepare_java
+from dev_orchestra.infrastructure.node_dependencies import prepare_npm_cache, prepare_yarn
 from dev_orchestra.infrastructure.playwright import browser_cache, prepare_browsers
 from dev_orchestra.infrastructure.process import environment, execute, sanitize
 from dev_orchestra.infrastructure.test_runner import sandbox_command
@@ -73,7 +74,17 @@ def prepare_dependencies(worktree, config, directory, stop=lambda: None):
         packages = [p for p in candidates if (p / "package.json").exists()]
         if not packages:
             continue
-        root = next((p for p in packages if (p / "package-lock.json").exists()), packages[0])
+        root = next(
+            (
+                p
+                for p in packages
+                if any(
+                    (p / lock).exists()
+                    for lock in ("package-lock.json", "yarn.lock", "pnpm-lock.yaml")
+                )
+            ),
+            packages[0],
+        )
         roots.setdefault(root, []).append(command_id)
     if not roots:
         prepare_browsers(worktree, config, directory, stop)
@@ -110,11 +121,20 @@ def prepare_dependencies(worktree, config, directory, stop=lambda: None):
                     )
                     prefix = "" if cwd == worktree else cwd.relative_to(worktree).as_posix() + "/"
                     cache = vite_cache_output(local, prefix, tracked, script)
+                    if (
+                        not cache
+                        and script
+                        and re.search(
+                            r"(?:^|\s)vue-cli-service\s+build(?:\s|$)",
+                            local.get("scripts", {}).get(script, ""),
+                        )
+                    ):
+                        cache = prefix + "node_modules/.cache"
                     if cache and not any(
                         Path(cache).is_relative_to(Path(p)) for p in config.output_paths
                     ):
                         raise PipelineError(
-                            f"{command_id} requires Vite temporary output {cache}. "
+                            f"{command_id} requires Node build temporary output {cache}. "
                             "Add it to project tests.output_paths and create a new run; "
                             "existing run validation policy is immutable."
                         )
@@ -126,7 +146,12 @@ def prepare_dependencies(worktree, config, directory, stop=lambda: None):
             lockfile = contained(
                 worktree, (root / "package-lock.json").relative_to(worktree).as_posix()
             )
-            manager = package.get("packageManager", "npm").split("@", 1)[0]
+            manager = package.get(
+                "packageManager", "yarn" if (root / "yarn.lock").is_file() else "npm"
+            ).split("@", 1)[0]
+            if manager == "yarn":
+                prepare_yarn(worktree, root, package, directory, tracked, stop)
+                continue
             if manager != "npm" or not lockfile.is_file():
                 if modules.is_dir():
                     continue
@@ -198,6 +223,7 @@ def prepare_dependencies(worktree, config, directory, stop=lambda: None):
                     )
                     for output in outputs:
                         output.mkdir(parents=True, exist_ok=True)
+                    prepare_npm_cache(worktree, locked, directory, stop)
                     argv = sandbox_command(worktree, outputs, scratch, ["npm", "ci", *common])
                     rc, output = execute(
                         argv,

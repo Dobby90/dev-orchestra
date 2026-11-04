@@ -15,10 +15,32 @@ from dev_orchestra.infrastructure.test_runner import sandbox_command
 
 
 def java_tool(command):
-    name = Path(command.argv[0]).name
+    name = Path(wrapper_argv(command.argv)[0]).name
     return (
         "maven" if name in {"mvn", "mvnw"} else "gradle" if name in {"gradle", "gradlew"} else None
     )
+
+
+def wrapper_argv(argv):
+    """Recognize a literal POSIX wrapper invocation, never arbitrary shell code."""
+    if len(argv) > 1 and argv[0] == "/bin/sh" and Path(argv[1]).name in {"gradlew", "mvnw"}:
+        return argv[1:]
+    return argv
+
+
+def java_argv(worktree, command):
+    argv = list(command.argv)
+    raw = wrapper_argv(argv)
+    if Path(raw[0]).name not in {"gradlew", "mvnw"}:
+        return argv
+    cwd = worktree / command.working_directory
+    path = Path(os.path.normpath(cwd / raw[0]))
+    path = contained(worktree, path.relative_to(worktree).as_posix())
+    if not path.is_file():
+        raise PipelineError("Java Wrapper script missing")
+    if raw is argv and not os.access(path, os.X_OK):
+        return ["/bin/sh", *argv]
+    return argv
 
 
 def major(value):
@@ -461,13 +483,12 @@ def prepare_java(worktree, config, directory, stop=lambda: None):
                 raise PipelineError(
                     "Gradle requires offline mode; update project validation and create a new Run"
                 )
-            executable = Path(command.argv[0])
+            runtime_argv = java_argv(worktree, command)
+            executable = Path(wrapper_argv(runtime_argv)[0])
             distribution = None
             if executable.name in {"mvnw", "gradlew"}:
                 executable = Path(os.path.normpath(cwd / executable))
                 executable = contained(worktree, executable.relative_to(worktree).as_posix())
-                if not os.access(executable, os.X_OK):
-                    raise PipelineError("Wrapper must be committed with its executable bit set")
                 distribution = wrapper_distribution(executable.parent, tool)
             elif not shutil.which(command.argv[0]):
                 raise PipelineError(
@@ -504,6 +525,10 @@ def prepare_java(worktree, config, directory, stop=lambda: None):
                 cache, lambda name: read(str(PurePosixPath(command.working_directory) / name)), tool
             )
             directory.mkdir(parents=True, exist_ok=True)
+            if tool == "gradle":
+                from dev_orchestra.infrastructure.java_native import prepare_native_tools
+
+                prepare_native_tools(worktree, command, directory, stop)
             with tempfile.TemporaryDirectory(prefix="devorchestra-java-") as temp:
                 scratch = Path(temp).resolve()
                 env = environment() | {
@@ -549,7 +574,11 @@ def prepare_java(worktree, config, directory, stop=lambda: None):
                     )
                 rc, output = execute(
                     sandbox_command(
-                        worktree, outputs, scratch, [command.argv[0], "--version"], command.network
+                        worktree,
+                        outputs,
+                        scratch,
+                        [*runtime_argv[: 2 if runtime_argv[0] == "/bin/sh" else 1], "--version"],
+                        command.network,
                     ),
                     cwd,
                     90,

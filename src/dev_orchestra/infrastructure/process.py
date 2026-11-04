@@ -19,9 +19,15 @@ from dev_orchestra.infrastructure.process_owner import identity
 
 
 def redact(text):
+    text = re.sub(r"(?i)(https?://)[^\s/@]+:[^\s/@]+@", r"\1[REDACTED]@", text)
+    text = re.sub(
+        r"""(?i)(\b(?:username|password|token|secret)\s+)(["'])([^\r\n]*?)\2""",
+        r'\1"[REDACTED]"',
+        text,
+    )
     text = re.sub(r"(?i)\bBearer\s+[A-Za-z0-9._~+/-]+=*", "Bearer [REDACTED]", text)
     text = re.sub(
-        r'(?i)(["\']?(?:api[_-]?key|token|password|secret|authorization)["\']?\s*[:=]\s*)(?:"[^"\n]*"|\'[^\'\n]*\'|[^\s,}]+)',
+        r'(?i)(["\']?(?:api[_-]?key|token|username|password|secret|authorization)["\']?\s*[:=]\s*)(?:"[^"\n]*"|\'[^\'\n]*\'|[^\s,}]+)',
         r'\1"[REDACTED]"',
         text,
     )
