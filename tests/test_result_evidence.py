@@ -79,6 +79,23 @@ def test_timeout_has_duration_without_false_exit_code(service, tmp_path):
     assert value["duration_seconds"] >= 1
 
 
+def test_missing_junit_retains_command_exit_code_and_redacted_diagnostic(service, tmp_path):
+    _, _, repo = service
+    value = TestRunner().run(
+        repo,
+        config("print('sh: playwright: command not found; token=CANARY');raise SystemExit(127)"),
+        tmp_path / "attempt",
+    )
+    command = value["commands"][0]
+    assert value["status"] == "parse_error"
+    assert command["exit_code"] == 127 and command["total"] is None
+    assert "no report files" in command["error"]
+    assert (
+        "exit code 127" in command["error"] and "playwright: command not found" in command["error"]
+    )
+    assert "CANARY" not in json.dumps(value)
+
+
 def test_schema4_upgrade_keeps_log_cursor_and_snapshot_references(service):
     svc, rid, _ = service
     with svc.store.connection() as db:

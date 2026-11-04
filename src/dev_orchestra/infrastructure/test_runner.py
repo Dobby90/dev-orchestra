@@ -148,6 +148,11 @@ def junit_paths(worktree, pattern, outputs):
 class TestRunner:
     __test__ = False
 
+    def prepare(self, worktree, config, directory, stop=lambda: None):
+        from dev_orchestra.infrastructure.dependencies import prepare_dependencies
+
+        prepare_dependencies(worktree, config, directory, stop)
+
     def check_policy(self, config):
         if platform.system() != "Darwin" and any(
             c.network == "loopback" for c in config.commands.values()
@@ -223,6 +228,7 @@ class TestRunner:
                 "junit_hash": None,
                 "error": None,
             }
+            diagnostic = ""
             try:
                 with tempfile.TemporaryDirectory(prefix="devorchestra-test-") as temp:
                     scratch = Path(temp).resolve()
@@ -237,7 +243,7 @@ class TestRunner:
                     argv = sandbox_command(
                         worktree, outputs, scratch, command.argv, command.network
                     )
-                    rc, _ = execute(
+                    rc, output = execute(
                         argv,
                         cwd,
                         command.timeout_seconds,
@@ -246,6 +252,9 @@ class TestRunner:
                         env=env,
                     )
                 result["exit_code"] = rc
+                if rc:
+                    diagnostic = f"exit code {rc}: {sanitize(output[-1200:].strip())}"
+                    result["error"] = diagnostic
                 if command.kind == "check":
                     result.update(passed=rc == 0, status="passed" if rc == 0 else "failed")
                 else:
@@ -289,7 +298,7 @@ class TestRunner:
                 raise
             except (PipelineError, OSError) as error:
                 result.update(
-                    error=sanitize(str(error)),
+                    error=sanitize(str(error)) + (f"; {diagnostic}" if diagnostic else ""),
                     status="timeout" if "timeout" in str(error) else result["status"],
                 )
             result["duration_seconds"] = time.monotonic() - started

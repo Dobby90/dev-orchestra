@@ -10,6 +10,7 @@ from dev_orchestra.application.errors import ApplicationError
 from dev_orchestra.application.web_contracts import ValidationCandidate, ValidationDetection
 from dev_orchestra.config import TestCommand
 from dev_orchestra.domain.models import PipelineError
+from dev_orchestra.infrastructure.dependencies import vite_cache_output
 from dev_orchestra.infrastructure.files import relative_path
 from dev_orchestra.infrastructure.git import Git
 
@@ -318,9 +319,14 @@ def detect_validation(info):
                     if not isinstance(value, str) or not isinstance(script, str):
                         continue
                     if script == "build" or script in {"typecheck", "lint"}:
-                        add(
+                        item = add(
                             "build", path, argv=[pm, "run", script], label=f"{directory} · {script}"
                         )
+                        vite_cache = vite_cache_output(package, prefix, files, script)
+                        if vite_cache and not any(
+                            p.startswith(vite_cache + "/") or p == vite_cache for p in files
+                        ):
+                            item.output_paths.append(vite_cache)
                     elif script == "test" or script.startswith(("test:", "test-")):
                         argv = [pm, "run", script]
                         separator = ["--"] if pm == "npm" else []
@@ -554,6 +560,19 @@ def policy_warnings(config, info):
                 f"저장된 검증 {key}는 {tool} 명령이지만 기준 브랜치에서 해당 도구를 감지하지 못했습니다. "
                 "프로젝트 검증 설정에서 자동 감지·선택 후 새 작업을 만드세요. 이 작업의 재개 답변으로 명령은 변경되지 않습니다."
             )
+        for item in detected.candidates:
+            if item.command.working_directory != command.working_directory or script_identity(
+                item.command.argv
+            ) != script_identity(command.argv):
+                continue
+            for output in item.output_paths:
+                if output.endswith("node_modules/.vite-temp") and not any(
+                    PurePosixPath(output).is_relative_to(PurePosixPath(p))
+                    for p in config.tests.output_paths
+                ):
+                    warnings.append(
+                        f"저장된 검증 {key}: Vite 임시 출력 경로 {output}를 tests.output_paths에 추가하고 새 작업을 만드세요."
+                    )
         if command.kind == "test":
             mismatch = report_warning(command, detected.candidates)
             if mismatch:

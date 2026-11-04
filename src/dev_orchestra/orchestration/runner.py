@@ -174,6 +174,23 @@ class Runner:
                 verified_candidate(self.store, self.store.get(run_id), candidate)
                 self.store.update(run_id, "waiting_approval", final_sha=candidate)
                 return
+            if hasattr(self.tests, "prepare"):
+                try:
+                    self.tests.prepare(
+                        worktree,
+                        config.tests,
+                        directory / "preflight",
+                        lambda: self.store.get(run_id)["control"],
+                    )
+                    if git.dirty():
+                        raise PipelineError(
+                            "dependency preparation created untracked source files; changes preserved"
+                        )
+                except StopRequested:
+                    raise
+                except PipelineError as error:
+                    self.store.update(run_id, "needs_input", error=redact(str(error)))
+                    return
             sha = git.sha()
             logging.getLogger(f"devorchestra.{run_id}").info(
                 "Starting %s iteration %s at %s", role, iteration, sha
@@ -409,10 +426,16 @@ class Runner:
                         self.store.update(run_id, test_change_application=None)
                 write(directory / FILES[role], payload)
                 if failed_test:
+                    failures = [
+                        f"{c['command_id']} ({c.get('status', 'unavailable')}, "
+                        f"exit code {c.get('exit_code')}): {c.get('error') or 'inspect command log'}"
+                        for c in payload["execution"].get("commands", [])
+                        if not c.get("passed")
+                    ]
                     self.store.update(
                         run_id,
                         "needs_input",
-                        error="test evidence unavailable; inspect command results",
+                        error="test evidence unavailable; " + "; ".join(failures),
                         next_role="tester",
                     )
                     return

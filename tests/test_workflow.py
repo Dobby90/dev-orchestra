@@ -199,6 +199,46 @@ def test_test_failure_causes_fix_loop(service):
     assert "fixer" in agent.calls
 
 
+def test_unavailable_evidence_identifies_each_failed_command_and_preserves_artifact(service):
+    svc, rid, _ = service
+
+    class MissingReport(FakeTests):
+        def run(self, *args):
+            return {
+                "passed": False,
+                "status": "parse_error",
+                "commands": [
+                    {
+                        "command_id": "unit",
+                        "status": "failed",
+                        "passed": False,
+                        "exit_code": 1,
+                        "total": 43,
+                    },
+                    {
+                        "command_id": "browser",
+                        "status": "parse_error",
+                        "passed": False,
+                        "exit_code": 127,
+                        "error": "no report files; playwright: command not found",
+                    },
+                ],
+            }
+
+    agent = FakeAgent()
+    Runner(svc.store, agent, MissingReport()).execute(rid)
+    run = svc.store.get(rid)
+    assert run["state"] == "needs_input" and run["next_role"] == "tester"
+    assert "unit (failed, exit code 1)" in run["error"]
+    assert "browser (parse_error, exit code 127)" in run["error"]
+    assert "playwright: command not found" in run["error"]
+    assert "fixer" not in agent.calls
+    step = svc.store.steps(rid)[-1]
+    from pathlib import Path
+
+    assert step["status"] == "failed" and Path(step["data"]["artifact"]).is_file()
+
+
 def test_ambiguous_plan_needs_input(service):
     svc, run_id, _ = service
 

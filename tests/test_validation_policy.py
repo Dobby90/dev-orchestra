@@ -89,6 +89,43 @@ def test_detect_does_not_invent_scripts_and_handles_invalid_manifests(service):
         Commands(commands={c.id: c.command for c in found.candidates})
 
 
+@pytest.mark.parametrize("directory", [".", "web"])
+def test_vite_build_detects_only_temporary_cache_output_and_warns_for_old_policy(
+    service, directory
+):
+    from dev_orchestra.application.validation import policy_warnings
+
+    _, _, repo = service
+    prefix = "" if directory == "." else directory + "/"
+    commit_files(
+        repo,
+        {
+            prefix + "package.json": json.dumps(
+                {"scripts": {"build": "tsc --noEmit && vite build", "typecheck": "tsc --noEmit"}}
+            ),
+            prefix + "vite.config.ts": "export default {};",
+        },
+    )
+    found = detect(repo)
+    build = next(c for c in found.candidates if c.label.endswith(" · build"))
+    cache = prefix + "node_modules/.vite-temp"
+    assert cache in build.output_paths and prefix + "node_modules" not in build.output_paths
+    typecheck = next(c for c in found.candidates if c.label.endswith(" · typecheck"))
+    assert cache not in typecheck.output_paths
+    cfg = Config(
+        tests=Commands(
+            commands={
+                "build": build.command,
+                "unit": Command(argv=["true"], junit_report="build/test.xml"),
+            }
+        )
+    )
+    info = ProjectService([repo.parent]).validate_repository(repo, "main")
+    assert any(cache in warning and "새 작업" in warning for warning in policy_warnings(cfg, info))
+    cfg.tests.output_paths.append(cache)
+    assert not any(cache in warning for warning in policy_warnings(cfg, info))
+
+
 def test_detect_wrappers_package_managers_and_distinct_reports(service):
     _, _, repo = service
     commit_files(
