@@ -236,7 +236,10 @@ def test_missing_requirement_evidence_never_mutates_worktree(service, invalid):
 
     Runner(svc.store, InvalidAgent(), FakeTests()).execute(rid)
     run = svc.store.get(rid)
-    assert run["state"] == "failed"
+    assert run["state"] == "needs_input"
+    assert "response repair budget exhausted" in run["error"]
+    attempts = [step for step in svc.store.steps(rid) if step["role"] == "developer"]
+    assert len(attempts) == 2 and all(step["status"] == "failed" for step in attempts)
     assert "criterion IDs" in run["error"]
     assert not run.get("test_change_proposal")
     assert (Path(run["worktree"]) / TEST_FILE).read_text() == OLD_TEST
@@ -264,7 +267,10 @@ def test_tester_contract_is_checked_before_applying_patch(service, invalid):
 
     Runner(svc.store, InvalidTester(), FakeTests()).execute(rid)
     run = svc.store.get(rid)
-    assert run["state"] == "failed"
+    assert run["state"] == "needs_input"
+    assert "response repair budget exhausted" in run["error"]
+    attempts = [step for step in svc.store.steps(rid) if step["role"] == "tester"]
+    assert len(attempts) == 2 and all(step["status"] == "failed" for step in attempts)
     assert (Path(run["worktree"]) / TEST_FILE).read_text() == OLD_TEST
     assert not run.get("test_change_records")
 

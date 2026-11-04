@@ -6,7 +6,9 @@ import os
 from contextlib import nullcontext
 from pathlib import Path
 
-from dev_orchestra.agents.policy import TestChangesRequired, apply_patch
+from dev_orchestra.agents.contracts import ResponseError, validate_role
+from dev_orchestra.agents.feedback import source_context
+from dev_orchestra.agents.policy import TestChangesRequired, apply_patch, validate_patch
 from dev_orchestra.application.test_changes import TestChangeService
 from dev_orchestra.config import Config
 from dev_orchestra.domain.models import AgentRequest, PipelineError, StopRequested
@@ -218,6 +220,25 @@ class Runner:
                     raise PipelineError("checkpoint artifact checksum mismatch")
                 payload = json.loads(artifact.read_text())
             else:
+                instruction_hash = digest(
+                    json.dumps(
+                        {k: run.get(k) for k in ("answers", "clarifications", "directives")},
+                        sort_keys=True,
+                    ).encode()
+                )[:16]
+                repair_key = f"{run.get('revision', 0)}:{iteration}:{role}:{sha}:{instruction_hash}"
+                failures = run.get("response_failures", {}).get(repair_key, 0)
+                if not run.get("test_change_application") and not run.get("test_change_proposal"):
+                    if (
+                        failures > config.workflow.response_retries
+                        or run.get("response_retry_inflight") == repair_key
+                    ):
+                        self.store.update(
+                            run_id,
+                            "needs_input",
+                            error="response repair budget exhausted or interrupted; inspect before continuing",
+                        )
+                        return
                 step_id, attempt = self.store.start_step(
                     run_id,
                     role,
@@ -276,9 +297,68 @@ class Runner:
                     if sha != run["test_change_proposal"]["input_sha"]:
                         raise PipelineError("saved test change input SHA changed")
                 else:
-                    result = self.agent.run(
-                        request, step_dir, lambda: self.store.get(run_id)["control"]
-                    )
+                    feedback = run.get("response_feedback")
+                    if feedback and feedback.get("key") == repair_key:
+                        self.store.update(run_id, response_retry_inflight=repair_key)
+                        request.context["response_feedback"] = feedback
+                    request.context["response_contract"] = {
+                        "input_sha": sha,
+                        "criterion_ids": [c["id"] for c in run.get("criteria", [])],
+                        "command_ids": list(config.tests.commands),
+                        "patch_format": "Git unified diff with ---/+++ and @@ hunks; never *** markers",
+                    }
+                    result = None
+                    try:
+                        result = self.agent.run(
+                            request, step_dir, lambda: self.store.get(run_id)["control"]
+                        )
+                        if git.sha() != sha or git.dirty():
+                            raise PipelineError("read-only agent changed the worktree")
+                        validate_role(role, result)
+                        if not result.questions:
+                            if role == "tester":
+                                self.validate_test_result(run, result, config)
+                            try:
+                                validate_patch(
+                                    worktree, result.patch, role, config.tests.write_paths
+                                )
+                            except TestChangesRequired as protected:
+                                test_changes.explanations(run, result, protected.paths)
+                    except ResponseError as error:
+                        if git.sha() != sha or git.dirty():
+                            raise PipelineError(
+                                "candidate changed during response repair"
+                            ) from error
+                        feedback = {
+                            "key": repair_key,
+                            "input_sha": sha,
+                            "error": redact(str(error))[:4000],
+                            "current_files": sanitize(source_context(worktree, result.patch))
+                            if result
+                            else [],
+                        }
+                        with self.store.transaction():
+                            self.store.finish_step(
+                                step_id, sha, {"error": feedback["error"]}, status="failed"
+                            )
+                            self.store.update(
+                                run_id,
+                                response_feedback=feedback,
+                                response_retry_inflight=None,
+                                response_failures={
+                                    **run.get("response_failures", {}),
+                                    repair_key: failures + 1,
+                                },
+                            )
+                        if failures >= config.workflow.response_retries:
+                            self.store.update(
+                                run_id,
+                                "needs_input",
+                                error="response repair budget exhausted: " + feedback["error"],
+                            )
+                            return
+                        continue
+                    self.store.update(run_id, response_feedback=None, response_retry_inflight=None)
                 if git.sha() != sha or git.dirty():
                     raise PipelineError("read-only agent changed the worktree")
                 if result.questions:
@@ -452,8 +532,10 @@ class Runner:
     @staticmethod
     def validate_test_result(run, result, config):
         ids = set(config.tests.commands)
-        if set(result.command_ids) != ids:
-            raise PipelineError("tester must select all configured test commands")
+        if set(result.command_ids) != ids or len(result.command_ids) != len(ids):
+            raise ResponseError(
+                f"tester command_ids mismatch: expected={sorted(ids)}, received={result.command_ids}"
+            )
         criteria = {c["id"] for c in run["criteria"]}
         test_ids = {k for k, v in config.tests.commands.items() if v.kind == "test"}
         coverage = {c.criterion_id: c.command_ids for c in result.coverage}
@@ -462,7 +544,13 @@ class Runner:
             or set(coverage) != criteria
             or any(not v or not set(v) <= ids or not set(v) & test_ids for v in coverage.values())
         ):
-            raise PipelineError("missing acceptance criterion test coverage")
+            raise ResponseError(
+                "missing acceptance criterion test coverage: "
+                f"missing={sorted(criteria - set(coverage))}, unexpected={sorted(set(coverage) - criteria)}, "
+                f"expected={sorted(criteria)}, received={[c.criterion_id for c in result.coverage]}, "
+                f"allowed_commands={sorted(ids)}, received_commands={coverage}; "
+                "include each criterion exactly once with at least one configured test command"
+            )
 
     def advance(self, run_id, role, payload, config):
         run = self.store.get(run_id)

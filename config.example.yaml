@@ -11,6 +11,7 @@ codex:
   role_timeouts:
     reviewer: 900
 workflow:
+  response_retries: 1
   max_fix_attempts: 3
   auto_commit: true
   require_human_approval: true

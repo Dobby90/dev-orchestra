@@ -4,6 +4,7 @@ import json
 import uuid
 from pathlib import Path
 
+from dev_orchestra.agents.contracts import ResponseError
 from dev_orchestra.agents.policy import TestChangesRequired, validate_patch
 from dev_orchestra.config import Config
 from dev_orchestra.domain.models import AgentResult, PipelineError
@@ -38,7 +39,7 @@ class TestChangeService:
                 not c["reason"].strip() or not set(c["criterion_ids"]) <= criteria for c in changes
             )
         ):
-            raise PipelineError(
+            raise ResponseError(
                 "protected test edits require test_changes with a reason and valid criterion IDs "
                 "for every existing test file: " + ", ".join(paths)
             )

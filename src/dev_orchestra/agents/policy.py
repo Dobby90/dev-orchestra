@@ -3,6 +3,7 @@
 import re
 from pathlib import Path
 
+from dev_orchestra.agents.contracts import ResponseError
 from dev_orchestra.domain.models import PipelineError
 from dev_orchestra.infrastructure.files import contained, digest
 from dev_orchestra.infrastructure.git import Git
@@ -56,6 +57,8 @@ def validate_patch(
         for line in patch.splitlines()
     ):
         raise PipelineError("renames, symlinks, binary and mode changes are not allowed")
+    if any(line.startswith("*** ") for line in patch.splitlines()):
+        raise ResponseError("use Git unified diff headers, never *** patch markers")
     paths, protected = [], []
     for line in patch.splitlines():
         if line.startswith(("--- ", "+++ ")):
@@ -80,7 +83,13 @@ def validate_patch(
     if not paths:
         raise PipelineError("patch contains no validated file headers")
     git = Git(worktree)
-    git.call("apply", "--recount", "--check", "--whitespace=error", "-", input=patch)
+    try:
+        git.call("apply", "--recount", "--check", "--whitespace=error", "-", input=patch)
+    except PipelineError as error:
+        raise ResponseError(
+            "patch check failed; read current files and regenerate exact unified diff: "
+            + str(error)[:2000]
+        ) from error
     # Validate Git's own interpretation as well; fake headers cannot authorize extra files.
     stats = git.call("apply", "--recount", "--numstat", "-", input=patch)
     actual = [line.split("\t", 2)[2] for line in stats.splitlines()]

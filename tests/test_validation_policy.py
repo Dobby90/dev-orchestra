@@ -331,7 +331,10 @@ def test_checks_cannot_replace_test_coverage(service):
 
     Runner(svc.store, BuildOnlyCoverage(), FakeTests()).execute(rid)
     run = svc.store.get(rid)
-    assert run["state"] == "failed" and "coverage" in run["error"]
+    assert run["state"] == "needs_input" and "coverage" in run["error"]
+    attempts = [step for step in svc.store.steps(rid) if step["role"] == "tester"]
+    assert len(attempts) == 2 and all(step["status"] == "failed" for step in attempts)
+    assert not run.get("test_result")
 
 
 def test_saved_policy_is_not_replaced_by_project_edit_or_resume_answers(web):

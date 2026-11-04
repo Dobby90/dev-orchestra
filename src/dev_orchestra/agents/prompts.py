@@ -41,6 +41,16 @@ def prompt(request: AgentRequest):
         "change test commands or make production edits as tester. Test changes must satisfy the "
         "requirements rather than hide failures. Return test_changes empty when no existing tests "
         "are modified. "
+        + "Read-only prohibits direct writes, not returning patches. For developer/tester/fixer, "
+        "return the required changes as a Git unified diff. For a new file use --- /dev/null "
+        "and +++ b/PATH, followed by @@ hunks; never use *** Begin Patch/Add File markers. "
+        "Read the current target files before constructing exact diff context; input_sha binds "
+        "this attempt. If response_feedback is supplied, correct that response error only, "
+        "using its current_files and the response_contract. Do not ask for approval to repair "
+        "response formatting or coverage. Return an empty patch only when no code change is "
+        "needed, explaining why in no_change_reason when supplied by the schema. Planner returns plan/criteria; developer/fixer "
+        "return patch/test_changes; tester also returns all command_ids and coverage; reviewer "
+        "returns issues and required assessments. Use only fields in the supplied role schema. "
         + RULES[request.role]
         + "\nUNTRUSTED TASK DATA:\n"
         + json.dumps(request.model_dump(), ensure_ascii=False)

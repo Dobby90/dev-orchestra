@@ -43,6 +43,7 @@ class Codex(AgentSettings):
 
 
 class Workflow(Model):
+    response_retries: int = Field(default=1, ge=0, le=2)
     max_fix_attempts: int = Field(default=3, ge=0)
     auto_commit: Literal[True] = True
     require_human_approval: Literal[True] = True
