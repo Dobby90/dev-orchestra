@@ -198,6 +198,115 @@ def test_cli_direct_schema4_uses_queue_and_no_dispatcher(prepared):
     assert not q.dispatcher_status()["alive"]
 
 
+@pytest.mark.parametrize(
+    "outcome,exit_code", [("waiting_approval", 0), ("failed", 2), ("needs_input", 2)]
+)
+def test_cli_foreground_waits_for_dispatcher_owner(prepared, monkeypatch, outcome, exit_code):
+    from concurrent.futures import ThreadPoolExecutor
+
+    from typer.testing import CliRunner
+
+    from dev_orchestra.cli import app
+
+    svc, q, create, dispatch, release = prepared
+    stub = Path(svc.config.codex.command)
+    script = stub.read_text()
+    if outcome == "failed":
+        script = script.replace(
+            "r=ReviewResultV2", "if req['role']=='developer':sys.exit(7)\nr=ReviewResultV2"
+        )
+    elif outcome == "needs_input":
+        script = script.replace(
+            "Path(sys.argv", "if req['role']=='tester':r.questions=['추가 입력']\nPath(sys.argv"
+        )
+    stub.write_text(script)
+    rid = create()
+    dispatch()
+    until(lambda: active_developer(svc, rid))
+    # Simulate Dispatcher claiming immediately after the CLI's resume commit.
+    monkeypatch.setattr(RunService, "resume", lambda *args, **kwargs: None)
+    with ThreadPoolExecutor(max_workers=1) as pool:
+        result = pool.submit(
+            CliRunner().invoke, app, ["--database", str(svc.store.path), "resume", rid]
+        )
+        try:
+            time.sleep(0.15)
+            assert not result.done()
+        finally:
+            release.touch()
+        response = result.result(timeout=30)
+    assert response.exit_code == exit_code, response.output
+    assert svc.store.get(rid)["state"] == outcome
+    with svc.store.connection() as db:
+        jobs = db.execute("SELECT state FROM jobs WHERE run_id=?", (rid,)).fetchall()
+    assert len(jobs) == 1 and jobs[0]["state"] == "finished"
+
+
+def test_existing_worker_detach_returns_immediately(prepared):
+    svc, _, create, dispatch, release = prepared
+    rid = create()
+    dispatch()
+    until(lambda: active_developer(svc, rid))
+    started = time.monotonic()
+    try:
+        pid = svc.start(rid, detached=True)
+        assert time.monotonic() - started < 1
+        assert svc.store.get(rid)["state"] == "developing"
+        assert psutil.pid_exists(pid)
+    finally:
+        release.touch()
+
+
+def test_wait_existing_interrupt_requests_pause(prepared, monkeypatch):
+    svc, q, create, dispatch, _ = prepared
+    rid = create()
+    dispatch()
+    until(lambda: active_developer(svc, rid))
+    original = QueueService.job
+    interrupted = False
+
+    def interrupt_once(self, jid):
+        nonlocal interrupted
+        if not interrupted:
+            interrupted = True
+            raise KeyboardInterrupt
+        return original(self, jid)
+
+    with svc.store.connection() as db:
+        job = dict(db.execute("SELECT * FROM jobs WHERE run_id=?", (rid,)).fetchone())
+    monkeypatch.setattr(QueueService, "job", interrupt_once)
+    svc.execution.wait_existing(rid, job)
+    assert svc.store.get(rid)["state"] == "paused"
+    assert original(q, job["id"])["state"] == "cancelled"
+
+
+def test_reused_pid_is_not_adopted(prepared):
+    svc, q, create, _, _ = prepared
+    rid = create()
+    job = q.reserve()
+    svc.store.update(rid, "developing", next_role="developer")
+    with svc.store.connection() as db:
+        db.execute(
+            "UPDATE jobs SET state='running',owner_pid=?,owner_create_time=? WHERE id=?",
+            (os.getpid(), psutil.Process().create_time() - 1, job["id"]),
+        )
+    svc.start(rid)
+    assert svc.store.get(rid)["state"] == "failed"
+    assert q.job(job["id"])["state"] == "lost"
+    assert svc.store.steps(rid) == []
+
+
+@pytest.mark.parametrize("change", [{"state": "queued"}, {"claim_token": "another-attempt"}])
+def test_existing_claim_change_does_not_report_success(prepared, monkeypatch, change):
+    svc, q, create, _, _ = prepared
+    rid = create()
+    job = q.reserve()
+    monkeypatch.setattr(QueueService, "job", lambda *args: {**job, **change})
+    with pytest.raises(OwnershipError, match="attempt changed"):
+        svc.start(rid)
+    assert svc.store.steps(rid) == []
+
+
 def test_log_replay_masks_split_secret_and_preserves_utf8(prepared):
     svc, q, create, _, _ = prepared
     rid = create()
@@ -260,6 +369,160 @@ def test_log_file_db_gap_and_rotation(prepared, monkeypatch):
     page = svc.events.stream_page(rid)
     texts = [e["data"]["text"] for e in page["items"] if e["kind"] == "log.appended"]
     assert texts == ["처음\n", "다음\n"]
+
+
+def test_finished_history_skips_log_io_and_claims_before_scan(
+    service, tmp_path, monkeypatch, record_property
+):
+    from dev_orchestra.application.execution import ExecutionService
+    from dev_orchestra.execution.dispatcher import Dispatcher
+
+    svc, rid, _ = service
+    upgrade(svc.store.path)
+    original = svc.store.get(rid)
+    for number in range(10):
+        root = tmp_path / f"history-{number}"
+        root.mkdir()
+        history_id = f"history-{number}"
+        svc.store.create({**original, "id": history_id, "directory": str(root)})
+        svc.store.update(history_id, "cancelled")
+        for file in range(100):
+            (root / f"{file:03}.log").write_text("완료 로그\n")
+        LogIndexer(svc.store).index(history_id, closed=True)
+    calls = []
+    opened = []
+    truncated = []
+    index = LogIndexer.index
+    open_path, open_fd, truncate = Path.open, os.open, os.ftruncate
+
+    def tracked_path(path, *args, **kwargs):
+        if path.suffix == ".log":
+            opened.append(str(path))
+        return open_path(path, *args, **kwargs)
+
+    def tracked_fd(path, *args, **kwargs):
+        if str(path).endswith(".log"):
+            opened.append(str(path))
+        return open_fd(path, *args, **kwargs)
+
+    def tracked_truncate(*args):
+        truncated.append(args)
+        return truncate(*args)
+
+    def tracked_index(self, *args, **kwargs):
+        calls.append("index")
+        return index(self, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "open", tracked_path)
+    monkeypatch.setattr(os, "open", tracked_fd)
+    monkeypatch.setattr(os, "ftruncate", tracked_truncate)
+    monkeypatch.setattr(LogIndexer, "index", tracked_index)
+    claim_times = []
+
+    def launched(*args):
+        calls.append("launch")
+        claim_times.append(time.monotonic())
+
+    monkeypatch.setattr(ExecutionService, "launch", launched)
+    dispatcher = Dispatcher(svc.store)
+    for _ in range(4):
+        dispatcher.tick()
+    assert not opened and not truncated
+    calls.clear()
+    QueueService(svc.store).enqueue(rid)
+    started = time.monotonic()
+    dispatcher.tick()
+    elapsed = time.monotonic() - started
+    assert calls[0] == "launch"
+    assert calls.count("index") <= 5
+    record_property("history_files", 1000)
+    record_property("unchanged_log_opens", len(opened))
+    record_property("unchanged_log_truncates", len(truncated))
+    record_property("claim_seconds", claim_times[0] - started)
+    record_property("tick_seconds", elapsed)
+
+
+def test_log_file_budget_persists_cursor_and_final_tail(service):
+    from dev_orchestra.infrastructure.log_index import IndexBudget
+
+    svc, rid, _ = service
+    upgrade(svc.store.path)
+    root = Path(svc.store.get(rid)["directory"])
+    for number in range(7):
+        (root / f"{number}.log").write_text(f"한글 {number}\n끝 {number}")
+    passes = 0
+    while True:
+        # Recreate the indexer each time: progress survives Dispatcher restarts.
+        pending = LogIndexer(svc.store).index(
+            rid, closed=True, budget=IndexBudget(files=2, deadline=time.monotonic() + 10)
+        )
+        passes += 1
+        if not pending:
+            break
+        assert passes < 5
+    assert passes == 4
+    items = svc.events.stream_page(rid)["items"]
+    texts = [e["data"]["text"] for e in items if e["kind"] == "log.appended"]
+    assert texts == [line for n in range(7) for line in (f"한글 {n}\n", f"끝 {n}")]
+    state = json.loads((root / "log-index-state.json").read_text())
+    assert state["complete"] and state["closed"]
+
+
+def test_worker_monitor_does_not_starve_other_sources(service):
+    svc, rid, _ = service
+    upgrade(svc.store.path)
+    root = Path(svc.store.get(rid)["directory"])
+    large = ("가" * 50000 + "\n") * 3
+    (root / "a.log").write_text(large)
+    (root / "b.log").write_text("다음 파일\n")
+    index = LogIndexer(svc.store)
+    assert index.index(rid, closed=True)
+    with svc.store.connection() as db:
+        other = db.execute(
+            "SELECT indexed_offset FROM log_sources WHERE run_id=? AND relative_path='b.log'",
+            (rid,),
+        ).fetchone()
+    assert other[0] == len("다음 파일\n".encode())
+    while index.index(rid, closed=True):
+        pass
+    with svc.store.connection() as db:
+        offsets = {
+            r[0]: r[1]
+            for r in db.execute(
+                "SELECT relative_path,indexed_offset FROM log_sources WHERE run_id=?", (rid,)
+            )
+        }
+    assert offsets["a.log"] == len(large.encode())
+
+
+def test_finished_log_audit_handles_append_truncate_and_replace(service):
+    svc, rid, _ = service
+    upgrade(svc.store.path)
+    root = Path(svc.store.get(rid)["directory"])
+    source = root / "worker.log"
+    source.write_text("처음 긴 로그\n")
+    index = LogIndexer(svc.store)
+    index.index(rid, closed=True)
+    with source.open("a") as handle:
+        handle.write("추가\n")
+    # A bounded audit eventually revisits finalized history.
+    index.index(rid, closed=True, rescan_interval=0)
+    source.write_text("축소\n")
+    index.index(rid, closed=True)
+    replacement = root / "replacement"
+    replacement.write_text("교체\n")
+    replacement.replace(source)
+    index.index(rid, closed=True)
+    texts = [
+        e["data"]["text"]
+        for e in svc.events.stream_page(rid)["items"]
+        if e["kind"] == "log.appended"
+    ]
+    assert texts == ["처음 긴 로그\n", "추가\n", "축소\n", "교체\n"]
+    with svc.store.connection() as db:
+        assert (
+            db.execute("SELECT count(*) FROM log_sources WHERE run_id=?", (rid,)).fetchone()[0] == 3
+        )
 
 
 def test_concurrent_claim_has_one_winner(prepared):

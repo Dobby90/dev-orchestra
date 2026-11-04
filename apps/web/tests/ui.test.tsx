@@ -102,6 +102,50 @@ function setupDetail() {
   vi.spyOn(api, "run").mockResolvedValue(detail);
   vi.spyOn(api, "steps").mockResolvedValue({ items: [] });
 }
+
+it.each(["failed", "needs_input"] as const)(
+  "%s 작업의 정리 결과가 반영되면 재개 버튼을 숨기고 새 작업 생성을 안내한다",
+  async (state) => {
+    setupDetail();
+    const run = {
+      ...detail,
+      state,
+      allowed_actions: ["resume", "cleanup"],
+      execution: {
+        worker_liveness: "stopped" as const,
+        cleanup: "confirmed" as const,
+        worktree_removed: false,
+      },
+    };
+    vi.mocked(api.run).mockResolvedValue(run);
+    const client = createQueryClient();
+    wrap(
+      <Routes>
+        <Route path="/runs/:id" element={<RunDetailPage />} />
+      </Routes>,
+      "/runs/r1",
+      client,
+    );
+    expect(await screen.findByRole("button", { name: "재개" })).toBeEnabled();
+    vi.mocked(api.run).mockResolvedValue({
+      ...run,
+      version: 5,
+      allowed_actions: ["reconcile"],
+      execution: { ...run.execution, worktree_removed: true },
+    });
+    await act(async () => {
+      await client.invalidateQueries({ queryKey: ["run", "r1"] });
+    });
+    expect(await screen.findByText(/계속하려면 새 작업을/)).toBeVisible();
+    expect(
+      screen.queryByRole("button", { name: "재개" }),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", { name: "Worktree 정리" }),
+    ).not.toBeInTheDocument();
+  },
+);
+
 describe("화면·위험 명령", () => {
   it("초기 401 이후 로딩을 끝내고 원래 URL에서 로그인 화면을 표시한다", async () => {
     window.history.replaceState({}, "", "/runs/saved");

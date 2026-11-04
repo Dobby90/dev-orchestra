@@ -136,6 +136,18 @@ class RunService:
                 },
             ]
             changes["questions"] = []
+            if run.get("next_role") == "done":
+                changes.update(
+                    next_role="planner",
+                    revision=run.get("revision", 0) + 1,
+                    plan=None,
+                    planning_draft=None,
+                    criteria=[],
+                    plan_approval=None,
+                    final_sha=None,
+                    test_result=None,
+                    review_result=None,
+                )
         if (
             run.get("plan_approval_required")
             and run.get("next_role") == "developer"
@@ -259,12 +271,16 @@ class RunService:
 
         RunDeletionService(self.store).delete(run_id, expected_version, confirm=confirm)
 
-    def cleanup(self, run_id, expected_version=None):
+    def cleanup(self, run_id, expected_version=None, *, operation=None):
         run = self.store.get(run_id)
         directory = Path(run["directory"])
         with lock(directory / "execution.lock"), execution_scope(directory):
             run = self.store.get(run_id)
-            if expected_version is not None and run["version"] != expected_version:
+            # An operation may have committed removal before its caller crashed.
+            applied = run.get("worktree_removed") and (
+                operation is not None and run.get("cleanup_operation") == operation
+            )
+            if expected_version is not None and run["version"] != expected_version and not applied:
                 raise PipelineError("concurrent state update")
             if run["state"] not in {"completed", "cancelled", "failed", "needs_input"}:
                 raise PipelineError("active run cannot be cleaned up")
@@ -275,6 +291,19 @@ class RunService:
                 if run.get("current_sha"):
                     Results(self.store).save_snapshot(run_id, run["current_sha"])
                 Git(Path(run["repo"])).remove(Path(run["worktree"]))
+            with self.store.transaction() as db:
+                if not run.get("worktree_removed") or run.get("cleanup_requested"):
+                    self.store.update(
+                        run_id,
+                        worktree_removed=True,
+                        cleanup_requested=False,
+                        expected_version=run["version"],
+                    )
+                if operation is not None:
+                    db.execute(
+                        "UPDATE operations SET status='applied',applied_at=?,error=NULL WHERE id=? AND run_id=?",
+                        (now(), operation, run_id),
+                    )
 
     def _finish_idle_control(self, run):
         return self.recovery._finish_idle_control(run)

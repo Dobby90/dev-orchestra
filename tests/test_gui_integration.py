@@ -116,6 +116,76 @@ def test_snapshot_and_results_survive_cleanup_and_reject_tampering(completed):
         results.artifact(rid, "artifact-other")
 
 
+@pytest.mark.parametrize("transport", ["cli", "api"])
+def test_cleanup_records_removal_and_hides_resume(completed, transport):
+    svc, rid, repo, _ = completed
+    svc.cancel(rid, pause=True)
+    svc.store.update(rid, "needs_input", project_id="display-only")
+    run = svc.store.get(rid)
+    branch = Git(repo).call("rev-parse", run["branch"])
+    if transport == "api":
+        op = Commands(svc).execute(rid, "cleanup", run["version"], {"confirm": True})
+        assert op["status"] == "applied"
+    else:
+        svc.cleanup(rid)
+    assert not Path(run["worktree"]).exists()
+    assert Git(repo).call("rev-parse", run["branch"]) == branch
+    snapshot = svc.queries.snapshot(rid)
+    assert snapshot["execution"]["worktree_removed"]
+    assert "resume" not in snapshot["allowed_actions"]
+    with pytest.raises(PipelineError, match="create a new Run"):
+        svc.resume(rid)
+    with pytest.raises(PipelineError, match="create a new Run"):
+        Commands(svc).execute(rid, "resume", svc.store.get(rid)["version"], {})
+    version = svc.store.get(rid)["version"]
+    svc.cleanup(rid, expected_version=version)
+    assert svc.store.get(rid)["version"] == version
+
+
+@pytest.mark.parametrize("transport", ["cli", "api"])
+def test_cleanup_retries_removal_before_state_commit(completed, monkeypatch, transport):
+    svc, rid, _, _ = completed
+    svc.approve(rid)
+    run = svc.store.get(rid)
+    update = svc.store.update
+
+    def fail_after_removal(*args, **kwargs):
+        if kwargs.get("worktree_removed"):
+            raise RuntimeError("interrupted after removal")
+        return update(*args, **kwargs)
+
+    monkeypatch.setattr(svc.store, "update", fail_after_removal)
+    commands = Commands(svc)
+    with pytest.raises(RuntimeError, match="interrupted"):
+        if transport == "api":
+            commands.execute(rid, "cleanup", run["version"], {"confirm": True}, "retry")
+        else:
+            svc.cleanup(rid)
+    assert not Path(run["worktree"]).exists()
+    monkeypatch.setattr(svc.store, "update", update)
+    if transport == "api":
+        op = commands.execute(rid, "cleanup", run["version"], {"confirm": True}, "retry")
+        assert op["status"] == "applied"
+        version = svc.store.get(rid)["version"]
+        commands.finish_cleanup(op["id"], rid, version - 1)
+        assert svc.store.get(rid)["version"] == version
+        assert commands.get(op["id"])["status"] == "applied"
+    else:
+        svc.cleanup(rid)
+    assert svc.store.get(rid)["worktree_removed"]
+
+
+def test_cleanup_preserves_dirty_worktree(completed):
+    svc, rid, _, _ = completed
+    svc.approve(rid)
+    worktree = Path(svc.store.get(rid)["worktree"])
+    (worktree / "main.py").write_text("사용자 변경\n")
+    with pytest.raises(PipelineError):
+        svc.cleanup(rid)
+    assert (worktree / "main.py").read_text() == "사용자 변경\n"
+    assert not svc.store.get(rid).get("worktree_removed")
+
+
 def test_omitted_prior_issue_cannot_become_fixed(service):
     svc, old, repo = service
     upgrade(svc.store.path)

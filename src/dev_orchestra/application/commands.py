@@ -345,14 +345,7 @@ class Commands:
 
     def finish_cleanup(self, op, run_id, version):
         try:
-            self.service.cleanup(run_id, expected_version=version)
-            with self.store.transaction() as db:
-                self.store.update(
-                    run_id, cleanup_requested=False, worktree_removed=True, expected_version=version
-                )
-                db.execute(
-                    "UPDATE operations SET status='applied',applied_at=? WHERE id=?", (now(), op)
-                )
+            self.service.cleanup(run_id, expected_version=version, operation=op)
             self.service.refresh_report(run_id)
         except (PipelineError, OSError) as error:
             with self.store.transaction() as db:

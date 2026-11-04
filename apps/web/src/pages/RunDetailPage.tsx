@@ -296,20 +296,26 @@ function RunDetailBody({ rid }: { rid: string }) {
                   일시중지
                 </Button>
               )}
-              {["failed", "paused", "needs_input"].includes(r.state) && (
-                <Button
-                  variant="secondary"
-                  disabled={
-                    r.control === "cancel" ||
-                    r.execution?.worktree_removed ||
-                    (r.test_change_pending &&
-                      !r.allowed_actions?.includes("resume"))
-                  }
-                  onClick={() => open("resume")}
-                >
-                  <Play size={14} />
-                  재개
-                </Button>
+              {["failed", "paused", "needs_input"].includes(r.state) &&
+                !r.execution?.worktree_removed && (
+                  <Button
+                    variant="secondary"
+                    disabled={
+                      r.control === "cancel" ||
+                      (r.test_change_pending &&
+                        !r.allowed_actions?.includes("resume"))
+                    }
+                    onClick={() => open("resume")}
+                  >
+                    <Play size={14} />
+                    재개
+                  </Button>
+                )}
+              {r.execution?.worktree_removed && (
+                <span className="subtle">
+                  Worktree가 정리되어 재개할 수 없습니다. 계속하려면 새 작업을
+                  생성하세요.
+                </span>
               )}
               {!["completed", "cancelled"].includes(r.state) && (
                 <Button

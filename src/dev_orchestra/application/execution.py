@@ -28,16 +28,66 @@ class ExecutionService:
             if not job.get("_launch"):
                 deadline = time.monotonic() + 10
                 while time.monotonic() < deadline:
-                    existing = queue.job(job["id"])
-                    if alive(
-                        {"pid": existing["owner_pid"], "create_time": existing["owner_create_time"]}
-                    ):
-                        return existing["owner_pid"]
-                    if existing["state"] not in {"claimed", "running"}:
-                        break
-                    time.sleep(0.03)
+                    try:
+                        existing = queue.job(job["id"])
+                        if existing["state"] == "queued" or (
+                            existing["state"] in {"claimed", "running"}
+                            and existing["claim_token"] != job["claim_token"]
+                        ):
+                            raise OwnershipError(
+                                "worker execution attempt changed; retry explicitly"
+                            )
+                        if alive(
+                            {
+                                "pid": existing["owner_pid"],
+                                "create_time": existing["owner_create_time"],
+                            }
+                        ):
+                            if not detached:
+                                self.wait_existing(run_id, existing)
+                            return existing["owner_pid"]
+                        if existing["state"] not in {"claimed", "running"}:
+                            if not detached:
+                                self.status(run_id)
+                            return existing["owner_pid"]
+                        if existing["owner_pid"] and not detached:
+                            self.wait_existing(run_id, existing)
+                            return existing["owner_pid"]
+                        time.sleep(0.03)
+                    except KeyboardInterrupt:
+                        self.store.control(run_id, "pause")
                 raise OwnershipError("worker launch pending or owner lost; inspect before retry")
         return self.launch(run_id, detached, job)
+
+    def wait_existing(self, run_id, job):
+        from dev_orchestra.application.queue import QueueService
+        from dev_orchestra.infrastructure.locking import OwnershipError
+        from dev_orchestra.infrastructure.process_owner import alive
+
+        queue = QueueService(self.store)
+        while True:
+            try:
+                current = queue.job(job["id"])
+                if current["state"] not in {"claimed", "running"}:
+                    if current["state"] == "queued":
+                        raise OwnershipError(
+                            "worker execution attempt was requeued; retry explicitly"
+                        )
+                    break
+                if current["claim_token"] != job["claim_token"]:
+                    raise OwnershipError("worker execution attempt changed; inspect before retry")
+                owner = {"pid": current["owner_pid"], "create_time": current["owner_create_time"]}
+                if (owner["pid"], owner["create_time"]) != (
+                    job["owner_pid"],
+                    job["owner_create_time"],
+                ):
+                    raise OwnershipError("worker owner changed; inspect before retry")
+                if not alive(owner):
+                    queue.recover()
+                time.sleep(0.03)
+            except KeyboardInterrupt:
+                self.store.control(run_id, "pause")
+        self.status(run_id)
 
     def launch(self, run_id, detached=False, job=None):
         from dev_orchestra.application.queue import QueueService
