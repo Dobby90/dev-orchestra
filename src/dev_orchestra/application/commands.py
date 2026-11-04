@@ -58,6 +58,8 @@ class Commands:
             "pause",
             "resume",
             "approve",
+            "approve-plan",
+            "revise-plan",
             "defer",
             "request-changes",
             "cleanup",
@@ -153,6 +155,16 @@ class Commands:
                 approval = self.service.approvals.verify_locked(
                     run_id, expected_version, body.get("expected_sha")
                 )
+            if kind in {"approve-plan", "revise-plan"}:
+                from dev_orchestra.application.plan_approval import decision_changes
+
+                changes = decision_changes(
+                    self.store,
+                    run,
+                    body["plan_hash"],
+                    kind == "approve-plan",
+                    body.get("reason", ""),
+                )
             if kind == "resume":
                 if run["state"] not in {"failed", "paused", "needs_input"}:
                     raise PipelineError("run is not resumable")
@@ -218,10 +230,17 @@ class Commands:
                     return self.get(old["id"])
                 result = {}
                 status = "applied"
-                if kind == "resume":
+                if kind in {"resume", "approve-plan", "revise-plan"}:
                     result["job_id"] = self.service.commit_resume(
                         db, run, changes, expected_version
                     )
+                    if kind != "resume":
+                        self.store._event(
+                            db,
+                            run_id,
+                            "plan.decided",
+                            {"approved": kind == "approve-plan", "plan_hash": body["plan_hash"]},
+                        )
                 elif test_decision:
                     result["job_id"] = self.service.commit_resume(
                         db, run, changes, expected_version

@@ -82,9 +82,12 @@ export function DashboardPage() {
           },
           {
             label: "승인 대기",
-            value: counts?.waiting_approval ?? (counts ? 0 : null),
+            value: counts
+              ? (counts.waiting_approval ?? 0) +
+                (counts.waiting_plan_approval ?? 0)
+              : null,
             icon: ShieldCheck,
-            note: "최종 결과를 확인하세요",
+            note: "기획안 또는 최종 결과를 확인하세요",
             tone: "amber",
           },
           {

@@ -166,7 +166,7 @@ devorchestra --config config.yaml cleanup RUN_ID
 ## 워크플로와 승인
 
 ```text
-queued → preparing → planning → developing → testing → reviewing
+queued → preparing → planning → waiting_plan_approval → developing → testing → reviewing
                                                          ↓
                         waiting_approval ← reporting ← 검증 통과
 ```
@@ -206,6 +206,20 @@ devorchestra --config config.yaml defer RUN_ID --reason "추가 확인 후 승�
 완료·취소된 작업은 GUI 상세 화면의 **작업 기록 삭제** 또는 `devorchestra --config config.yaml delete RUN_ID`로 영구 삭제할 수 있습니다. CLI는 삭제 범위를 확인하며 `--yes`로 확인을 생략할 수 있습니다. 실패한 작업은 먼저 `cancel RUN_ID`로 취소해야 합니다. 삭제 범위에는 실행 단계·저장된 요구사항·로그·테스트 및 리뷰 결과·보고서·승인 근거·큐와 명령 이력·설정된 JUnit 결과 파일·Worktree·로컬 작업 브랜치가 포함됩니다. 미병합 작업 브랜치도 삭제하므로 필요한 커밋은 미리 보존하세요. 원본 작업 디렉터리와 원격 브랜치는 보존합니다. 다른 작업에서 참조하는 요구사항은 보존합니다.
 
 삭제는 Worker 소유권·실행 잠금·미처리 큐와 명령·자식 프로세스 종료를 확인합니다. 작업에 저장된 JUnit 경로와 출력 경계 안의 추적되지 않는 결과 파일만 자동 정리하며, 그 외 미커밋 변경이 있는 Worktree를 강제로 제거하지 않습니다. 브랜치가 마지막 작업 커밋과 다르거나 기준 브랜치·다른 작업에서 참조하는 브랜치·다른 Worktree에서 사용 중인 브랜치이면 삭제를 중단합니다. 파일 삭제가 중단되면 일부 파일이 이미 삭제되었을 수 있습니다. 삭제 진행 상태는 DB에 보존되며 다른 변경 명령을 차단합니다. 원인을 해결한 뒤 GUI의 **기록 삭제 재시도** 또는 같은 CLI 명령으로 재시도할 수 있습니다. API는 `DELETE /api/runs/RUN_ID`에 최신 `If-Match`와 `{"confirm": true}`를 요구합니다. 별도로 보관한 백업·다운로드 파일과 Git 커밋에 남은 내용은 이 작업 기록 삭제의 대상이 아닙니다.
+
+### 기획 승인
+
+신규 작업은 기획 완료 후 **기획 승인 대기**에서 멈춥니다. GUI의 **기획안** 탭에서 구현 계획과 인수 조건을 검토한 뒤 **기획 승인 후 개발 시작**을 선택하세요. **기획 수정 요청**은 사유를 반영해 새 기획을 생성하며 다시 승인을 받습니다. 보류하려면 승인 대기 상태를 유지하면 됩니다. 기존 작업은 생성 당시 정책을 유지합니다. 최종 개발 결과에 대한 승인은 별도로 필요합니다.
+
+CLI에서는 `status RUN_ID`의 기획안과 인수 조건을 확인하고 다음 명령을 사용합니다. `PLAN_HASH`는 GUI의 기획 버전 또는 기획 승인 대기 상태 조회의 `plan_hash`입니다.
+
+```sh
+devorchestra --config config.yaml approve-plan RUN_ID --plan-hash PLAN_HASH
+devorchestra --config config.yaml revise-plan RUN_ID --plan-hash PLAN_HASH --reason "예외 처리 계획 보완"
+```
+
+일반 `resume`은 기획 승인을 대신하지 않습니다. 승인 시 기획 내용·입력 SHA·저장된 결과의 체크섬을 검증하며, 수정 요청이나 기획 내용 변경 후에는 이전 승인을 사용할 수 없습니다.
+
 
 ## API·Dispatcher와 GUI 개발
 

@@ -46,6 +46,7 @@ class Runner:
                 "completed",
                 "cancelled",
                 "waiting_approval",
+                "waiting_plan_approval",
                 "needs_input",
                 "paused",
             }:
@@ -161,6 +162,10 @@ class Runner:
                 raise StopRequested(control)
             iteration = run.get("iteration", 0)
             role = run.get("next_role", "planner")
+            if role == "developer" and run.get("plan_approval_required"):
+                from dev_orchestra.application.plan_approval import verify_development
+
+                verify_development(self.store, run)
             if role == "done":
                 candidate = git.sha()
                 verified_candidate(self.store, run, candidate)
@@ -441,7 +446,7 @@ class Runner:
                     return
                 self.store.update(run_id, current_sha=out_sha)
             self.advance(run_id, role, payload, config)
-            if self.store.get(run_id)["state"] == "needs_input":
+            if self.store.get(run_id)["state"] in {"needs_input", "waiting_plan_approval"}:
                 return
 
     @staticmethod
@@ -467,6 +472,7 @@ class Runner:
             write(directory / "acceptance-criteria.json", payload["criteria"])
             self.store.update(
                 run_id,
+                state="waiting_plan_approval" if run.get("plan_approval_required") else None,
                 next_role="developer",
                 plan=payload["plan"],
                 criteria=payload["criteria"],

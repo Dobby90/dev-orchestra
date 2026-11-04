@@ -43,6 +43,7 @@ from dev_orchestra.application.web_contracts import (
     NotificationPage,
     NotificationRead,
     OperationView,
+    PlanDecisionInput,
     PreviewView,
     ProjectCreate,
     ProjectPage,
@@ -441,6 +442,14 @@ def create_app(config=None, allowed_roots=None, port=8000, static_directory=None
     @app.post("/api/runs/{rid}/resume", status_code=202, response_model=OperationView)
     def resume(rid: str, request: Request, body: ResumeInput):
         return command(rid, request, "resume", body.model_dump())
+
+    @app.post("/api/runs/{rid}/approve-plan", status_code=202, response_model=OperationView)
+    def approve_plan(rid: str, request: Request, body: PlanDecisionInput):
+        return command(rid, request, "approve-plan", body.model_dump())
+
+    @app.post("/api/runs/{rid}/revise-plan", status_code=202, response_model=OperationView)
+    def revise_plan(rid: str, request: Request, body: PlanDecisionInput):
+        return command(rid, request, "revise-plan", body.model_dump())
 
     @app.post("/api/runs/{rid}/approve", response_model=OperationView)
     def approve(rid: str, request: Request, body: ApprovalInput):

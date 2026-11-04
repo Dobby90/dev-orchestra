@@ -44,6 +44,8 @@ type Action =
   | "pause"
   | "resume"
   | "approve"
+  | "approve-plan"
+  | "revise-plan"
   | "reconcile"
   | "request-changes"
   | "defer"
@@ -56,9 +58,12 @@ const actionLabels: Record<Action, string> = {
   pause: "일시중지",
   resume: "작업 재개",
   approve: "최종 승인",
+  "approve-plan": "기획 승인 후 개발 시작",
+  "revise-plan": "기획 수정 요청",
   reconcile: "상태 확인·조정",
 };
 const tabs = [
+  "plan",
   "logs",
   "agents",
   "tests",
@@ -68,6 +73,7 @@ const tabs = [
   "spec",
 ] as const;
 const labels: Record<(typeof tabs)[number], string> = {
+  plan: "기획안",
   logs: "실시간 로그",
   agents: "에이전트·사용량",
   tests: "테스트",
@@ -83,7 +89,7 @@ export function RunDetailPage() {
 function RunDetailBody({ rid }: { rid: string }) {
   const client = useQueryClient(),
     [params, setParams] = useSearchParams();
-  const selected = params.get("tab") ?? "logs";
+  const selected = params.get("tab") ?? "plan";
   const tab = tabs.includes(selected as (typeof tabs)[number])
     ? selected
     : "logs";
@@ -144,22 +150,24 @@ function RunDetailBody({ rid }: { rid: string }) {
         rid,
         target.version,
         kind,
-        kind === "request-changes"
-          ? {
-              expected_sha: target.current_sha,
-              instructions: reason,
-              new_max_fix_attempts: budget ? Number(budget) : null,
-            }
-          : kind === "cleanup"
-            ? { confirm: true }
-            : kind === "approve"
-              ? { expected_sha: target.current_sha }
-              : kind === "resume"
-                ? {
-                    answers_text: reason || null,
-                    new_max_fix_attempts: budget ? Number(budget) : null,
-                  }
-                : { reason },
+        kind === "approve-plan" || kind === "revise-plan"
+          ? { plan_hash: target.plan_hash, reason }
+          : kind === "request-changes"
+            ? {
+                expected_sha: target.current_sha,
+                instructions: reason,
+                new_max_fix_attempts: budget ? Number(budget) : null,
+              }
+            : kind === "cleanup"
+              ? { confirm: true }
+              : kind === "approve"
+                ? { expected_sha: target.current_sha }
+                : kind === "resume"
+                  ? {
+                      answers_text: reason || null,
+                      new_max_fix_attempts: budget ? Number(budget) : null,
+                    }
+                  : { reason },
         key,
       ),
     onSuccess: (value) => {
@@ -325,6 +333,26 @@ function RunDetailBody({ rid }: { rid: string }) {
                   <ShieldCheck size={15} />
                   최종 승인
                 </Button>
+              )}
+              {r.state === "waiting_plan_approval" && (
+                <>
+                  <Button
+                    disabled={pendingControl || !r.plan_hash}
+                    onClick={() => open("approve-plan")}
+                  >
+                    기획 승인 후 개발 시작
+                  </Button>
+                  <Button
+                    variant="secondary"
+                    disabled={pendingControl || !r.plan_hash}
+                    onClick={() => open("revise-plan")}
+                  >
+                    기획 수정 요청
+                  </Button>
+                  <span className="subtle">
+                    보류하려면 승인하지 않고 이 상태를 유지하세요.
+                  </span>
+                </>
               )}
               {r.state === "waiting_approval" && (
                 <>
@@ -493,6 +521,37 @@ function RunDetailBody({ rid }: { rid: string }) {
               </Tabs.Trigger>
             ))}
           </Tabs.List>
+          <Tabs.Content value="plan" className="tab-content">
+            {r.plan ? (
+              <>
+                <article className="markdown">
+                  <ReactMarkdown
+                    remarkPlugins={[remarkGfm]}
+                    skipHtml
+                    components={{
+                      a: ({ children }) => <span>{children}</span>,
+                      img: () => null,
+                    }}
+                  >
+                    {r.plan}
+                  </ReactMarkdown>
+                </article>
+                <h3>인수 조건</h3>
+                <ul>
+                  {r.criteria?.map((c) => (
+                    <li key={c.id}>
+                      <strong>{c.id}</strong> {c.description}
+                    </li>
+                  ))}
+                </ul>
+                {r.plan_hash && (
+                  <p className="mono path">기획 버전: {r.plan_hash}</p>
+                )}
+              </>
+            ) : (
+              <p>아직 기획안이 없습니다.</p>
+            )}
+          </Tabs.Content>
           <Tabs.Content value="logs" className="tab-content">
             <LogViewer
               key={params.get("step") ?? "all"}
@@ -697,11 +756,16 @@ function RunDetailBody({ rid }: { rid: string }) {
               action?.kind !== "reconcile" &&
               action?.kind !== "cleanup" && (
                 <label>
-                  사유{action?.kind === "defer" ? " (필수)" : " (선택)"}
+                  사유
+                  {action?.kind === "defer" || action?.kind === "revise-plan"
+                    ? " (필수)"
+                    : " (선택)"}
                   <textarea
                     value={reason}
                     maxLength={4000}
-                    required={action?.kind === "defer"}
+                    required={
+                      action?.kind === "defer" || action?.kind === "revise-plan"
+                    }
                     onChange={(e) => setReason(e.target.value)}
                   />
                 </label>

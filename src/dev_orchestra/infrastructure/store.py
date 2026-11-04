@@ -141,7 +141,8 @@ class Store:
             forward = {
                 "queued": {"preparing", "planning"},
                 "preparing": {"planning"},
-                "planning": {"developing"},
+                "planning": {"developing", "waiting_plan_approval"},
+                "waiting_plan_approval": {"queued", "cancelled", "paused", "needs_input", "failed"},
                 "developing": {"testing"},
                 "testing": {"reviewing"},
                 "reviewing": {"fixing", "reporting"},
@@ -277,6 +278,8 @@ class Store:
 
     def finish_step(self, step, sha, data, status="completed"):
         with self.connection() as db:
+            owner = db.execute("SELECT run_id FROM steps WHERE id=?", (step,)).fetchone()
+            data = {"revision": self.get(owner["run_id"]).get("revision", 0), **data}
             db.execute(
                 "UPDATE steps SET status=?,output_sha=?,data=? WHERE id=?",
                 (status, sha, json.dumps(data), step),
@@ -302,7 +305,11 @@ class Store:
     def steps(self, run_id):
         with self.connection() as db:
             return [
-                {**dict(r), "data": json.loads(r["data"])}
+                {
+                    **dict(r),
+                    "revision": dict(r).get("revision", json.loads(r["data"]).get("revision", 0)),
+                    "data": json.loads(r["data"]),
+                }
                 for r in db.execute("SELECT * FROM steps WHERE run_id=? ORDER BY id", (run_id,))
             ]
 

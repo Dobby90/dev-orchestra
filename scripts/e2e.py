@@ -62,6 +62,12 @@ def main():
     print(json.dumps({"directory": str(root), "run_id": run_id}), flush=True)
     Runner(service.store, client, TestRunner()).execute(run_id)
     result = service.store.get(run_id)
+    if result["state"] == "waiting_plan_approval":
+        from dev_orchestra.application.plan_approval import binding, decide
+
+        decide(service, run_id, binding(service.store, result)["plan_hash"], True)
+        Runner(service.store, client, TestRunner()).execute(run_id)
+        result = service.store.get(run_id)
     print(
         json.dumps(
             {

@@ -61,6 +61,11 @@ class RunQueryService:
         from dev_orchestra.application.observations import observe
 
         data["project_id"] = value["project_id"]
+        from dev_orchestra.application.plan_approval import binding
+
+        value.update(plan=data.get("plan"), criteria=data.get("criteria", []), plan_hash=None)
+        if data["state"] == "waiting_plan_approval":
+            value["plan_hash"] = binding(self.store, data)["plan_hash"]
         return value | observe(self.store, data)
 
     def page(self, limit=50, cursor="", state=None, project_id=None):

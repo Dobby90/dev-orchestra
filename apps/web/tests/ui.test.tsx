@@ -366,3 +366,38 @@ describe("화면·위험 명령", () => {
     ).not.toBeInTheDocument();
   });
 });
+
+it("기획안과 인수 조건을 확인하고 해당 기획 버전으로 개발을 승인한다", async () => {
+  setupDetail();
+  vi.mocked(api.run).mockResolvedValue({
+    ...detail,
+    state: "waiting_plan_approval",
+    plan: "예외 처리 구현 계획",
+    criteria: [{ id: "AC1", description: "실패 시 오류 표시" }],
+    plan_hash: "c".repeat(64),
+  });
+  const control = vi.spyOn(api, "control").mockResolvedValue(operation);
+  wrap(
+    <Routes>
+      <Route path="/runs/:id" element={<RunDetailPage />} />
+    </Routes>,
+    "/runs/r1",
+  );
+  expect(await screen.findByText("예외 처리 구현 계획")).toBeVisible();
+  expect(screen.getByText("실패 시 오류 표시")).toBeVisible();
+  await userEvent.click(
+    screen.getByRole("button", { name: "기획 승인 후 개발 시작" }),
+  );
+  await userEvent.click(
+    screen.getByRole("button", { name: "기획 승인 후 개발 시작 확인" }),
+  );
+  await waitFor(() =>
+    expect(control).toHaveBeenCalledWith(
+      "r1",
+      4,
+      "approve-plan",
+      { plan_hash: "c".repeat(64), reason: "" },
+      expect.any(String),
+    ),
+  );
+});

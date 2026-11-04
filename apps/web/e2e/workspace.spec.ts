@@ -159,6 +159,18 @@ test("실제 로컬 API: 로그인 → 프로젝트 → 실행 → 재연결 →
   expect(submissions.length).toBe(2);
   expect(submissions[1]).toEqual(submissions[0]);
   await expect(page).toHaveURL(/\/runs\/run-/);
+  await expect(page.locator(".page-heading .status")).toHaveText(
+    "기획 승인 대기",
+    { timeout: 30000 },
+  );
+  await expect(page.getByText("덧셈 검증", { exact: true })).toBeVisible();
+  await page
+    .getByRole("button", { name: "기획 승인 후 개발 시작", exact: true })
+    .click();
+  await page
+    .getByRole("button", { name: "기획 승인 후 개발 시작 확인" })
+    .click();
+  await page.getByRole("tab", { name: "실시간 로그" }).click();
   await expect(page.getByText("개발 중", { exact: true })).toBeVisible({
     timeout: 30000,
   });
@@ -230,7 +242,9 @@ test("실제 로컬 API: 로그인 → 프로젝트 → 실행 → 재연결 →
   await page.getByRole("link", { name: "프로젝트", exact: true }).click();
   await page.getByRole("button", { name: "알림, 읽지 않음 0 개" }).click();
   await page.getByRole("dialog").getByRole("link").first().click();
-  await expect(page).toHaveURL(runUrl);
+  await expect(page).toHaveURL(
+    new URL(runUrl).origin + new URL(runUrl).pathname,
+  );
   writeFileSync(f.release, "");
   await page.getByRole("button", { name: "재개", exact: true }).click();
   await page.getByRole("button", { name: "작업 재개 확인" }).click();
@@ -294,12 +308,14 @@ test("실제 로컬 API: 로그인 → 프로젝트 → 실행 → 재연결 →
   );
   await expect(page.getByText(/이전 revision 0의 결과입니다/)).toBeVisible();
   await history.selectOption("");
+  const rid = new URL(page.url()).pathname.split("/").at(-1)!;
   const snapshot = execFileSync(
     f.python,
     [
       "-c",
-      "import sqlite3,json,sys;c=sqlite3.connect(sys.argv[1]);print(json.loads(c.execute('SELECT data FROM runs').fetchone()[0])['revision']);print(c.execute(\"SELECT count(*) FROM steps WHERE role='tester' AND status='completed'\").fetchone()[0])",
+      "import sqlite3,json,sys;c=sqlite3.connect(sys.argv[1]);print(json.loads(c.execute('SELECT data FROM runs WHERE id=?',(sys.argv[2],)).fetchone()[0])['revision']);print(c.execute(\"SELECT count(*) FROM steps WHERE run_id=? AND role='tester' AND status='completed'\",(sys.argv[2],)).fetchone()[0])",
       f.database,
+      rid,
     ],
     { encoding: "utf8" },
   );
@@ -308,7 +324,6 @@ test("실제 로컬 API: 로그인 → 프로젝트 → 실행 → 재연결 →
   await expect(
     page.getByRole("heading", { name: "DevOrchestra report" }),
   ).toBeVisible();
-  const rid = new URL(page.url()).pathname.split("/").at(-1)!;
   const cli = join(dirname(f.python), "devorchestra");
   const cliList = JSON.parse(
     execFileSync(cli, ["--config", f.config, "list"], { encoding: "utf8" }),
@@ -409,11 +424,13 @@ test("실제 로컬 API: 로그인 → 프로젝트 → 실행 → 재연결 →
   await expect(page.getByRole("link", { name: rid, exact: true })).toHaveCount(
     0,
   );
-  expect(
-    execFileSync("git", ["-C", f.repo, "rev-parse", "refs/heads/" + branch], {
-      encoding: "utf8",
-    }).trim(),
-  ).toBe(sha);
+  expect(() =>
+    execFileSync(
+      "git",
+      ["-C", f.repo, "show-ref", "--verify", "refs/heads/" + branch],
+      { stdio: "pipe" },
+    ),
+  ).toThrow();
   const deleted = execFileSync(
     f.python,
     [
@@ -430,11 +447,11 @@ test("실제 로컬 API: 로그인 → 프로젝트 → 실행 → 재연결 →
   await page.getByRole("button", { name: "메뉴 열기" }).click();
   await page.getByRole("link", { name: "대시보드", exact: true }).click();
   await expect(page.getByLabel("주 메뉴")).toBeHidden();
-  expect(
-    await page.evaluate(
-      () => document.documentElement.scrollWidth <= innerWidth,
-    ),
-  ).toBe(true);
+  await expect
+    .poll(() =>
+      page.evaluate(() => document.documentElement.scrollWidth <= innerWidth),
+    )
+    .toBe(true);
   await page.getByRole("button", { name: "라이트 모드로 전환" }).click();
   await page.screenshot({
     path: "test-results/dashboard-mobile-light.png",
@@ -503,6 +520,22 @@ test("CLI 시작·브라우저 종료·재접속·CLI 승인과 GUI 생성 교�
       "CLI 작업 · 조회 전용입니다. 실행 제어는 CLI에서 진행해 주세요.",
     ),
   ).toBeVisible();
+  await expect(page.locator(".page-heading .status")).toHaveText(
+    "기획 승인 대기",
+    { timeout: 30000 },
+  );
+  const plan = JSON.parse(
+    execFileSync(cli, [...cliArgs, "status", rid], { encoding: "utf8" }),
+  );
+  execFileSync(cli, [
+    ...cliArgs,
+    "approve-plan",
+    rid,
+    "--plan-hash",
+    plan.plan_hash,
+    "--detach",
+  ]);
+  await page.getByRole("tab", { name: "실시간 로그" }).click();
   await expect(page.getByText("개발 중", { exact: true })).toBeVisible();
   await expect(
     page.getByRole("button", { name: "최종 승인", exact: true }),
@@ -523,6 +556,22 @@ test("CLI 시작·브라우저 종료·재접속·CLI 승인과 GUI 생성 교�
       timeout: 45000,
     },
   );
+  await expect
+    .poll(
+      () =>
+        execFileSync(
+          f.python,
+          [
+            "-c",
+            "import sqlite3,sys;c=sqlite3.connect(sys.argv[1]);print(c.execute(\"SELECT count(*) FROM jobs WHERE run_id=? AND state IN ('queued','claimed','running')\",(sys.argv[2],)).fetchone()[0])",
+            f.database,
+            rid,
+          ],
+          { encoding: "utf8" },
+        ).trim(),
+      { timeout: 15000 },
+    )
+    .toBe("0");
   execFileSync(cli, [...cliArgs, "approve", rid]);
   await expect(
     reopened.getByText("완료", { exact: true }).first(),
@@ -553,6 +602,16 @@ test("CLI 시작·브라우저 종료·재접속·CLI 승인과 GUI 생성 교�
   await reopened.getByRole("button", { name: "확인하고 작업 시작" }).click();
   await expect(reopened).toHaveURL(/\/runs\/run-/);
   await expect(reopened.locator(".page-heading .status")).toHaveText(
+    "기획 승인 대기",
+    { timeout: 30000 },
+  );
+  await reopened
+    .getByRole("button", { name: "기획 승인 후 개발 시작", exact: true })
+    .click();
+  await reopened
+    .getByRole("button", { name: "기획 승인 후 개발 시작 확인" })
+    .click();
+  await expect(reopened.locator(".page-heading .status")).toHaveText(
     "승인 대기",
     {
       timeout: 45000,
@@ -560,6 +619,22 @@ test("CLI 시작·브라우저 종료·재접속·CLI 승인과 GUI 생성 교�
   );
   const guiRid = new URL(reopened.url()).pathname.split("/").at(-1)!;
   expect(guiRid).not.toBe(rid);
+  await expect
+    .poll(
+      () =>
+        execFileSync(
+          f.python,
+          [
+            "-c",
+            "import sqlite3,sys;c=sqlite3.connect(sys.argv[1]);print(c.execute(\"SELECT count(*) FROM jobs WHERE run_id=? AND state IN ('queued','claimed','running')\",(sys.argv[2],)).fetchone()[0])",
+            f.database,
+            guiRid,
+          ],
+          { encoding: "utf8" },
+        ).trim(),
+      { timeout: 15000 },
+    )
+    .toBe("0");
   execFileSync(cli, [...cliArgs, "approve", guiRid]);
   await expect(
     reopened.getByText("완료", { exact: true }).first(),

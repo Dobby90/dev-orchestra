@@ -77,6 +77,10 @@ class Agent:
   patch='--- a/tests/test_main.py\\n+++ b/tests/test_main.py\\n@@ -1,3 +1,4 @@\\n from main import add\\n def test_add():\\n     assert add(2, 3) == 5\\n+    assert add(0, 0) == 0\\n'
   return AgentResult(summary='기존 테스트 확장',patch=patch,test_changes=[TestChange(file='tests/test_main.py',criterion_ids=['AC1'],reason='기존 덧셈 검사를 보존하고 0 입력 경계값 검사를 추가합니다.')])
 Runner(svc.store,Agent(),TestRunner()).execute(rid)
+from dev_orchestra.application.plan_approval import binding,decide
+run=svc.store.get(rid);assert run['state']=='waiting_plan_approval',run.get('error')
+decide(svc,rid,binding(svc.store,run)['plan_hash'],True)
+Runner(svc.store,Agent(),TestRunner()).execute(rid)
 run=svc.store.get(rid);assert run['state']=='waiting_approval',run.get('error')
 print(json.dumps({'id':rid,'worktree':run['worktree']}))
 `,

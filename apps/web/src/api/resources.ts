@@ -148,6 +148,8 @@ export const api = {
       | "cancel"
       | "resume"
       | "approve"
+      | "approve-plan"
+      | "revise-plan"
       | "approve-test-changes"
       | "reject-test-changes"
       | "reconcile"

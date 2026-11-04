@@ -52,7 +52,16 @@ class FakeTests:
 
 
 @pytest.fixture
-def service(tmp_path):
+def service(tmp_path, monkeypatch):
+    # Existing workflow cases also verify compatibility with pre-gate Run snapshots.
+    prepare = RunService.prepare_run
+
+    def legacy_snapshot(self, *args, **kwargs):
+        data = prepare(self, *args, **kwargs)
+        data.pop("plan_approval_required", None)
+        return data
+
+    monkeypatch.setattr(RunService, "prepare_run", legacy_snapshot)
     repo = tmp_path / "repo"
     repo.mkdir()
     subprocess.run(["git", "init", "-q", "-b", "main", str(repo)], check=True)

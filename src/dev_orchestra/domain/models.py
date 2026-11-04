@@ -14,6 +14,7 @@ class State(StrEnum):
     QUEUED = "queued"
     PREPARING = "preparing"
     PLANNING = "planning"
+    WAITING_PLAN_APPROVAL = "waiting_plan_approval"
     DEVELOPING = "developing"
     TESTING = "testing"
     REVIEWING = "reviewing"

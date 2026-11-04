@@ -133,6 +133,8 @@ def observe(store, run):
                 actions.append("resume")
             if run.get("test_change_proposal") and not pending_control:
                 actions.append("reject-test-changes")
+        if run["state"] == "waiting_plan_approval" and not pending_control:
+            actions.extend(["approve-plan", "revise-plan"])
         if run["state"] == "waiting_approval":
             actions.extend(["defer", "issue-disposition"])
             if validation["status"] == "valid":

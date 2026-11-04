@@ -170,8 +170,8 @@ export function WorkflowTimeline({
         {run.iteration === 0 ? "최초 실행" : `수정 ${run.iteration}회차`}
       </p>
       <p className="help">
-        기획 → 개발 → 테스트 → 리뷰 → 보고서 → 최종 승인 · 수정 시 수정 → 테스트
-        → 리뷰 반복
+        기획 → 기획 승인 → 개발 → 테스트 → 리뷰 → 보고서 → 최종 승인 · 수정 시
+        수정 → 테스트 → 리뷰 반복
       </p>
       {currentStep && (
         <button

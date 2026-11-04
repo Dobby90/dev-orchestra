@@ -210,6 +210,11 @@ class SessionView(BaseModel):
     csrf_token: str
 
 
+class PlanDecisionInput(Input):
+    plan_hash: str = Field(pattern=r"^[0-9a-f]{64}$")
+    reason: str = Field(default="", max_length=65536)
+
+
 class ResumeInput(Input):
     answers_text: str | None = Field(default=None, max_length=65536)
     new_max_fix_attempts: int | None = Field(default=None, gt=0, le=20, strict=True)
@@ -241,6 +246,9 @@ class ValidationView(BaseModel):
 
 
 class RunDetail(RunSummary):
+    plan: str | None = None
+    criteria: list[dict[str, str]] = Field(default_factory=list)
+    plan_hash: str | None = None
     deletion_pending: bool = False
     revision: int = 0
     execution: ExecutionView = Field(default_factory=ExecutionView)
@@ -503,7 +511,7 @@ class NotificationView(BaseModel):
     id: int
     run_id: str
     occurred_at: str
-    state: Literal["needs_input", "paused", "waiting_approval", "failed"]
+    state: Literal["needs_input", "paused", "waiting_approval", "waiting_plan_approval", "failed"]
     read: bool
 
 

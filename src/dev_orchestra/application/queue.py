@@ -211,6 +211,7 @@ class QueueService:
                             state = "queued"
                         elif run["state"] in {
                             "waiting_approval",
+                            "waiting_plan_approval",
                             "completed",
                             "cancelled",
                             "paused",

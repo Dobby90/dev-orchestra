@@ -14,6 +14,7 @@ import { Button } from "./ui/button";
 export const states: Record<State, { label: string; tone: string }> = {
   queued: { label: "실행 대기", tone: "muted" },
   preparing: { label: "준비 중", tone: "blue" },
+  waiting_plan_approval: { label: "기획 승인 대기", tone: "amber" },
   planning: { label: "기획 중", tone: "blue" },
   developing: { label: "개발 중", tone: "blue" },
   testing: { label: "테스트 중", tone: "blue" },

@@ -1030,6 +1030,104 @@
         }
       }
     },
+    "/api/runs/{rid}/approve-plan": {
+      "post": {
+        "summary": "Approve Plan",
+        "operationId": "approve_plan_api_runs__rid__approve_plan_post",
+        "parameters": [
+          {
+            "name": "rid",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Rid"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PlanDecisionInput"
+              }
+            }
+          }
+        },
+        "responses": {
+          "202": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OperationView"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/runs/{rid}/revise-plan": {
+      "post": {
+        "summary": "Revise Plan",
+        "operationId": "revise_plan_api_runs__rid__revise_plan_post",
+        "parameters": [
+          {
+            "name": "rid",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Rid"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PlanDecisionInput"
+              }
+            }
+          }
+        },
+        "responses": {
+          "202": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OperationView"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/runs/{rid}/approve": {
       "post": {
         "summary": "Approve",
@@ -3451,6 +3549,7 @@
               "needs_input",
               "paused",
               "waiting_approval",
+              "waiting_plan_approval",
               "failed"
             ],
             "title": "State"
@@ -3549,6 +3648,27 @@
           "error"
         ],
         "title": "OperationView"
+      },
+      "PlanDecisionInput": {
+        "properties": {
+          "plan_hash": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{64}$",
+            "title": "Plan Hash"
+          },
+          "reason": {
+            "type": "string",
+            "maxLength": 65536,
+            "title": "Reason",
+            "default": ""
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "plan_hash"
+        ],
+        "title": "PlanDecisionInput"
       },
       "Policy": {
         "properties": {
@@ -4392,6 +4512,38 @@
             ],
             "title": "Control"
           },
+          "plan": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Plan"
+          },
+          "criteria": {
+            "items": {
+              "additionalProperties": {
+                "type": "string"
+              },
+              "type": "object"
+            },
+            "type": "array",
+            "title": "Criteria"
+          },
+          "plan_hash": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Plan Hash"
+          },
           "deletion_pending": {
             "type": "boolean",
             "title": "Deletion Pending",
@@ -4751,6 +4903,7 @@
           "queued",
           "preparing",
           "planning",
+          "waiting_plan_approval",
           "developing",
           "testing",
           "reviewing",

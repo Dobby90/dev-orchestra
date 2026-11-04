@@ -13,7 +13,7 @@ WITH transitions AS (
  FROM events WHERE kind IN ('state','state.changed')
 )
 SELECT id,run_id,timestamp AS occurred_at,state FROM transitions
-WHERE state IN ('needs_input','paused','waiting_approval','failed')
+WHERE state IN ('needs_input','paused','waiting_approval','waiting_plan_approval','failed')
 AND (previous IS NULL OR previous != state)
 """
 

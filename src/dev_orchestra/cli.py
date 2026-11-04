@@ -66,7 +66,12 @@ def run(
 @app.command()
 @guarded
 def status(ctx: typer.Context, run_id: str):
-    typer.echo(json.dumps(ctx.obj.status(run_id), ensure_ascii=False, indent=2))
+    result = ctx.obj.status(run_id)
+    if result["state"] == "waiting_plan_approval":
+        from dev_orchestra.application.plan_approval import binding
+
+        result["plan_hash"] = binding(ctx.obj.store, result)["plan_hash"]
+    typer.echo(json.dumps(result, ensure_ascii=False, indent=2))
 
 
 @app.command("list")
@@ -208,10 +213,19 @@ def logs(ctx: typer.Context, run_id: str, follow: bool = False, role: str | None
         if page["chunks"] and (
             not follow
             or state
-            in {"waiting_approval", "completed", "failed", "cancelled", "paused", "needs_input"}
+            in {
+                "waiting_plan_approval",
+                "waiting_approval",
+                "completed",
+                "failed",
+                "cancelled",
+                "paused",
+                "needs_input",
+            }
         ):
             continue
         if not follow or state in {
+            "waiting_plan_approval",
             "waiting_approval",
             "completed",
             "failed",
@@ -409,3 +423,29 @@ def defer(ctx: typer.Context, run_id: str, reason: str = typer.Option(...)):
     typer.echo(
         json.dumps(Commands(ctx.obj).execute(run_id, "defer", run["version"], {"reason": reason}))
     )
+
+
+@app.command("approve-plan")
+@guarded
+def approve_plan(
+    ctx: typer.Context, run_id: str, plan_hash: str = typer.Option(...), detach: bool = False
+):
+    from dev_orchestra.application.plan_approval import decide
+
+    decide(ctx.obj, run_id, plan_hash, True)
+    ctx.obj.start(run_id, detached=detach)
+
+
+@app.command("revise-plan")
+@guarded
+def revise_plan(
+    ctx: typer.Context,
+    run_id: str,
+    plan_hash: str = typer.Option(...),
+    reason: str = typer.Option(...),
+    detach: bool = False,
+):
+    from dev_orchestra.application.plan_approval import decide
+
+    decide(ctx.obj, run_id, plan_hash, False, reason)
+    ctx.obj.start(run_id, detached=detach)

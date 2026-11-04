@@ -52,6 +52,7 @@ const kinds = [
   "step.started",
   "step.completed",
   "approval.recorded",
+  "plan.decided",
   "job.queued",
   "job.claimed",
   "job.running",

@@ -101,6 +101,11 @@ def upgrade(path: Path):
             ).split(";"):
                 if statement.strip():
                     db.execute(statement)
+            # Schema 2 stores plan revisions inside JSON checkpoints.
+            db.execute("UPDATE runs SET revision=COALESCE(json_extract(data, '$.revision'), 0)")
+            db.execute(
+                "UPDATE steps SET revision=COALESCE(json_extract(data, '$.revision'), revision)"
+            )
             if db.execute("PRAGMA foreign_key_check").fetchall():
                 raise PipelineError("foreign key check failed")
             db.execute("UPDATE schema_version SET version=?", (CURRENT_SCHEMA,))

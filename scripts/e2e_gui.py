@@ -171,6 +171,13 @@ if req['role']=='developer':
                         flush=True,
                     )
                     previous = signature
+                if value["state"] == "waiting_plan_approval":
+                    response = client.post(
+                        f"/api/runs/{rid}/approve-plan",
+                        json={"plan_hash": value["plan_hash"]},
+                        headers={"If-Match": f'"run:{rid}:v{value["version"]}"'},
+                    )
+                    assert response.status_code in {202, 409}, response.text
                 if value["state"] in {"waiting_approval", "needs_input", "failed", "cancelled"}:
                     break
                 time.sleep(1)

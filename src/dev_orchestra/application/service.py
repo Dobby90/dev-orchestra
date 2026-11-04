@@ -93,6 +93,7 @@ class RunService:
             "config": config.model_dump(mode="json"),
             "iteration": 0,
             "revision": 0,
+            "plan_approval_required": True,
             "next_role": "planner",
             "created_at": now(),
         }
@@ -112,7 +113,7 @@ class RunService:
             raise PipelineError("worktree was cleaned; create a new Run")
         if run.get("cleanup_requested"):
             raise PipelineError("cleanup is in progress")
-        if run["state"] in {"completed", "cancelled", "waiting_approval"}:
+        if run["state"] in {"completed", "cancelled", "waiting_approval", "waiting_plan_approval"}:
             raise PipelineError("run is not resumable")
         if run.get("test_change_application") and answers and answers.strip():
             raise PipelineError(
@@ -135,6 +136,18 @@ class RunService:
                 },
             ]
             changes["questions"] = []
+        if (
+            run.get("plan_approval_required")
+            and run.get("next_role") == "developer"
+            and (not run.get("plan_approval") or answers and answers.strip())
+        ):
+            changes.update(
+                next_role="planner",
+                revision=run.get("revision", 0) + 1,
+                plan=None,
+                criteria=[],
+                plan_approval=None,
+            )
         if max_fixes is not None:
             if max_fixes <= run["config"]["workflow"]["max_fix_attempts"]:
                 raise PipelineError("new fix budget must increase the recorded limit")
