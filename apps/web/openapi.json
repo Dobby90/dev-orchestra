@@ -4655,6 +4655,28 @@
             "type": "integer",
             "title": "Version"
           },
+          "created_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Created At"
+          },
+          "completed_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Completed At"
+          },
           "branch": {
             "anyOf": [
               {
@@ -4843,17 +4865,6 @@
             ],
             "title": "Base Branch"
           },
-          "created_at": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Created At"
-          },
           "max_fix_attempts": {
             "anyOf": [
               {
@@ -4900,10 +4911,10 @@
           "id",
           "state",
           "version",
+          "created_at",
           "event_cursor",
           "project_id",
           "base_branch",
-          "created_at",
           "max_fix_attempts",
           "questions",
           "error"
@@ -4961,6 +4972,28 @@
           "version": {
             "type": "integer",
             "title": "Version"
+          },
+          "created_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Created At"
+          },
+          "completed_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Completed At"
           },
           "branch": {
             "anyOf": [

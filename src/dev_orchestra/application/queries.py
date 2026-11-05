@@ -21,7 +21,21 @@ class RunQueryService:
         run = self.get(run_id)
         values = {k: run[k] for k in RunSummary.model_fields if k in run}
         values["current_role"] = run.get("next_role") if run.get("next_role") != "done" else None
+        with self.store.connection() as db:
+            values["completed_at"] = self._completed_at(db, run_id, run["state"])
         return RunSummary.model_validate(values)
+
+    @staticmethod
+    def _completed_at(db, run_id, state):
+        if state != "completed":
+            return None
+        row = db.execute(
+            "SELECT timestamp FROM events WHERE run_id=? AND "
+            "(kind='approved' OR (kind='state' AND json_extract(data,'$.state')='completed')) "
+            "ORDER BY id DESC LIMIT 1",
+            (run_id,),
+        ).fetchone()
+        return row["timestamp"] if row else None
 
     def steps(self, run_id):
         run = self.get(run_id)
@@ -53,6 +67,7 @@ class RunQueryService:
                 test_scope=data.get("test_scope", "full"),
                 base_branch=data.get("base"),
                 created_at=data.get("created_at"),
+                completed_at=self._completed_at(db, run_id, row["state"]),
                 max_fix_attempts=data.get("config", {}).get("workflow", {}).get("max_fix_attempts"),
                 questions=sanitize(data.get("questions", [])),
                 error=sanitize(data.get("error")),
@@ -75,9 +90,24 @@ class RunQueryService:
         if not 1 <= limit <= 100:
             raise PipelineError("invalid page size")
         with self.store.connection() as db:
+            # Keep the ID cursor, but compare its request time and ID together so
+            # equal timestamps and multiple pages retain a deterministic order.
+            requested = "coalesce(julianday(json_extract(data,'$.created_at')),0)"
+            boundary = ""
+            parameters = [state, state, project_id, project_id]
+            if cursor:
+                anchor = db.execute(
+                    f"SELECT {requested} AS requested FROM runs WHERE id=?", (cursor,)
+                ).fetchone()
+                if anchor is None:
+                    raise PipelineError("invalid run cursor")
+                boundary = f" AND ({requested},id)<(?,?)"
+                parameters.extend([anchor["requested"], cursor])
             rows = db.execute(
-                "SELECT id FROM runs WHERE id>? AND (? IS NULL OR state=?) AND (? IS NULL OR project_id=?) ORDER BY id LIMIT ?",
-                (cursor, state, state, project_id, project_id, limit + 1),
+                "SELECT id FROM runs WHERE (? IS NULL OR state=?) "
+                "AND (? IS NULL OR project_id=?)"
+                f"{boundary} ORDER BY {requested} DESC,id DESC LIMIT ?",
+                (*parameters, limit + 1),
             ).fetchall()
         items = [self.summary(r["id"]).model_dump(mode="json") for r in rows[:limit]]
         return {

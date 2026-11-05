@@ -31,7 +31,11 @@ it("실제 브랜치와 과거 승인 SHA·현재 ref 차이 및 정리 경계�
   expect(screen.getByText("현재 브랜치 SHA: current")).toBeVisible();
   expect(screen.getByRole("alert")).toHaveTextContent("과거 승인 SHA");
   expect(screen.getByText(/정리 후 재개할 수 없습니다/)).toBeVisible();
-  expect(screen.getByText(/선택한 테스트: 변경 영향 범위/)).toBeVisible();
+  expect(screen.getByText("선택한 테스트")).toBeVisible();
+  expect(screen.getByText("변경 영향 범위")).toBeVisible();
+  expect(
+    screen.getByText("테스트·리뷰 안내").closest("details"),
+  ).not.toHaveAttribute("open");
 });
 it.each(["total_capacity", "repository_capacity", "shared_resource"] as const)(
   "%s 대기를 구분한다",

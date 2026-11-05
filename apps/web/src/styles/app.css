@@ -861,9 +861,6 @@ input:read-only {
   flex-shrink: 0;
   color: var(--green);
 }
-.preview-card {
-  border-color: color-mix(in srgb, var(--accent) 50%, var(--border));
-}
 dl {
   margin: 20px 0;
   font-size: 11px;
@@ -879,7 +876,7 @@ dd {
 .run-overview {
   padding: 22px;
   display: grid;
-  grid-template-columns: 2fr 1fr 1fr 1.5fr;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 20px;
 }
 .run-overview > div {
@@ -887,7 +884,7 @@ dd {
   gap: 8px;
   min-width: 0;
 }
-.run-overview span {
+.run-overview > div > .subtle {
   font-size: 10px;
 }
 .run-overview strong {
@@ -897,6 +894,80 @@ dd {
   gap: 6px;
   align-items: center;
   overflow-wrap: anywhere;
+}
+.run-overview .run-branch {
+  grid-column: 1 / -1;
+  padding-top: 16px;
+  border-top: 1px solid var(--border);
+}
+.run-branch strong {
+  align-items: flex-start;
+  font-size: 12px;
+  line-height: 1.6;
+}
+.run-branch strong span {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.run-branch svg {
+  flex-shrink: 0;
+  margin-top: 3px;
+}
+.run-execution {
+  padding: 20px 22px;
+}
+.run-execution-summary {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 20px 48px;
+  align-items: flex-start;
+}
+.capacity-metrics {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 24px;
+  margin: 0;
+}
+.capacity-metrics dt {
+  margin: 0;
+  font-size: 12px;
+}
+.capacity-metrics dd {
+  font-size: 16px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+.capacity-metrics dd span {
+  font-size: 12px;
+  color: var(--muted);
+  font-weight: 400;
+}
+.capacity-status .help {
+  margin: 4px 0 0;
+}
+.run-test-scope {
+  display: grid;
+  gap: 8px;
+  font-size: 13px;
+}
+.run-policy-details {
+  margin-top: 16px;
+  padding-top: 14px;
+  border-top: 1px solid var(--border);
+  font-size: 12px;
+}
+.run-policy-details summary {
+  cursor: pointer;
+  color: var(--muted);
+}
+.run-policy-details summary:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 4px;
+}
+.run-timestamp {
+  white-space: nowrap;
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
 }
 .run-actions {
   display: flex;
@@ -1225,7 +1296,7 @@ dd {
     grid-template-columns: minmax(0, 1.4fr) minmax(240px, 1fr);
   }
   .run-overview {
-    grid-template-columns: 1fr 1fr;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
   }
 }
 @media (max-width: 820px) {
@@ -1313,6 +1384,7 @@ dd {
     grid-template-columns: 1fr;
   }
   .run-overview {
+    grid-template-columns: 1fr;
     padding: 17px 15px;
     gap: 18px;
   }

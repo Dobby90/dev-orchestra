@@ -1564,6 +1564,10 @@ export interface components {
             state: components["schemas"]["State"];
             /** Version */
             version: number;
+            /** Created At */
+            created_at: string | null;
+            /** Completed At */
+            completed_at?: string | null;
             /** Branch */
             branch?: string | null;
             /** Base Sha */
@@ -1618,8 +1622,6 @@ export interface components {
             project_id: string | null;
             /** Base Branch */
             base_branch: string | null;
-            /** Created At */
-            created_at: string | null;
             /** Max Fix Attempts */
             max_fix_attempts: number | null;
             /** Questions */
@@ -1659,6 +1661,10 @@ export interface components {
             state: components["schemas"]["State"];
             /** Version */
             version: number;
+            /** Created At */
+            created_at?: string | null;
+            /** Completed At */
+            completed_at?: string | null;
             /** Branch */
             branch?: string | null;
             /** Base Sha */

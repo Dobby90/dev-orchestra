@@ -11,16 +11,55 @@ export function RunHandoffPanel({ run }: { run: RunDetail }) {
     unknown: "대기 상태 확인 필요",
   };
   return (
-    <section className="panel form-grid" aria-label="작업 인계와 실행 상태">
-      {capacity && (
-        <p role="status">
-          동시 실행 {capacity.active} / {capacity.total} · 동일 저장소{" "}
-          {capacity.repository_active} / {capacity.repository_limit}
-          {capacity.wait_reason && ` · ${waits[capacity.wait_reason]}`}
-        </p>
-      )}
+    <>
+      <section
+        className="panel run-execution"
+        aria-label="실행 현황과 테스트 범위"
+      >
+        <div className="run-execution-summary">
+          {capacity && (
+            <div className="capacity-status" role="status">
+              <dl className="capacity-metrics">
+                <div>
+                  <dt>동시 실행</dt>
+                  <dd>
+                    {capacity.active} <span>/ {capacity.total}</span>
+                  </dd>
+                </div>
+                <div>
+                  <dt>동일 저장소</dt>
+                  <dd>
+                    {capacity.repository_active}{" "}
+                    <span>/ {capacity.repository_limit}</span>
+                  </dd>
+                </div>
+              </dl>
+              <p className="help">사용 중 / 최대</p>
+              {capacity.wait_reason && (
+                <p className="text-amber">{waits[capacity.wait_reason]}</p>
+              )}
+            </div>
+          )}
+          <div className="run-test-scope">
+            <span className="subtle text-small">선택한 테스트</span>
+            <strong>
+              {run.test_scope === "affected" ? "변경 영향 범위" : "전체"}
+            </strong>
+          </div>
+        </div>
+        <details className="run-policy-details">
+          <summary>테스트·리뷰 안내</summary>
+          <p className="help">
+            실제 실행 범위와 확대 사유는 테스트 결과에서 확인할 수 있습니다.
+          </p>
+          <p className="help">
+            리뷰는 Run의 누적 변경·직접 영향을 받는 코드와 기존 미해결 이슈를
+            확인합니다.
+          </p>
+        </details>
+      </section>
       {progress && (
-        <div>
+        <section className="panel panel-body" aria-label="보존된 역할 작업">
           <strong>보존된 역할 작업</strong>
           <p>
             중간 커밋 {progress.commits?.length ?? 0}개 · 보존된 변경 파일{" "}
@@ -36,16 +75,13 @@ export function RunHandoffPanel({ run }: { run: RunDetail }) {
                 ? "답변 없이 재개하면 소유권과 파일을 검증한 뒤 같은 역할·시도를 이어갑니다. 미완료 변경과 새 요구사항을 자동 병합하지 않습니다."
                 : "복구 근거를 확인할 수 없습니다. 파일을 보존하고 상태를 확인하세요."}
           </p>
-        </div>
+        </section>
       )}
-      <p className="help">
-        선택한 테스트:{" "}
-        {run.test_scope === "affected" ? "변경 영향 범위" : "전체"} · 실제 실행
-        범위와 확대 사유는 테스트 결과에서 확인할 수 있습니다. 리뷰는 Run의 누적
-        변경·직접 영향을 받는 코드와 기존 미해결 이슈를 확인합니다.
-      </p>
       {handoff && ["waiting_approval", "completed"].includes(run.state) && (
-        <div>
+        <section
+          className="panel panel-body"
+          aria-label="로컬 작업 브랜치 인계"
+        >
           <h2>로컬 작업 브랜치 인계</h2>
           <p className="mono path">원본 프로젝트: {handoff.repository}</p>
           <p className="mono path">로컬 브랜치: {handoff.branch}</p>
@@ -63,8 +99,8 @@ export function RunHandoffPanel({ run }: { run: RunDetail }) {
           )}
           <pre>{handoff.commands.join("\n")}</pre>
           <p className="help">{handoff.notice}</p>
-        </div>
+        </section>
       )}
-    </section>
+    </>
   );
 }

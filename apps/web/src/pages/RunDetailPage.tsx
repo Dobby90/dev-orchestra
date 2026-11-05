@@ -255,17 +255,6 @@ function RunDetailBody({ rid }: { rid: string }) {
           </strong>
         </div>
         <div>
-          <span className="subtle">Feature 브랜치</span>
-          <strong className="mono">
-            <GitBranch size={14} />
-            {r.branch ?? "준비 중"}
-          </strong>
-        </div>
-        <div>
-          <span className="subtle">기준 브랜치</span>
-          <strong>{r.base_branch ?? "기록 없음"}</strong>
-        </div>
-        <div>
           <span className="subtle">수정 회차</span>
           <strong>
             {r.iteration} / {r.max_fix_attempts ?? "미상"}
@@ -278,6 +267,17 @@ function RunDetailBody({ rid }: { rid: string }) {
               ? new Date(r.created_at).toLocaleString("ko-KR")
               : "기록 없음"}
           </strong>
+        </div>
+        <div className="run-branch">
+          <span className="subtle">Feature 브랜치</span>
+          <strong className="mono">
+            <GitBranch size={14} />
+            <span>{r.branch ?? "준비 중"}</span>
+          </strong>
+        </div>
+        <div className="run-branch">
+          <span className="subtle">기준 브랜치</span>
+          <strong>{r.base_branch ?? "기록 없음"}</strong>
         </div>
       </div>
       <div className="run-actions">

@@ -608,3 +608,21 @@ def test_log_window_contract_and_authentication(web):
     assert c.get(f"/api/runs/{rid}/logs/window?step_id=0").status_code == 422
     c.cookies.clear()
     assert c.get(f"/api/runs/{rid}/logs/window").status_code == 401
+
+
+def test_run_list_exposes_request_and_completion_times(web):
+    client, svc, rid, _, _ = web
+    created = svc.store.get(rid)["created_at"]
+    before = client.get("/api/runs").json()["items"][0]
+    assert before["created_at"] == created
+    assert before["completed_at"] is None
+    with svc.store.connection() as db:
+        db.execute("UPDATE runs SET state='waiting_approval' WHERE id=?", (rid,))
+    svc.store.approve(rid, "a" * 40, "test evidence")
+    completed = svc.store.events(rid)[-1]["timestamp"]
+    summary = client.get("/api/runs?state=completed").json()["items"][0]
+    assert summary["created_at"] == created
+    assert summary["completed_at"] == completed
+    detail = client.get(f"/api/runs/{rid}")
+    assert detail.status_code == 200
+    assert detail.json()["completed_at"] == completed
