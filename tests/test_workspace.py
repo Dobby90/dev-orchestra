@@ -370,7 +370,7 @@ assert sys.argv[sys.argv.index('--sandbox') + 1] == 'read-only'
 assert '--ignore-user-config' in sys.argv and '--ignore-rules' in sys.argv
 assert '--ephemeral' not in sys.argv
 schema = json.loads(Path(sys.argv[sys.argv.index('--output-schema') + 1]).read_text())
-assert set(schema['properties']) == {{'summary', 'questions', 'no_change_reason'}}
+assert set(schema['properties']) == {{'summary', 'questions', 'no_change_reason', 'commit_message'}}
 config = {{sys.argv[i+1].split('=', 1)[0]: sys.argv[i+1].split('=', 1)[1]
           for i, arg in enumerate(sys.argv[:-1]) if arg == '-c'}}
 command = json.loads(config['mcp_servers.workspace.command'])
@@ -399,7 +399,7 @@ proc.stdin.close()
 assert proc.wait(timeout=10) == 0
 assert 'workspace.edit_file' in sys.stdin.read()
 Path(sys.argv[sys.argv.index('--output-last-message') + 1]).write_text(
-    json.dumps({{'summary': '직접 편집 완료', 'questions': [], 'no_change_reason': ''}}))
+    json.dumps({{'summary': '직접 편집 완료', 'questions': [], 'no_change_reason': '', 'commit_message': ''}}))
 """)
     stub.chmod(0o755)
     from dev_orchestra.config import Codex

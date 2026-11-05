@@ -61,6 +61,7 @@ class TestTarget(Model):
 
 
 class AgentResult(Model):
+    commit_message: str = ""
     summary: str
     questions: list[str] = Field(default_factory=list)
     plan: str = ""
@@ -83,6 +84,7 @@ class AgentRequest(Model):
 
 
 class WorkspaceResult(Model):
+    commit_message: str = ""
     summary: str = Field(min_length=1)
     questions: list[str] = Field(default_factory=list)
     no_change_reason: str = ""

@@ -22,6 +22,7 @@ from dev_orchestra.domain.models import (
     TestChange,
     WorkspaceResult,
 )
+from dev_orchestra.infrastructure.commit_messages import describe_commit, validate_commit_message
 from dev_orchestra.infrastructure.files import contained, digest, write
 from dev_orchestra.infrastructure.git import Git
 from dev_orchestra.infrastructure.process import redact, sanitize
@@ -388,6 +389,7 @@ class WorkspaceSession:
             self.acknowledge(intent)
             self.guard()
             return {"sha": intent["sha"], "parent": intent["parent"], "tree": intent["tree"]}
+        validate_commit_message(message)
         self.guard()
         if expected_sha != self.data["current_sha"]:
             raise PipelineError("checkpoint expected HEAD mismatch")
@@ -463,7 +465,7 @@ class WorkspaceSession:
                 return value["selection"]
         return select_tests(self.store.get(self.run_id), self.root, self.git.sha())
 
-    def run_tests(self, command_ids, test_plan=None):
+    def run_tests(self, command_ids, test_plan=None, commit_message=""):
         from dev_orchestra.application.test_selection import select_tests, selected_config
         from dev_orchestra.infrastructure.test_runner import TestRunner
 
@@ -481,8 +483,8 @@ class WorkspaceSession:
                 "tests-" + str(len(self.data["commits"])),
                 self.git.sha(),
                 {name: self.data["files"][name]["hash"] for name in pending},
-                "테스트 실행 전 변경 확정",
-                "테스트 코드와 검증 후보를 확정합니다",
+                describe_commit(commit_message, "", pending),
+                "테스트 변경 파일: " + ", ".join(pending),
             )
         run = self.store.get(self.run_id)
         selection = select_tests(
@@ -672,7 +674,7 @@ class WorkspaceSession:
                 "host-final",
                 self.data["current_sha"],
                 {name: self.data["files"][name]["hash"] for name in files},
-                "역할 작업 완료: " + self.data["role"],
+                describe_commit(response.commit_message, response.summary, files),
                 response.summary,
                 _host=True,
             )

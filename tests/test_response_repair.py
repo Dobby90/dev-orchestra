@@ -92,6 +92,7 @@ def test_role_schema_normalizes_to_common_artifact(tmp_path, monkeypatch):
             "patch",
             "test_changes",
             "no_change_reason",
+            "commit_message",
         }
         Path(argv[argv.index("--output-last-message") + 1]).write_text(
             json.dumps(
@@ -118,6 +119,7 @@ def test_role_schema_normalizes_to_common_artifact(tmp_path, monkeypatch):
         "patch",
         "test_changes",
         "no_change_reason",
+        "commit_message",
     }
 
 

@@ -20,11 +20,13 @@ def response_fields(request):
     from dev_orchestra.domain.execution import writes_workspace
 
     if writes_workspace(request):
-        fields = {"summary", "questions", "no_change_reason"}
+        fields = {"summary", "questions", "no_change_reason", "commit_message"}
         if request.role == "tester":
             fields |= {"command_ids", "coverage", "test_evidence_id"}
         return fields
     fields = FIELDS[request.role].copy()
+    if request.role in {"developer", "fixer", "tester"}:
+        fields.add("commit_message")
     if request.role == "tester" and request.context.get("automatic_test_selection"):
         fields.add("test_plan")
     if request.role == "reviewer" and request.context.get("review_contract") == 2:
@@ -48,6 +50,13 @@ def validate_role(role, result):
     ):
         if key not in allowed and getattr(result, key):
             raise ResponseError(f"{role} must not return {key}; return only role-specific results")
+    if result.patch and result.commit_message.strip():
+        from dev_orchestra.infrastructure.commit_messages import validate_commit_message
+
+        try:
+            validate_commit_message(result.commit_message)
+        except PipelineError as error:
+            raise ResponseError(str(error)) from error
     if not result.summary.strip():
         raise ResponseError("response requires a nonempty summary")
     if (

@@ -324,7 +324,12 @@ class CodexClient:
         try:
             raw = json.loads(result.read_text())
             required = set(model.model_fields)
-            if not isinstance(raw, dict) or set(raw) not in (required, fields):
+            if not isinstance(raw, dict) or set(raw) not in (
+                required,
+                fields,
+                required - {"commit_message"},
+                fields - {"commit_message"},
+            ):
                 raise ValueError("incomplete role response")
             if "no_change_reason" in raw and model not in {WorkspaceResult, WorkspaceTestResult}:
                 reason = raw.pop("no_change_reason")

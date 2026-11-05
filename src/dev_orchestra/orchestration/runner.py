@@ -14,6 +14,7 @@ from dev_orchestra.application.workspace_recovery import WorkspaceBlocked
 from dev_orchestra.config import Config
 from dev_orchestra.domain.execution import WORKSPACE_V2, execution_contract, writes_workspace
 from dev_orchestra.domain.models import AgentRequest, PipelineError, StopRequested
+from dev_orchestra.infrastructure.commit_messages import describe_commit
 from dev_orchestra.infrastructure.evidence import checkpoints, verified_candidate
 from dev_orchestra.infrastructure.files import contained, digest, write
 from dev_orchestra.infrastructure.git import Git
@@ -588,7 +589,9 @@ class Runner:
                             validated_patch_hash=record["patch_hash"],
                         )
                     out_sha = git.commit(
-                        f"자동 개발: {run_id} {role} 회차 {iteration} 단계 {step_id}"
+                        describe_commit(result.commit_message, result.summary, patched_paths)
+                        + f"\n\nDevOrchestra-Run: {run_id}\nDevOrchestra-Role: {role}"
+                        + f"\nDevOrchestra-Iteration: {iteration}\nDevOrchestra-Step: {step_id}"
                     )
                 else:
                     out_sha, patched_paths = sha, []

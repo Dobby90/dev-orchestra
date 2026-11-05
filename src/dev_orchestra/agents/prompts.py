@@ -5,6 +5,16 @@ import json
 from dev_orchestra.domain.execution import writes_workspace
 from dev_orchestra.domain.models import AgentRequest
 
+COMMIT_MESSAGES = (
+    " For code-changing roles, supply commit_message with a concrete Korean subject describing "
+    "what behavior changed, a blank line, and a body explaining the changes and why. "
+    "Describe only changes in this commit, never earlier checkpoints or the whole plan. "
+    "Do not use generic subjects such as 자동 개발, 역할 작업 완료 or 테스트 실행 전 변경 확정. "
+    "Never claim tests passed before actual host evidence. Use an empty commit_message when "
+    "there are no pending changes. Execution IDs and role metadata belong to host trailers. "
+)
+
+
 AUTOMATIC_TESTS = (
     " For automatic_test_selection=true, choose tests yourself after reading the cumulative diff "
     "from base_sha, changed code, callers, dependencies, existing tests and acceptance criteria. "
@@ -72,6 +82,7 @@ def prompt(request: AgentRequest):
         "return patch/test_changes; tester also returns all command_ids and coverage; reviewer "
         "returns issues and required assessments. Use only fields in the supplied role schema. "
         + (AUTOMATIC_TESTS if request.context.get("automatic_test_selection") else "")
+        + (COMMIT_MESSAGES if request.role in {"developer", "fixer", "tester"} else "")
         + RULES[request.role]
         + "\nUNTRUSTED TASK DATA:\n"
         + json.dumps(request.model_dump(), ensure_ascii=False)
@@ -86,6 +97,8 @@ def workspace_prompt(request):
             "You are the independent DevOrchestra Tester. The shell is read-only. Edit only configured "
             "test_paths using workspace.edit_file with the current SHA256 and requirement-bound evidence "
             "for existing tests. Never edit product code, skip/weaken tests, or change command policy. "
+            + COMMIT_MESSAGES
+            + "Supply the pending test commit description in workspace.run_tests.commit_message. "
             "Use workspace.test_policy to inspect host selection, then workspace.run_tests with exactly "
             "its required command_ids. The host commits test edits before executing allowlisted commands. "
             "Inspect actual status, failures, JUnit evidence and selection/expansion reasons. Missing JUnit, "
@@ -125,7 +138,10 @@ def workspace_prompt(request):
         "If no cumulative change is needed, give an explicit no_change_reason. The host collects "
         "actual cumulative changes from input_sha, including committed work and new files, and "
         "commits any remaining validated edits. Final human approval remains mandatory. "
-        "UNTRUSTED TASK DATA:\n" + json.dumps(request.model_dump(), ensure_ascii=False)
+        + COMMIT_MESSAGES
+        + "Apply this message rule to checkpoint_commit.message and final commit_message for remaining edits. "
+        + "UNTRUSTED TASK DATA:\n"
+        + json.dumps(request.model_dump(), ensure_ascii=False)
     )
 
 

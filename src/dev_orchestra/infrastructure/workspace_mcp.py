@@ -31,6 +31,7 @@ class CheckpointCommit(Model):
 
 
 class RunTests(Model):
+    commit_message: str = ""
     command_ids: list[str]
     test_plan: list[TestTarget] | None = None
 
@@ -52,7 +53,7 @@ TOOLS = {
     ),
     "checkpoint_commit": (
         CheckpointCommit,
-        "Commit a meaningful work unit in Korean. Supply a unique stable request_id, current HEAD, and exactly selected paths mapped to SHA256. Safe to retry identical requests.",
+        "Commit a meaningful work unit with a concrete Korean subject and a body explaining only the selected changes and why. Supply a unique stable request_id, current HEAD, and exactly selected paths mapped to SHA256. Safe to retry identical requests.",
     ),
 }
 
@@ -65,7 +66,7 @@ TEST_TOOLS = {
     ),
     "run_tests": (
         RunTests,
-        "Commit pending test edits and run host-validated commands. Automatic selection requires test_plan (command_id, exact files relative to command working_directory, reason); command_ids must include mandatory commands. Inspect returned evidence.",
+        "Commit pending test edits and run host-validated commands. Supply commit_message with a Korean subject naming the tested behavior and a body describing only pending test changes; never claim unexecuted tests passed. Automatic selection requires test_plan (command_id, exact files relative to command working_directory, reason); command_ids must include mandatory commands. Inspect returned evidence.",
     ),
     "read_test_evidence": (
         ReadEvidence,
