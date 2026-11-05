@@ -156,6 +156,13 @@ class RunService:
                     )
                 release_checkpoint = True
         changes = {"workspace_checkpoint": None} if release_checkpoint else {}
+        if release_checkpoint:
+            # Retire only the inspected, unedited attempt. Its files remain as
+            # history; unrelated untrusted sessions must still block recovery.
+            changes["workspace_released_steps"] = [
+                *run.get("workspace_released_steps", []),
+                session.data["step_id"],
+            ]
         if answers is not None and answers.strip():
             previous = run.get("answers", "")
             changes["answers"] = "\n\n".join(part for part in [previous, answers] if part)

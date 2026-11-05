@@ -417,3 +417,42 @@ def test_confirmed_environment_failure_can_retry_with_a_new_tester_attempt(setup
         "failed",
         "completed",
     ]
+
+
+@pytest.mark.parametrize("role", ["tester", "fixer"])
+def test_unedited_question_answer_restarts_only_the_trusted_attempt(setup, tmp_path, role):
+    from dev_orchestra.infrastructure.migrations import upgrade
+
+    svc, rid, _ = setup
+    upgrade(svc.store.path, workspace=True)
+
+    class Asking(Agent):
+        asked = False
+
+        def run_workspace(self, req, directory, session, stop):
+            if req.role == role and not self.asked:
+                self.asked = True
+                self.question_step = session.data["step_id"]
+                result = WorkspaceTestResult if role == "tester" else WorkspaceResult
+                return result(summary="요구 확인", questions=["기존 조건으로 진행할까요?"])
+            return super().run_workspace(req, directory, session, stop)
+
+    agent = Asking()
+    runner = planned(setup, agent, FakeTests())
+    if role == "fixer":
+        svc.store.update(rid, next_role="fixer")
+    runner.execute(rid)
+    assert svc.store.get(rid)["state"] == "needs_input"
+    # These direct Runner calls bypass Worker's job-finalization wrapper.
+    with svc.store.connection() as db:
+        db.execute("UPDATE jobs SET state='finished' WHERE run_id=?", (rid,))
+    answer = tmp_path / "answer.txt"
+    answer.write_text("기존 조건으로 진행하세요")
+    svc.resume(rid, answers=answer)
+    assert svc.store.get(rid)["workspace_released_steps"] == [agent.question_step]
+    runner.execute(rid)
+    run = svc.store.get(rid)
+    assert run["state"] == "waiting_approval", run.get("error")
+    steps = [s for s in svc.store.steps(rid) if s["role"] == role]
+    assert len(steps) == 2 and steps[-1]["status"] == "completed"
+    assert steps[0]["id"] == agent.question_step

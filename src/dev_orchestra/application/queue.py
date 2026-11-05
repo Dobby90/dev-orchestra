@@ -8,6 +8,7 @@ from pathlib import Path
 from dev_orchestra.domain.models import PipelineError
 from dev_orchestra.infrastructure.coordination import database_root, policy, repository_root
 from dev_orchestra.infrastructure.locking import OwnershipError, lock
+from dev_orchestra.infrastructure.process import redact
 from dev_orchestra.infrastructure.process_owner import alive, ensure_stopped, identity
 from dev_orchestra.infrastructure.store import now
 
@@ -74,8 +75,23 @@ class QueueService:
             occupied = [repository_root(self.store.get(j["run_id"])["repo"])[1] for j in active]
             row = None
             for candidate in candidates:
-                common, key = repository_root(self.store.get(candidate["run_id"])["repo"])
-                if occupied.count(key) < policy(common / "devorchestra-capacity-v1"):
+                try:
+                    common, key = repository_root(self.store.get(candidate["run_id"])["repo"])
+                    available = occupied.count(key) < policy(common / "devorchestra-capacity-v1")
+                except (PipelineError, OSError) as error:
+                    self.store.update(candidate["run_id"], "needs_input", error=redact(str(error)))
+                    db.execute(
+                        "UPDATE jobs SET state='finished',finished_at=? WHERE id=? AND state='queued'",
+                        (now(), candidate["id"]),
+                    )
+                    self.store._event(
+                        db,
+                        candidate["run_id"],
+                        "job.finished",
+                        {"job_id": candidate["id"], "result_state": "needs_input"},
+                    )
+                    continue
+                if available:
                     row = candidate
                     break
             if row is None:

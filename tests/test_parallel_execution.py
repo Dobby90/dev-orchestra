@@ -716,3 +716,34 @@ def test_sparse_slots_above_reduced_limit_still_count(service, tmp_path):
     with lock(root / "slot-02.lock"):
         with pytest.raises(StopRequested), slot(root, directory, stop):
             pytest.fail("occupied slot above reduced limit was ignored")
+
+
+@pytest.mark.parametrize("failure", ["missing", "filter", "capacity"])
+def test_invalid_queued_repository_does_not_starve_healthy_project(service, tmp_path, failure):
+    import shutil
+
+    from dev_orchestra.infrastructure.migrations import upgrade
+
+    svc, initial, repo = service
+    upgrade(svc.store.path, workspace=True)
+    spec = Path(svc.store.get(initial)["directory"]) / "spec.md"
+    healthy_repo = clone_repo(repo, tmp_path / "healthy")
+    healthy = svc.create(healthy_repo, spec)
+    q = QueueService(svc.store)
+    q.enqueue(initial)
+    q.enqueue(healthy)
+    if failure == "missing":
+        shutil.rmtree(repo)
+    elif failure == "filter":
+        Git(repo).call("config", "filter.example.clean", "cat")
+    else:
+        common, _ = repository_root(repo)
+        write(common / "devorchestra-capacity-v1/policy.json", {"protocol": -1, "limit": 1})
+    assert q.reserve()["run_id"] == healthy
+    assert svc.store.get(initial)["state"] == "needs_input"
+    with svc.store.connection() as db:
+        assert (
+            db.execute("SELECT state FROM jobs WHERE run_id=?", (initial,)).fetchone()[0]
+            == "finished"
+        )
+    assert q.reserve() is None

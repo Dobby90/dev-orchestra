@@ -284,6 +284,7 @@ class Runner:
                                 and previous.get("revision", 0) == run.get("revision", 0)
                                 and previous["status"] != "completed"
                                 and not previous["data"].get("artifact")
+                                and previous["id"] not in run.get("workspace_released_steps", [])
                             ):
                                 old = (
                                     directory
