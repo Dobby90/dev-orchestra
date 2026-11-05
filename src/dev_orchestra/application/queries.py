@@ -48,6 +48,7 @@ class RunQueryService:
             from dev_orchestra.infrastructure.process import sanitize
 
             value.update(
+                test_scope=data.get("test_scope", "full"),
                 base_branch=data.get("base"),
                 created_at=data.get("created_at"),
                 max_fix_attempts=data.get("config", {}).get("workflow", {}).get("max_fix_attempts"),

@@ -84,6 +84,32 @@ export function TestsPanel({
           과거 결과에 없는 시간·실패 상세는 미상으로 표시합니다.
         </p>
       )}
+      {data.selection && (
+        <section className="notice" aria-label="실제 테스트 범위">
+          <p>
+            요청:{" "}
+            {data.selection.requested_scope === "affected"
+              ? "변경 영향 범위 테스트"
+              : "전체 테스트"}{" "}
+            · 실제:{" "}
+            {data.selection.actual_scope === "affected"
+              ? "영향 범위 검사"
+              : "전체 검사"}
+          </p>
+          <p>실행 명령: {data.selection.included.join(", ")}</p>
+          <p>미실행 명령: {data.selection.excluded.join(", ") || "없음"}</p>
+          {Object.entries(data.selection.command_reasons ?? {}).map(
+            ([command, reason]) => (
+              <p key={command}>
+                {command}: {reason}
+              </p>
+            ),
+          )}
+          {data.selection.reasons.map((reason, index) => (
+            <p key={index}>{reason}</p>
+          ))}
+        </section>
+      )}
       <div className="result-counts">
         {[
           { name: "전체", n: data.total },

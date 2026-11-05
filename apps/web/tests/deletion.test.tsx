@@ -9,6 +9,7 @@ import { ApiError } from "../src/api/client";
 import type { RunDetail } from "../src/api/types";
 
 const run: RunDetail = {
+  test_scope: "full",
   id: "run-1234567890abcdef",
   state: "cancelled",
   version: 4,

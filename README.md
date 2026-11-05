@@ -165,6 +165,32 @@ devorchestra --config config.yaml cleanup RUN_ID
 | 명령·입력 오류 | `1` |
 | 포그라운드 `run`·`resume`의 실행 실패 또는 사용자 개입 필요 | `2` |
 
+### 테스트 범위 선택
+
+새 작업에서 **전체 테스트** 또는 **변경 영향 범위 테스트**를 선택합니다. CLI는 `run --test-scope full` 또는 `run --test-scope affected`를 사용합니다. 기본값과 범위 정보가 없는 기존 Run은 전체 검사입니다. 선택은 생성 시 저장되며 재개 답변으로 바뀌지 않습니다.
+
+영향 범위 검사는 기준 SHA부터 현재 후보까지의 누적 변경을 프로젝트 정책에 연결합니다. 프로젝트 고급 JSON 또는 CLI YAML의 `tests.affected`에서 다음을 지정할 수 있습니다. 명령 ID는 모두 기존 `tests.commands`에 등록돼 있어야 하며, 명령 인자나 테스트 필터를 모델이 새로 만들지 않습니다.
+
+```yaml
+tests:
+  affected:
+    inputs:
+      api-tests: ["src/api/**", "tests/api/**"]
+      web-tests: ["apps/web/**"]
+    dependencies:
+      integration: ["api-tests", "web-tests"]
+    required_commands: ["regression"]
+    criterion_commands:
+      AC1: ["api-tests"]
+    global_paths: ["shared/**", "pyproject.toml", "*lock*", "auth/**", "migrations/**"]
+```
+
+`inputs`는 저장소 상대 경로의 glob 매핑이고, `dependencies`는 해당 명령이 영향을 받는 상위 명령 ID입니다. 위 예시에서 `api-tests`가 선택되면 `integration`도 실행합니다. `required_commands`와 모든 `kind=check` 명령은 필수로 포함됩니다. `criterion_commands`는 승인된 인수 조건 ID를 실제 테스트 명령에 연결합니다. 공통 모듈·공개 계약·DB·인증·의존성·검증 설정에 해당하는 경로는 프로젝트의 `global_paths`에 포함하세요.
+
+선택 정책 없음·매핑되지 않은 파일·공통 경로 변경·선택 테스트 0개·인수 조건 매핑 부족·선택 실패 시 전체 설정 검사로 확대하고 이유를 표시합니다. 실행 결과와 보고서는 요청 범위, 실제 범위, 실행·미실행 명령과 확대 이유를 제공합니다. 영향 범위 통과를 전체 테스트 통과로 표시하지 않습니다.
+
+내부 검증용 새 실행 계약에서는 Tester가 테스트 경로만 호스트 도구로 편집하고, 후보를 확정한 뒤 실제 테스트 결과와 근거 ID를 확인합니다. Reviewer는 누적 변경과 직접 영향을 받는 코드, 동일 SHA의 검증 범위 및 미해결 이슈를 독립적으로 확인합니다. 이 실행 계약의 일반 활성화는 통합 검증 이후에 진행합니다.
+
 ## 워크플로와 승인
 
 ```text

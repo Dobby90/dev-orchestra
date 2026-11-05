@@ -17,6 +17,7 @@ class CreateRun(Contract):
     spec: Path
     base: str | None = None
     max_fixes: int | None = Field(default=None, ge=0, strict=True)
+    test_scope: Literal["full", "affected"] = "full"
 
 
 class ApprovalCommand(Contract):

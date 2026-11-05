@@ -29,6 +29,20 @@ class CheckpointCommit(Model):
     summary: str
 
 
+class RunTests(Model):
+    command_ids: list[str]
+
+
+class Empty(Model):
+    pass
+
+
+class ReadEvidence(Model):
+    evidence_id: str
+    offset: int = Field(default=0, ge=0)
+    limit: int = Field(default=8000, ge=1, le=8000)
+
+
 TOOLS = {
     "edit_file": (
         EditFile,
@@ -41,7 +55,31 @@ TOOLS = {
 }
 
 
+TEST_TOOLS = {
+    "edit_file": TOOLS["edit_file"],
+    "test_policy": (
+        Empty,
+        "Read the immutable host-required command set for the current candidate.",
+    ),
+    "run_tests": (
+        RunTests,
+        "Commit pending test edits and run exactly the host-required command IDs; inspect actual outcomes and returned evidence_id.",
+    ),
+    "read_test_evidence": (
+        ReadEvidence,
+        "Read a bounded slice of this tester attempt host evidence.",
+    ),
+}
+
+
 def dispatch(session, request):
+    catalog = (
+        {"read_test_evidence": TEST_TOOLS["read_test_evidence"]}
+        if session.data["role"] == "reviewer"
+        else TEST_TOOLS
+        if session.data["role"] == "tester"
+        else TOOLS
+    )
     method = request.get("method")
     if method == "initialize":
         return {
@@ -55,17 +93,17 @@ def dispatch(session, request):
         return {
             "tools": [
                 {"name": name, "description": description, "inputSchema": model.model_json_schema()}
-                for name, (model, description) in TOOLS.items()
+                for name, (model, description) in catalog.items()
             ]
         }
     if method != "tools/call":
         raise PipelineError("unsupported workspace MCP method")
     params = request["params"]
     name = params["name"]
-    if name not in TOOLS:
+    if name not in catalog:
         raise PipelineError("unsupported workspace tool")
     try:
-        args = TOOLS[name][0].model_validate(params.get("arguments", {}), strict=True)
+        args = catalog[name][0].model_validate(params.get("arguments", {}), strict=True)
         with execution_scope(session.path.parent):
             result = getattr(session, name)(**args.model_dump())
         return {"content": [{"type": "text", "text": json.dumps(result, ensure_ascii=False)}]}

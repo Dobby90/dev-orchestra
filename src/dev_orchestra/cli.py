@@ -4,6 +4,7 @@ import functools
 import json
 import time
 from pathlib import Path
+from typing import Literal
 
 import typer
 from pydantic import ValidationError
@@ -51,9 +52,10 @@ def run(
     base: str | None = None,
     max_fix_attempts: int | None = typer.Option(None, min=0),
     detach: bool = False,
+    test_scope: Literal["full", "affected"] = typer.Option("full", "--test-scope"),
 ):
     service = ctx.obj
-    run_id = service.create(repo, spec, base, max_fix_attempts)
+    run_id = service.create(repo, spec, base, max_fix_attempts, test_scope=test_scope)
     typer.echo(run_id)
     service.start(run_id, detached=detach)
     if not detach:

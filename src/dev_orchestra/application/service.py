@@ -33,8 +33,10 @@ class RunService:
         self.recovery = RecoveryService(self.store, self.refresh_report)
         self.execution = ExecutionService(self.store, self.status)
 
-    def create(self, repo: Path, spec: Path, base=None, max_fixes=None):
-        command = CreateRun(repo=repo, spec=spec, base=base, max_fixes=max_fixes)
+    def create(self, repo: Path, spec: Path, base=None, max_fixes=None, test_scope="full"):
+        command = CreateRun(
+            repo=repo, spec=spec, base=base, max_fixes=max_fixes, test_scope=test_scope
+        )
         return self.create_run(command)
 
     def create_run(self, command: CreateRun):
@@ -84,6 +86,8 @@ class RunService:
             if path.resolve().is_relative_to(root.resolve()):
                 raise PipelineError("storage and worktrees must be outside the target repository")
         data = {
+            "test_scope": command.test_scope,
+            "test_selection_contract": 1,
             "execution_contract": self.execution_contract,
             "id": run_id,
             "repo": str(repo),

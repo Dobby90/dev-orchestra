@@ -17,4 +17,5 @@ def writes_workspace(request):
     return execution_contract(request.context) == WORKSPACE_V2 and request.role in {
         "developer",
         "fixer",
+        "tester",
     }

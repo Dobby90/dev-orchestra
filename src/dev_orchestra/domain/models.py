@@ -81,6 +81,12 @@ class WorkspaceResult(Model):
     no_change_reason: str = ""
 
 
+class WorkspaceTestResult(WorkspaceResult):
+    command_ids: list[str] = Field(default_factory=list)
+    coverage: list[Coverage] = Field(default_factory=list)
+    test_evidence_id: str = ""
+
+
 class PipelineError(RuntimeError):
     """Safe, user-facing workflow failure."""
 

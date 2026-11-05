@@ -105,6 +105,7 @@ class StoredSpec(Input):
 
 
 class Proposal(Input):
+    test_scope: Literal["full", "affected"] = "full"
     project_id: str = Field(pattern=r"^prj-[0-9a-f]{32}$")
     spec: Annotated[TextSpec | StoredSpec, Field(discriminator="kind")]
     base_branch: str | None = None
@@ -246,6 +247,7 @@ class ValidationView(BaseModel):
 
 
 class RunDetail(RunSummary):
+    test_scope: Literal["full", "affected"] = "full"
     plan: str | None = None
     criteria: list[dict[str, str]] = Field(default_factory=list)
     plan_hash: str | None = None
@@ -286,6 +288,8 @@ class SpecContent(BaseModel):
 
 
 class PreviewView(BaseModel):
+    test_scope: Literal["full", "affected"] = "full"
+    test_scope_notice: str = ""
     run_id: str
     branch: str
     base_sha: str
@@ -428,7 +432,28 @@ class CommandView(BaseModel):
     error: str | None = None
 
 
+class TestSelectionView(BaseModel):
+    command_reasons: dict[str, str] = Field(default_factory=dict)
+    input_error: str | None = None
+    selector_version: int
+    requested_scope: Literal["full", "affected"]
+    actual_scope: Literal["full", "affected"]
+    expanded: bool
+    reasons: list[str]
+    included: list[str]
+    excluded: list[str]
+    changed_files: list[str]
+    base_sha: str
+    candidate_sha: str
+    revision: int
+    policy_hash: str
+    criteria_hash: str
+    commands_hash: str
+    selection_hash: str
+
+
 class TestResultView(BaseModel):
+    selection: TestSelectionView | None = None
     status: Literal[
         "not_run", "running", "passed", "failed", "unavailable", "parse_error", "timeout", "unknown"
     ]

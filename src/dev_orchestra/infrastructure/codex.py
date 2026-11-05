@@ -1,4 +1,4 @@
-"""Codex exec adapter. Fresh read-only sessions return validated patches."""
+"""Codex exec adapter with read-only shells and role-scoped host tools."""
 
 import json
 import sys
@@ -13,6 +13,7 @@ from dev_orchestra.domain.models import (
     PipelineError,
     ReviewResultV2,
     WorkspaceResult,
+    WorkspaceTestResult,
 )
 from dev_orchestra.infrastructure.agent_usage import UsageCollector
 from dev_orchestra.infrastructure.files import write
@@ -60,6 +61,14 @@ class CodexClient:
             raise PipelineError("workspace tools unavailable for this role")
         self.check_workspace(request, directory, session, stop)
         descriptor = directory / "workspace-launch.json"
+        write(descriptor, {"session": str(session.path), "database": str(session.store.path)})
+        return self.run(request, directory, stop, _workspace=descriptor)
+
+    def run_readonly(self, request, directory, session, stop=lambda: None):
+        if request.role != "reviewer":
+            raise PipelineError("read-only evidence tools are restricted to reviewer")
+        self.check_workspace(request, directory, session, stop)
+        descriptor = directory / "review-evidence-launch.json"
         write(descriptor, {"session": str(session.path), "database": str(session.store.path)})
         return self.run(request, directory, stop, _workspace=descriptor)
 
@@ -131,7 +140,7 @@ class CodexClient:
         schema = directory / "schema.json"
         result = directory / "response.json"
         model = (
-            WorkspaceResult
+            (WorkspaceTestResult if request.role == "tester" else WorkspaceResult)
             if writes_workspace(request)
             else (
                 ReviewResultV2
@@ -173,7 +182,13 @@ class CodexClient:
                 "args": ["-I", "-m", "dev_orchestra.infrastructure.workspace_mcp", str(_workspace)],
                 "required": True,
                 "default_tools_approval_mode": "approve",
-                "enabled_tools": ["edit_file", "checkpoint_commit"],
+                "enabled_tools": (
+                    ["edit_file", "test_policy", "run_tests", "read_test_evidence"]
+                    if request.role == "tester"
+                    else ["read_test_evidence"]
+                    if request.role == "reviewer"
+                    else ["edit_file", "checkpoint_commit"]
+                ),
             }.items():
                 argv += ["-c", "mcp_servers.workspace." + key + "=" + json.dumps(value)]
         options = self.config.for_role(request.role)
@@ -207,7 +222,7 @@ class CodexClient:
             required = set(model.model_fields)
             if not isinstance(raw, dict) or set(raw) not in (required, fields):
                 raise ValueError("incomplete role response")
-            if "no_change_reason" in raw and model is not WorkspaceResult:
+            if "no_change_reason" in raw and model not in {WorkspaceResult, WorkspaceTestResult}:
                 reason = raw.pop("no_change_reason")
                 if not isinstance(reason, str):
                     raise ValueError("no_change_reason must be a string")

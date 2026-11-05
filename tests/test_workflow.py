@@ -47,8 +47,23 @@ class FakeAgent:
 
 
 class FakeTests:
-    def run(self, *args):
-        return {"passed": True, "commands": [{"exit_code": 0, "total": 1}]}
+    def run(self, worktree, config, directory, stop=lambda: None):
+        return {
+            "passed": True,
+            "status": "passed",
+            "commands": [
+                {
+                    "command_id": key,
+                    "kind": command.kind,
+                    "argv": command.argv,
+                    "exit_code": 0,
+                    "total": 1,
+                    "passed": True,
+                    "status": "passed",
+                }
+                for key, command in config.commands.items()
+            ],
+        }
 
 
 @pytest.fixture
@@ -59,6 +74,8 @@ def service(tmp_path, monkeypatch):
     def legacy_snapshot(self, *args, **kwargs):
         data = prepare(self, *args, **kwargs)
         data.pop("plan_approval_required", None)
+        data.pop("test_selection_contract", None)
+        data.pop("test_scope", None)
         return data
 
     monkeypatch.setattr(RunService, "prepare_run", legacy_snapshot)

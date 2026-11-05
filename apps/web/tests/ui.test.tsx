@@ -32,6 +32,7 @@ const p: Project = {
   schema_version: 1,
 };
 const detail: Schema["RunDetail"] = {
+  test_scope: "full",
   deletion_pending: false,
   test_change_pending: false,
   test_change_count: 0,
@@ -370,6 +371,8 @@ describe("화면·위험 명령", () => {
     vi.spyOn(api, "project").mockResolvedValue(p);
     vi.spyOn(api, "branches").mockResolvedValue({ items: ["main"] });
     vi.spyOn(api, "preview").mockResolvedValue({
+      test_scope: "full",
+      test_scope_notice: "영향 판단 실패 시 전체 검사",
       run_id: "r1",
       branch: "feature/x",
       base_sha: "b".repeat(40),
@@ -398,13 +401,19 @@ describe("화면·위험 명령", () => {
     await userEvent.keyboard("{Escape}");
     expect(screen.getByLabelText("PRD")).toHaveValue("작업 요구사항");
     expect(api.preview).not.toHaveBeenCalled();
+    expect(screen.getByLabelText("테스트 범위")).toHaveValue("full");
+    await userEvent.selectOptions(
+      screen.getByLabelText("테스트 범위"),
+      "affected",
+    );
     await userEvent.click(screen.getByRole("button", { name: "실행 전 확인" }));
     expect(
       await screen.findByRole("button", { name: "확인하고 작업 시작" }),
     ).toBeVisible();
-    fireEvent.change(screen.getByLabelText("PRD"), {
-      target: { value: "새 요구사항" },
-    });
+    expect(api.preview).toHaveBeenCalledWith(
+      expect.objectContaining({ test_scope: "affected" }),
+    );
+    await userEvent.selectOptions(screen.getByLabelText("테스트 범위"), "full");
     expect(
       screen.queryByRole("button", { name: "확인하고 작업 시작" }),
     ).not.toBeInTheDocument();

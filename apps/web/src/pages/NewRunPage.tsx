@@ -25,6 +25,7 @@ export function NewRunPage() {
     [branch, setBranch] = useState(""),
     [instructions, setInstructions] = useState(""),
     [budget, setBudget] = useState(""),
+    [testScope, setTestScope] = useState<"full" | "affected">("full"),
     [localError, setLocalError] = useState("");
   const projects = useInfiniteQuery({
     queryKey: ["projects", "choices"],
@@ -94,6 +95,7 @@ export function NewRunPage() {
           ? { kind: "text", text }
           : { kind: "stored", spec_id: upload.data!.id },
       additional_instructions: instructions,
+      test_scope: testScope,
       run_tests: true,
       run_review: true,
       ...(base ? { base_branch: base } : {}),
@@ -269,6 +271,24 @@ export function NewRunPage() {
                 />
               </label>
               <label>
+                테스트 범위
+                <select
+                  value={testScope}
+                  onChange={(e) =>
+                    edit(() =>
+                      setTestScope(e.target.value as "full" | "affected"),
+                    )
+                  }
+                >
+                  <option value="full">전체 테스트</option>
+                  <option value="affected">변경 영향 범위 테스트</option>
+                </select>
+              </label>
+              <p className="help">
+                생성 후에는 범위를 변경할 수 없습니다. 영향 판단 근거가
+                부족하거나 공통 코드가 바뀌면 전체 검사로 확대합니다.
+              </p>
+              <label>
                 자동 수정 최대 횟수
                 <input
                   type="number"
@@ -386,6 +406,12 @@ export function NewRunPage() {
                 <dd className="mono">{preview.data.receipt.branch}</dd>
                 <dt>기준 커밋</dt>
                 <dd className="mono path">{preview.data.receipt.base_sha}</dd>
+                <dt>테스트 범위</dt>
+                <dd>
+                  {preview.data.proposal.test_scope === "affected"
+                    ? "변경 영향 범위 테스트"
+                    : "전체 테스트"}
+                </dd>
                 <dt>최대 수정 횟수</dt>
                 <dd>
                   {preview.data.proposal.max_fix_attempts ??
@@ -400,6 +426,7 @@ export function NewRunPage() {
                   ).toLocaleTimeString("ko-KR")}
                 </dd>
               </dl>
+              <p className="help">{preview.data.receipt.test_scope_notice}</p>
               {(preview.data.receipt.validation_warnings ?? []).map(
                 (warning, index) => (
                   <p className="notice" key={index}>

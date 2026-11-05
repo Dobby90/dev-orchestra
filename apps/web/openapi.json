@@ -2366,6 +2366,57 @@
   },
   "components": {
     "schemas": {
+      "AffectedTests": {
+        "properties": {
+          "inputs": {
+            "additionalProperties": {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "type": "object",
+            "title": "Inputs"
+          },
+          "dependencies": {
+            "additionalProperties": {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "type": "object",
+            "title": "Dependencies"
+          },
+          "required_commands": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Required Commands"
+          },
+          "criterion_commands": {
+            "additionalProperties": {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "type": "object",
+            "title": "Criterion Commands"
+          },
+          "global_paths": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Global Paths"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "title": "AffectedTests"
+      },
       "AgentAttemptView": {
         "properties": {
           "model": {
@@ -3705,6 +3756,20 @@
       },
       "PreviewView": {
         "properties": {
+          "test_scope": {
+            "type": "string",
+            "enum": [
+              "full",
+              "affected"
+            ],
+            "title": "Test Scope",
+            "default": "full"
+          },
+          "test_scope_notice": {
+            "type": "string",
+            "title": "Test Scope Notice",
+            "default": ""
+          },
           "run_id": {
             "type": "string",
             "title": "Run Id"
@@ -3941,6 +4006,15 @@
       },
       "Proposal": {
         "properties": {
+          "test_scope": {
+            "type": "string",
+            "enum": [
+              "full",
+              "affected"
+            ],
+            "title": "Test Scope",
+            "default": "full"
+          },
           "project_id": {
             "type": "string",
             "pattern": "^prj-[0-9a-f]{32}$",
@@ -4327,6 +4401,15 @@
       },
       "RunCreate": {
         "properties": {
+          "test_scope": {
+            "type": "string",
+            "enum": [
+              "full",
+              "affected"
+            ],
+            "title": "Test Scope",
+            "default": "full"
+          },
           "project_id": {
             "type": "string",
             "pattern": "^prj-[0-9a-f]{32}$",
@@ -4511,6 +4594,15 @@
               }
             ],
             "title": "Control"
+          },
+          "test_scope": {
+            "type": "string",
+            "enum": [
+              "full",
+              "affected"
+            ],
+            "title": "Test Scope",
+            "default": "full"
           },
           "plan": {
             "anyOf": [
@@ -5440,6 +5532,16 @@
       },
       "TestResultView": {
         "properties": {
+          "selection": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/TestSelectionView"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "status": {
             "type": "string",
             "enum": [
@@ -5586,6 +5688,127 @@
         ],
         "title": "TestResultView"
       },
+      "TestSelectionView": {
+        "properties": {
+          "command_reasons": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "type": "object",
+            "title": "Command Reasons"
+          },
+          "input_error": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Input Error"
+          },
+          "selector_version": {
+            "type": "integer",
+            "title": "Selector Version"
+          },
+          "requested_scope": {
+            "type": "string",
+            "enum": [
+              "full",
+              "affected"
+            ],
+            "title": "Requested Scope"
+          },
+          "actual_scope": {
+            "type": "string",
+            "enum": [
+              "full",
+              "affected"
+            ],
+            "title": "Actual Scope"
+          },
+          "expanded": {
+            "type": "boolean",
+            "title": "Expanded"
+          },
+          "reasons": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Reasons"
+          },
+          "included": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Included"
+          },
+          "excluded": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Excluded"
+          },
+          "changed_files": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Changed Files"
+          },
+          "base_sha": {
+            "type": "string",
+            "title": "Base Sha"
+          },
+          "candidate_sha": {
+            "type": "string",
+            "title": "Candidate Sha"
+          },
+          "revision": {
+            "type": "integer",
+            "title": "Revision"
+          },
+          "policy_hash": {
+            "type": "string",
+            "title": "Policy Hash"
+          },
+          "criteria_hash": {
+            "type": "string",
+            "title": "Criteria Hash"
+          },
+          "commands_hash": {
+            "type": "string",
+            "title": "Commands Hash"
+          },
+          "selection_hash": {
+            "type": "string",
+            "title": "Selection Hash"
+          }
+        },
+        "type": "object",
+        "required": [
+          "selector_version",
+          "requested_scope",
+          "actual_scope",
+          "expanded",
+          "reasons",
+          "included",
+          "excluded",
+          "changed_files",
+          "base_sha",
+          "candidate_sha",
+          "revision",
+          "policy_hash",
+          "criteria_hash",
+          "commands_hash",
+          "selection_hash"
+        ],
+        "title": "TestSelectionView"
+      },
       "Tests": {
         "properties": {
           "commands": {
@@ -5608,6 +5831,16 @@
             },
             "type": "array",
             "title": "Output Paths"
+          },
+          "affected": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/AffectedTests"
+              },
+              {
+                "type": "null"
+              }
+            ]
           }
         },
         "additionalProperties": false,

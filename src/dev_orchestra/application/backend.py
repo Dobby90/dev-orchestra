@@ -215,6 +215,8 @@ class BackendService:
         token = raw + "." + hmac.new(self.key, raw.encode(), hashlib.sha256).hexdigest()
         return {
             **value,
+            "test_scope": proposal.test_scope,
+            "test_scope_notice": "영향 판단 근거가 부족하거나 공통 코드가 바뀌면 전체 검사로 확대합니다.",
             "preview_token": token,
             "spec_sha256": hashlib.sha256(text.encode()).hexdigest(),
             "validation_warnings": policy_warnings(config, info),
@@ -286,6 +288,7 @@ class BackendService:
                     spec=spec,
                     base=proposal.base_branch,
                     max_fixes=proposal.max_fix_attempts,
+                    test_scope=proposal.test_scope,
                 ),
                 run_id=receipt["run_id"],
                 branch=receipt["branch"],

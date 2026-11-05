@@ -781,6 +781,25 @@ export interface paths {
 export type webhooks = Record<string, never>;
 export interface components {
     schemas: {
+        /** AffectedTests */
+        AffectedTests: {
+            /** Inputs */
+            inputs?: {
+                [key: string]: string[];
+            };
+            /** Dependencies */
+            dependencies?: {
+                [key: string]: string[];
+            };
+            /** Required Commands */
+            required_commands?: string[];
+            /** Criterion Commands */
+            criterion_commands?: {
+                [key: string]: string[];
+            };
+            /** Global Paths */
+            global_paths?: string[];
+        };
         /** AgentAttemptView */
         AgentAttemptView: {
             /** Model */
@@ -1216,6 +1235,17 @@ export interface components {
         };
         /** PreviewView */
         PreviewView: {
+            /**
+             * Test Scope
+             * @default full
+             * @enum {string}
+             */
+            test_scope: "full" | "affected";
+            /**
+             * Test Scope Notice
+             * @default
+             */
+            test_scope_notice: string;
             /** Run Id */
             run_id: string;
             /** Branch */
@@ -1303,6 +1333,12 @@ export interface components {
         };
         /** Proposal */
         Proposal: {
+            /**
+             * Test Scope
+             * @default full
+             * @enum {string}
+             */
+            test_scope: "full" | "affected";
             /** Project Id */
             project_id: string;
             /** Spec */
@@ -1425,6 +1461,12 @@ export interface components {
         };
         /** RunCreate */
         RunCreate: {
+            /**
+             * Test Scope
+             * @default full
+             * @enum {string}
+             */
+            test_scope: "full" | "affected";
             /** Project Id */
             project_id: string;
             /** Spec */
@@ -1485,6 +1527,12 @@ export interface components {
             current_role?: string | null;
             /** Control */
             control?: ("cancel" | "pause") | null;
+            /**
+             * Test Scope
+             * @default full
+             * @enum {string}
+             */
+            test_scope: "full" | "affected";
             /** Plan */
             plan?: string | null;
             /** Criteria */
@@ -1818,6 +1866,7 @@ export interface components {
         };
         /** TestResultView */
         TestResultView: {
+            selection?: components["schemas"]["TestSelectionView"] | null;
             /**
              * Status
              * @enum {string}
@@ -1848,6 +1897,51 @@ export interface components {
             /** Legacy Incomplete */
             legacy_incomplete: boolean;
         };
+        /** TestSelectionView */
+        TestSelectionView: {
+            /** Command Reasons */
+            command_reasons?: {
+                [key: string]: string;
+            };
+            /** Input Error */
+            input_error?: string | null;
+            /** Selector Version */
+            selector_version: number;
+            /**
+             * Requested Scope
+             * @enum {string}
+             */
+            requested_scope: "full" | "affected";
+            /**
+             * Actual Scope
+             * @enum {string}
+             */
+            actual_scope: "full" | "affected";
+            /** Expanded */
+            expanded: boolean;
+            /** Reasons */
+            reasons: string[];
+            /** Included */
+            included: string[];
+            /** Excluded */
+            excluded: string[];
+            /** Changed Files */
+            changed_files: string[];
+            /** Base Sha */
+            base_sha: string;
+            /** Candidate Sha */
+            candidate_sha: string;
+            /** Revision */
+            revision: number;
+            /** Policy Hash */
+            policy_hash: string;
+            /** Criteria Hash */
+            criteria_hash: string;
+            /** Commands Hash */
+            commands_hash: string;
+            /** Selection Hash */
+            selection_hash: string;
+        };
         /** Tests */
         Tests: {
             /** Commands */
@@ -1858,6 +1952,7 @@ export interface components {
             write_paths?: string[];
             /** Output Paths */
             output_paths?: string[];
+            affected?: components["schemas"]["AffectedTests"] | null;
         };
         /** TextSpec */
         TextSpec: {

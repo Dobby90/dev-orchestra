@@ -241,7 +241,11 @@ class Runner:
                             error="response repair budget exhausted or interrupted; inspect before continuing",
                         )
                         return
-                if execution_contract(run) == WORKSPACE_V2 and role in {"developer", "fixer"}:
+                if execution_contract(run) == WORKSPACE_V2 and role in {
+                    "developer",
+                    "fixer",
+                    "tester",
+                }:
                     # Continuing an interrupted role is introduced in stage 3. Until then,
                     # never silently restart an already edited/checkpointed role at a new SHA.
                     for previous in self.store.steps(run_id):
@@ -291,6 +295,7 @@ class Runner:
                     "review_contract": run.get("review_contract", 1),
                     "base_sha": run["base_sha"],
                     "test_paths": config.tests.write_paths,
+                    "test_scope": run.get("test_scope", "full"),
                     "test_commands": {k: v.model_dump() for k, v in config.tests.commands.items()},
                     "approved_test_changes": run.get("test_change_approvals", []),
                     "test_change_records": run.get("test_change_records", []),
@@ -320,14 +325,32 @@ class Runner:
                     input_sha=sha,
                     context=context,
                 )
+                from dev_orchestra.application.test_selection import select_tests
+
+                selection = (
+                    select_tests(run, worktree, sha)
+                    if role == "tester" and run.get("test_selection_contract")
+                    else None
+                )
+                if selection:
+                    request.context["test_selection"] = selection
+                if role == "fixer" and run.get("review_contract") == 2:
+                    from dev_orchestra.application.reviews import Reviews
+
+                    request.context["open_issues"] = Reviews(self.store).open(run_id)
+                if run.get("test_selection_contract") or execution_contract(run) == WORKSPACE_V2:
+                    from dev_orchestra.agents.context import role_context
+
+                    role_context(request)
                 approval, record = None, None
-                workspace, workspace_commits = None, []
+                workspace, workspace_commits, workspace_execution = None, [], None
                 if writes_workspace(request):
                     from dev_orchestra.infrastructure.workspace import WorkspaceSession
 
                     if not hasattr(self.agent, "run_workspace"):
                         raise PipelineError("agent adapter does not support workspace contract")
                     workspace = WorkspaceSession.create(self.store, run, request, step_id, step_dir)
+                    workspace._test_runner = self.tests
                 test_changes = TestChangeService(self.store)
                 if run.get("test_change_application"):
                     result, record, approval = test_changes.applied_result(run)
@@ -352,9 +375,17 @@ class Runner:
                     if workspace:
                         request.context["response_contract"].pop("patch_format")
                         request.context["response_contract"]["edit_tool"] = "workspace.edit_file"
-                        request.context["response_contract"]["checkpoint_tool"] = (
-                            "workspace.checkpoint_commit"
-                        )
+                        if role == "tester":
+                            request.context["response_contract"]["run_tests_tool"] = (
+                                "workspace.run_tests"
+                            )
+                            request.context["response_contract"]["command_ids"] = (
+                                selection["included"] if selection else list(config.tests.commands)
+                            )
+                        else:
+                            request.context["response_contract"]["checkpoint_tool"] = (
+                                "workspace.checkpoint_commit"
+                            )
                     result = None
                     try:
                         if workspace:
@@ -365,6 +396,26 @@ class Runner:
                                 lambda: self.store.get(run_id)["control"],
                             )
                             result, workspace_sha, workspace_commits = workspace.finish(response)
+                            if role == "tester" and not result.questions:
+                                workspace_execution = workspace.load_test_result(response)
+                                selection = workspace_execution["selection"]
+                        elif (
+                            role == "reviewer"
+                            and run.get("test_selection_contract")
+                            and hasattr(self.agent, "run_readonly")
+                        ):
+                            from dev_orchestra.infrastructure.workspace import ReviewEvidenceSession
+
+                            readonly = ReviewEvidenceSession.create(
+                                self.store, run, step_id, step_dir
+                            )
+                            request.context["test_evidence_id"] = readonly.data["evidence_id"]
+                            result = self.agent.run_readonly(
+                                request,
+                                step_dir,
+                                readonly,
+                                lambda: self.store.get(run_id)["control"],
+                            )
                         else:
                             result = self.agent.run(
                                 request, step_dir, lambda: self.store.get(run_id)["control"]
@@ -374,7 +425,15 @@ class Runner:
                         validate_role(role, result)
                         if not result.questions and not workspace:
                             if role == "tester":
-                                self.validate_test_result(run, result, config)
+                                self.validate_test_result(
+                                    run,
+                                    result,
+                                    config,
+                                    selection,
+                                    legacy_scope=(
+                                        run.get("test_scope") == "affected" and not workspace
+                                    ),
+                                )
                             try:
                                 validate_patch(
                                     worktree, result.patch, role, config.tests.write_paths
@@ -450,7 +509,13 @@ class Runner:
                         if not issue.evidence.strip():
                             raise PipelineError("review finding requires evidence")
                 if role == "tester":
-                    self.validate_test_result(run, result, config)
+                    self.validate_test_result(
+                        run,
+                        result,
+                        config,
+                        selection,
+                        legacy_scope=(run.get("test_scope") == "affected" and not workspace),
+                    )
                 if workspace:
                     workspace.guard()
                     out_sha = workspace_sha
@@ -537,9 +602,35 @@ class Runner:
                 if record:
                     payload["test_change_record"] = record
                 if role == "tester":
-                    payload["execution"] = self.tests.run(
-                        worktree, config.tests, step_dir, lambda: self.store.get(run_id)["control"]
-                    )
+                    if workspace_execution:
+                        payload["execution"] = workspace_execution["execution"]
+                        payload["test_evidence_reference"] = workspace.data["test_evidence"]
+                    else:
+                        from dev_orchestra.application.test_selection import selected_config
+
+                        selection = (
+                            select_tests(run, worktree, out_sha)
+                            if run.get("test_selection_contract")
+                            else None
+                        )
+                        self.validate_test_result(
+                            run,
+                            result,
+                            config,
+                            selection,
+                            legacy_scope=(run.get("test_scope") == "affected" and not workspace),
+                        )
+                        payload["execution"] = self.tests.run(
+                            worktree,
+                            selected_config(run, selection) if selection else config.tests,
+                            step_dir,
+                            lambda: self.store.get(run_id)["control"],
+                        )
+                    if selection:
+                        payload["test_selection"] = selection
+                        from dev_orchestra.application.test_selection import verify_selection
+
+                        verify_selection(run, payload)
                     if git.dirty() or git.sha() != out_sha:
                         raise PipelineError(
                             "test execution modified tracked source or created untracked files"
@@ -605,14 +696,15 @@ class Runner:
                 return
 
     @staticmethod
-    def validate_test_result(run, result, config):
-        ids = set(config.tests.commands)
-        if set(result.command_ids) != ids or len(result.command_ids) != len(ids):
+    def validate_test_result(run, result, config, selection=None, *, legacy_scope=False):
+        ids = set(selection["included"]) if selection else set(config.tests.commands)
+        reported_ids = set(config.tests.commands) if legacy_scope else ids
+        if set(result.command_ids) != reported_ids or len(result.command_ids) != len(reported_ids):
             raise ResponseError(
-                f"tester command_ids mismatch: expected={sorted(ids)}, received={result.command_ids}"
+                f"tester command_ids mismatch: expected={sorted(reported_ids)}, received={result.command_ids}"
             )
         criteria = {c["id"] for c in run["criteria"]}
-        test_ids = {k for k, v in config.tests.commands.items() if v.kind == "test"}
+        test_ids = {k for k, v in config.tests.commands.items() if v.kind == "test" and k in ids}
         coverage = {c.criterion_id: c.command_ids for c in result.coverage}
         if (
             len(result.coverage) != len(criteria)
@@ -626,6 +718,13 @@ class Runner:
                 f"allowed_commands={sorted(ids)}, received_commands={coverage}; "
                 "include each criterion exactly once with at least one configured test command"
             )
+        if selection and selection["actual_scope"] == "affected":
+            mapping = config.tests.affected.criterion_commands
+            if any(
+                not set(commands) & set(mapping[key]) & test_ids
+                for key, commands in coverage.items()
+            ):
+                raise ResponseError("coverage must reference the host criterion-to-test mapping")
 
     def advance(self, run_id, role, payload, config):
         run = self.store.get(run_id)
@@ -709,6 +808,16 @@ class Runner:
         content += "\n\n## Requirements\n\n" + run["spec"]
         if run.get("directives"):
             content += "\n\n## User change requests\n\n" + "\n\n".join(run["directives"])
+        content += "\n\n## 테스트 범위\n\n요청 범위: " + run.get("test_scope", "full")
+        selection = (run.get("test_result") or {}).get("test_selection")
+        if selection:
+            content += "\n\n실제 범위: " + selection["actual_scope"]
+            content += "\n\n실행 명령: " + ", ".join(selection["included"])
+            content += "\n\n미실행 명령: " + (", ".join(selection["excluded"]) or "없음")
+            content += "\n\n" + "\n".join(selection["reasons"])
+            content += "\n\n" + "\n".join(
+                key + ": " + value for key, value in selection.get("command_reasons", {}).items()
+            )
         if run.get("test_change_records"):
             content += "\n\n## 기존 테스트 변경\n\n최종 승인 전에 전체 Diff와 다음 변경 근거를 확인하세요.\n\n"
             for record in run["test_change_records"]:

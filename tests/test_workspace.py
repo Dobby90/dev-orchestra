@@ -14,8 +14,10 @@ from dev_orchestra.config import Config
 from dev_orchestra.domain.execution import PATCH_V1, WORKSPACE_V2, execution_contract
 from dev_orchestra.domain.models import (
     AgentRequest,
+    Coverage,
     PipelineError,
     WorkspaceResult,
+    WorkspaceTestResult,
 )
 from dev_orchestra.infrastructure.codex import CodexClient
 from dev_orchestra.infrastructure.files import digest, write
@@ -66,7 +68,7 @@ def start_session(setup, role="developer"):
     git.create(root, run["branch"], run["base_sha"])
     svc.store.update(
         run_id,
-        "developing" if role == "developer" else "fixing",
+        "testing" if role == "tester" else "developing" if role == "developer" else "fixing",
         next_role=role,
         current_sha=run["base_sha"],
         criteria=[{"id": "AC1", "description": "new behavior"}],
@@ -263,6 +265,14 @@ def test_runner_keeps_plan_approval_and_fix_loop(setup):
     class Agent(FakeAgent):
         def run_workspace(self, req, directory, session, stop):
             self.calls.append(req.role)
+            if req.role == "tester":
+                value = session.run_tests(session.test_policy()["included"])
+                return WorkspaceTestResult(
+                    summary="실제 테스트 확인",
+                    test_evidence_id=value["evidence_id"],
+                    command_ids=value["selection"]["included"],
+                    coverage=[Coverage(criterion_id="AC1", command_ids=["unit"])],
+                )
             edit(session, "main.py", req.role + "\n")
             edit(
                 session,

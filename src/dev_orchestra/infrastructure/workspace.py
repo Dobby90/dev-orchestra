@@ -8,19 +8,34 @@ import json
 import os
 import re
 import stat
+from copy import deepcopy
 from pathlib import Path
 
 from dev_orchestra.agents.policy import in_paths
 from dev_orchestra.application.test_changes import TestChangeService, checksum
 from dev_orchestra.config import Config
 from dev_orchestra.domain.execution import WORKSPACE_V2, execution_contract
-from dev_orchestra.domain.models import AgentResult, PipelineError, TestChange, WorkspaceResult
+from dev_orchestra.domain.models import (
+    AgentResult,
+    PipelineError,
+    StopRequested,
+    TestChange,
+    WorkspaceResult,
+)
 from dev_orchestra.infrastructure.files import contained, digest, write
 from dev_orchestra.infrastructure.git import Git
 from dev_orchestra.infrastructure.process import redact, sanitize
 from dev_orchestra.infrastructure.store import Store
 
 DEPENDENCIES = {"node_modules", ".venv", "__pycache__", ".mypy_cache", ".ruff_cache"}
+
+
+def workspace_policy_hash(run):
+    config = deepcopy(run["config"])
+    # Raising the existing repair budget is an authorized resume operation,
+    # not a change to editing permissions, test commands or selection policy.
+    config.get("workflow", {}).pop("max_fix_attempts", None)
+    return checksum({"config": config, "test_scope": run.get("test_scope", "full")})
 
 
 def dependency_path(name):
@@ -37,8 +52,12 @@ class WorkspaceSession:
 
     @classmethod
     def create(cls, store, run, request, step_id, directory):
-        if execution_contract(run) != WORKSPACE_V2 or request.role not in {"developer", "fixer"}:
-            raise PipelineError("workspace editing is restricted to developer/fixer")
+        if execution_contract(run) != WORKSPACE_V2 or request.role not in {
+            "developer",
+            "fixer",
+            "tester",
+        }:
+            raise PipelineError("workspace editing is restricted to developer/tester/fixer")
         git = Git(Path(run["worktree"]))
         if git.sha() != request.input_sha or git.call("diff", "--cached", "--name-only"):
             raise PipelineError("workspace session requires unchanged HEAD and empty index")
@@ -58,7 +77,8 @@ class WorkspaceSession:
             "input_sha": request.input_sha,
             "current_sha": request.input_sha,
             "step_id": step_id,
-            "policy_hash": checksum(run["config"]),
+            "policy_hash": workspace_policy_hash(run),
+            "policy_hash_version": 2,
             "task_hash": checksum(
                 {
                     k: run.get(k)
@@ -134,7 +154,7 @@ class WorkspaceSession:
             or step["status"] != "running"
             or step["role"] != self.data["role"]
             or step["input_sha"] != self.data["input_sha"]
-            or run["state"] not in {"developing", "fixing"}
+            or run["state"] not in {"developing", "fixing", "testing"}
         ):
             raise PipelineError("workspace stage ownership expired")
         if (
@@ -150,7 +170,12 @@ class WorkspaceSession:
             or Path(run["worktree"]).resolve() != self.root
             or run["branch"] != self.data["branch"]
             or run["repo"] != self.data["repo"]
-            or checksum(run["config"]) != self.data["policy_hash"]
+            or (
+                workspace_policy_hash(run)
+                if self.data.get("policy_hash_version") == 2
+                else checksum(run["config"])
+            )
+            != self.data["policy_hash"]
             or checksum(
                 {
                     k: run.get(k)
@@ -179,6 +204,8 @@ class WorkspaceSession:
         """Replace one UTF-8 file, with CAS and requirement-bound test authorization."""
         self.reload()
         self.guard()
+        if self.data.get("testing"):
+            raise PipelineError("test execution is in progress; edits are locked")
         path = contained(self.root, file)
         if str(path.relative_to(self.root)) != file or any(c.isspace() for c in file):
             raise PipelineError("unsupported workspace path")
@@ -200,6 +227,8 @@ class WorkspaceSession:
                 raise PipelineError("binary source edits denied") from error
         run = self.store.get(self.run_id)
         tests = Config.model_validate(run["config"]).tests.write_paths
+        if self.data["role"] == "tester" and not in_paths(file, tests):
+            raise PipelineError("test agent attempted production change")
         if file in self.data["initial"] and in_paths(file, tests):
             if not test_change:
                 raise PipelineError("existing tests require requirement-bound change evidence")
@@ -240,6 +269,8 @@ class WorkspaceSession:
 
     def checkpoint_commit(self, request_id, expected_sha, files, message, summary):
         self.reload()
+        if self.data.get("testing"):
+            raise PipelineError("test execution is in progress; commits are locked")
         if not re.fullmatch(r"[A-Za-z0-9_-]{1,80}", request_id):
             raise PipelineError("invalid checkpoint request ID")
         args = {
@@ -320,6 +351,7 @@ class WorkspaceSession:
                     "task_hash",
                 ]
             },
+            "policy_hash_version": self.data.get("policy_hash_version", 1),
             "request_hash": checksum(args),
             "parent": expected_sha,
             "tree": tree,
@@ -344,9 +376,191 @@ class WorkspaceSession:
         # Duplicate older requests must never roll back the last acknowledged HEAD.
         self.store.update(self.run_id, current_sha=self.data["current_sha"])
 
+    def test_policy(self):
+        from dev_orchestra.application.test_selection import select_tests
+
+        self.reload()
+        self.guard()
+        if self.data["role"] != "tester":
+            raise PipelineError("test tools are restricted to tester")
+        return select_tests(self.store.get(self.run_id), self.root, self.git.sha())
+
+    def run_tests(self, command_ids):
+        from dev_orchestra.application.test_selection import select_tests, selected_config
+        from dev_orchestra.infrastructure.test_runner import TestRunner
+
+        self.reload()
+        self.guard()
+        if self.data.get("testing"):
+            raise PipelineError("test execution is already in progress")
+        if self.data["role"] != "tester":
+            raise PipelineError("test tools are restricted to tester")
+        pending = self.changed_files()
+        if pending:
+            self.checkpoint_commit(
+                "tests-" + str(len(self.data["commits"])),
+                self.git.sha(),
+                {name: self.data["files"][name]["hash"] for name in pending},
+                "테스트 실행 전 변경 확정",
+                "테스트 코드와 검증 후보를 확정합니다",
+            )
+        run = self.store.get(self.run_id)
+        selection = select_tests(run, self.root, self.git.sha())
+        if set(command_ids) != set(selection["included"]) or len(command_ids) != len(
+            set(command_ids)
+        ):
+            raise PipelineError("required command IDs: " + ", ".join(selection["included"]))
+        if self.data.get("test_evidence"):
+            previous = self.read_test_payload()
+            if previous["selection"] == selection:
+                self.validate_test_payload(previous)
+                return self.test_summary(previous)
+        import uuid
+
+        evidence_id = "test-" + uuid.uuid4().hex
+        directory = self.path.parent / evidence_id
+        runner = getattr(self, "_test_runner", None) or TestRunner()
+        self.data["testing"] = True
+        self.save()
+        try:
+            execution = runner.run(
+                self.root,
+                selected_config(run, selection),
+                directory,
+                lambda: self.store.get(self.run_id)["control"],
+            )
+        except StopRequested:
+            raise
+        except (PipelineError, OSError) as error:
+            execution = {
+                "passed": False,
+                "status": "unavailable",
+                "commands": [
+                    {
+                        "command_id": key,
+                        "kind": command.kind,
+                        "argv": command.argv,
+                        "status": "unavailable",
+                        "passed": False,
+                        "error": sanitize(str(error)),
+                    }
+                    for key, command in selected_config(run, selection).commands.items()
+                ],
+            }
+        finally:
+            self.reload()
+            self.data["testing"] = False
+            self.save()
+        self.guard()
+        value = {
+            "evidence_id": evidence_id,
+            "sha": self.git.sha(),
+            "revision": run.get("revision", 0),
+            "selection": selection,
+            "execution": execution,
+        }
+        path = directory / "evidence.json"
+        evidence_hash = write(path, value)
+        self.data["test_evidence"] = {"id": evidence_id, "hash": evidence_hash}
+        self.save()
+        self.validate_test_payload(value)
+        return self.test_summary(value)
+
+    def read_test_payload(self):
+        evidence = self.data.get("test_evidence")
+        if not evidence:
+            raise PipelineError("tester must run host tests and inspect actual results")
+        path = self.path.parent / evidence["id"] / "evidence.json"
+        if digest(path.read_bytes()) != evidence["hash"]:
+            raise PipelineError("test evidence checksum mismatch")
+        return json.loads(path.read_text())
+
+    def validate_test_payload(self, value):
+        from dev_orchestra.application.test_selection import select_tests, verify_selection
+
+        if (
+            value["sha"] != self.git.sha()
+            or self.changed_files()
+            or value["selection"]
+            != select_tests(self.store.get(self.run_id), self.root, self.git.sha())
+        ):
+            raise PipelineError("test evidence is stale; run tests on the final candidate")
+        verify_selection(
+            self.store.get(self.run_id),
+            {
+                "sha": value["sha"],
+                "revision": value["revision"],
+                "test_selection": value["selection"],
+                "execution": value["execution"],
+            },
+        )
+        for command in value["execution"].get("commands", []):
+            if (
+                command.get("junit_path")
+                and digest(Path(command["junit_path"]).read_bytes()) != command["junit_hash"]
+            ):
+                raise PipelineError("JUnit evidence checksum mismatch")
+
+        from dev_orchestra.application.test_selection import verify_tool_evidence
+
+        verify_tool_evidence(
+            self.store.get(self.run_id),
+            {"data": {"artifact": str(self.path.parent / "result.json")}},
+            {
+                "sha": value["sha"],
+                "revision": value["revision"],
+                "test_selection": value["selection"],
+                "execution": value["execution"],
+                "test_evidence_reference": self.data["test_evidence"],
+            },
+        )
+
+    def load_test_result(self, response):
+        self.reload()
+        self.guard()
+        value = self.read_test_payload()
+        if response.test_evidence_id != value["evidence_id"]:
+            raise PipelineError("tester must reference the actual host test evidence")
+        self.validate_test_payload(value)
+        return value
+
+    @staticmethod
+    def test_summary(value):
+        from dev_orchestra.agents.context import execution_summary
+
+        return {
+            "evidence_id": value["evidence_id"],
+            "sha": value["sha"],
+            "selection": value["selection"],
+            "execution": execution_summary(value["execution"]),
+        }
+
+    def read_test_evidence(self, evidence_id, offset=0, limit=8000):
+        self.reload()
+        self.guard()
+        if (
+            self.data["role"] != "tester"
+            or not self.data.get("test_evidence")
+            or self.data["test_evidence"]["id"] != evidence_id
+            or offset < 0
+            or not 1 <= limit <= 8000
+        ):
+            raise PipelineError("test evidence range or ownership denied")
+        text = json.dumps(sanitize(self.read_test_payload()), ensure_ascii=False)
+        return {
+            "evidence_id": evidence_id,
+            "offset": offset,
+            "text": text[offset : offset + limit],
+            "truncated": offset + limit < len(text),
+            "total": len(text),
+        }
+
     def finish(self, response):
         self.reload()
-        response = WorkspaceResult.model_validate(response.model_dump(), strict=True)
+        from dev_orchestra.domain.models import WorkspaceTestResult
+
+        model = WorkspaceTestResult if self.data["role"] == "tester" else WorkspaceResult
+        response = model.model_validate(response.model_dump(), strict=True)
         self.guard()
         if response.questions:
             return (
@@ -354,6 +568,8 @@ class WorkspaceSession:
                 self.data["current_sha"],
                 self.data["commits"],
             )
+        if self.data["role"] == "tester":
+            self.load_test_result(response)
         files = self.changed_files()
         if files:
             self.checkpoint_commit(
@@ -364,7 +580,7 @@ class WorkspaceSession:
                 response.summary,
             )
         patch = self.git.diff(self.data["input_sha"], self.data["current_sha"])
-        if not patch and not response.no_change_reason.strip():
+        if not patch and self.data["role"] != "tester" and not response.no_change_reason.strip():
             raise PipelineError("workspace no change requires an explicit reason")
         if redact(patch) != patch:
             raise PipelineError("sensitive workspace diff denied")
@@ -380,11 +596,96 @@ class WorkspaceSession:
         summary = response.summary
         if not patch:
             summary += "\n무변경 사유: " + response.no_change_reason
-        result = AgentResult(summary=summary, patch=patch, test_changes=changes)
+        extra = (
+            {"command_ids": response.command_ids, "coverage": response.coverage}
+            if self.data["role"] == "tester"
+            else {}
+        )
+        result = AgentResult(summary=summary, patch=patch, test_changes=changes, **extra)
         return result, self.data["current_sha"], self.data["commits"]
 
 
 def load_session(path):
     """Private host launch descriptor; never supplied by model tool arguments."""
     descriptor = json.loads(Path(path).read_text())
-    return WorkspaceSession(descriptor["session"], Store(Path(descriptor["database"])))
+    path = Path(descriptor["session"])
+    model = (
+        ReviewEvidenceSession
+        if json.loads(path.read_text()).get("kind") == "review"
+        else WorkspaceSession
+    )
+    return model(path, Store(Path(descriptor["database"])))
+
+
+class ReviewEvidenceSession:
+    """Read-only, bounded access to the reviewed candidate's host test artifact."""
+
+    def __init__(self, path, store):
+        self.path, self.store = Path(path), store
+        self.data = json.loads(self.path.read_text())
+        self.git = Git(Path(self.data["worktree"]))
+
+    @classmethod
+    def create(cls, store, run, step_id, directory):
+        candidates = [
+            step
+            for step in store.steps(run["id"])
+            if step["role"] == "tester"
+            and step["status"] == "completed"
+            and step["output_sha"] == run["current_sha"]
+            and step.get("revision", 0) == run.get("revision", 0)
+        ]
+        if not candidates:
+            raise PipelineError("review requires candidate-bound host test evidence")
+        test_step = candidates[-1]
+        path = Path(directory) / "review-evidence-session.json"
+        write(
+            path,
+            {
+                "kind": "review",
+                "role": "reviewer",
+                "run_id": run["id"],
+                "repo": run["repo"],
+                "worktree": run["worktree"],
+                "sha": run["current_sha"],
+                "revision": run.get("revision", 0),
+                "step_id": step_id,
+                "evidence_id": "step-" + str(test_step["id"]),
+                "test_step": test_step,
+            },
+        )
+        return cls(path, store)
+
+    def read_test_evidence(self, evidence_id, offset=0, limit=8000):
+        run = self.store.get(self.data["run_id"])
+        step = next(
+            (step for step in self.store.steps(run["id"]) if step["id"] == self.data["step_id"]),
+            None,
+        )
+        if (
+            run["state"] != "reviewing"
+            or run["next_role"] != "reviewer"
+            or run["control"]
+            or not step
+            or step["status"] != "running"
+            or run["current_sha"] != self.data["sha"]
+            or self.git.sha() != self.data["sha"]
+            or run.get("revision", 0) != self.data["revision"]
+            or evidence_id != self.data["evidence_id"]
+            or offset < 0
+            or not 1 <= limit <= 8000
+        ):
+            raise PipelineError("review evidence range or ownership denied")
+        from dev_orchestra.application.results import Results
+
+        value = Results(self.store).payload(run, self.data["test_step"])
+        # Raw code patches are deliberately not a diagnostic retrieval payload.
+        value = {key: value.get(key) for key in ["sha", "revision", "execution", "test_selection"]}
+        text = json.dumps(value, ensure_ascii=False)
+        return {
+            "evidence_id": evidence_id,
+            "offset": offset,
+            "text": text[offset : offset + limit],
+            "truncated": offset + limit < len(text),
+            "total": len(text),
+        }

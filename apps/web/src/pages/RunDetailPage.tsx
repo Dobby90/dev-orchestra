@@ -246,6 +246,14 @@ function RunDetailBody({ rid }: { rid: string }) {
       </Heading>
       <div className="run-overview panel">
         <div>
+          <span className="subtle">테스트 범위</span>
+          <strong>
+            {r.test_scope === "affected"
+              ? "변경 영향 범위 테스트"
+              : "전체 테스트"}
+          </strong>
+        </div>
+        <div>
           <span className="subtle">Feature 브랜치</span>
           <strong className="mono">
             <GitBranch size={14} />

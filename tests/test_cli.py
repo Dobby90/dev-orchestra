@@ -18,3 +18,24 @@ def test_cli_queries(tmp_path):
     assert result.exit_code == 1
     assert "unknown run" in result.output
     assert cli.invoke(app, opts + ["cancel", "unknown"]).exit_code == 1
+
+
+def test_cli_test_scope_is_bounded_choice(tmp_path):
+    cli = CliRunner()
+    opts = ["--database", str(tmp_path / "db.sqlite")]
+    result = cli.invoke(app, opts + ["run", "--help"])
+    assert result.exit_code == 0 and "test-scope" in result.output
+    invalid = cli.invoke(
+        app,
+        opts
+        + [
+            "run",
+            "--repo",
+            str(tmp_path),
+            "--spec",
+            str(tmp_path / "prd.md"),
+            "--test-scope",
+            "none",
+        ],
+    )
+    assert invalid.exit_code == 2
