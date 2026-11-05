@@ -119,5 +119,35 @@ class Git:
     def diff(self, base, sha):
         return self.call("diff", "--no-ext-diff", "--no-textconv", f"{base}...{sha}", "--")
 
+    def stage_selected(self, paths):
+        """Stage only host-validated files; preserve and reject an unexpected index."""
+        if self.call("diff", "--cached", "--name-only"):
+            raise PipelineError("unexpected staged changes preserved")
+        if not paths or len(paths) != len(set(paths)):
+            raise PipelineError("checkpoint requires distinct changed files")
+        self.call(
+            "add",
+            "--force",
+            "--pathspec-from-file=-",
+            "--pathspec-file-nul",
+            input="".join(":(literal)" + path + "\0" for path in paths),
+        )
+        actual = self.call("diff", "--cached", "--name-only", "-z").split("\0")
+        if set(filter(None, actual)) != set(paths):
+            raise PipelineError("selected staging mismatch; index preserved")
+        return self.call("write-tree")
+
+    def commit_selected(self, message, parent, tree):
+        if self.sha() != parent or self.call("write-tree") != tree:
+            raise PipelineError("checkpoint parent or staged tree changed")
+        self.call("commit", "-m", message)
+        sha = self.sha()
+        if (
+            self.call("rev-parse", "HEAD^") != parent
+            or self.call("rev-parse", "HEAD^{tree}") != tree
+        ):
+            raise PipelineError("checkpoint commit identity mismatch")
+        return sha
+
     def remove(self, path):
         self.call("worktree", "remove", str(path))

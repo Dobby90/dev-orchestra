@@ -75,6 +75,12 @@ class AgentRequest(Model):
     context: dict
 
 
+class WorkspaceResult(Model):
+    summary: str = Field(min_length=1)
+    questions: list[str] = Field(default_factory=list)
+    no_change_reason: str = ""
+
+
 class PipelineError(RuntimeError):
     """Safe, user-facing workflow failure."""
 

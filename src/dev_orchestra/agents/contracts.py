@@ -17,6 +17,10 @@ FIELDS = {
 
 
 def response_fields(request):
+    from dev_orchestra.domain.execution import writes_workspace
+
+    if writes_workspace(request):
+        return {"summary", "questions", "no_change_reason"}
     fields = FIELDS[request.role].copy()
     if request.role == "reviewer" and request.context.get("review_contract") == 2:
         fields |= {"schema_version", "assessments"}

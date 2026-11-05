@@ -1,10 +1,19 @@
 """Codex exec adapter. Fresh read-only sessions return validated patches."""
 
+import json
+import sys
 import uuid
 from pathlib import Path
 
 from dev_orchestra.agents.contracts import ResponseError, response_fields
-from dev_orchestra.domain.models import AgentRequest, AgentResult, PipelineError, ReviewResultV2
+from dev_orchestra.domain.execution import writes_workspace
+from dev_orchestra.domain.models import (
+    AgentRequest,
+    AgentResult,
+    PipelineError,
+    ReviewResultV2,
+    WorkspaceResult,
+)
 from dev_orchestra.infrastructure.agent_usage import UsageCollector
 from dev_orchestra.infrastructure.files import write
 from dev_orchestra.infrastructure.process import execute, execution_directory
@@ -46,16 +55,89 @@ class CodexClient:
             ):
                 raise PipelineError("Codex CLI is unavailable or lacks required exec capabilities")
 
-    def run(self, request: AgentRequest, directory: Path, stop=lambda: None):
+    def run_workspace(self, request, directory, session, stop=lambda: None):
+        if not writes_workspace(request):
+            raise PipelineError("workspace tools unavailable for this role")
+        self.check_workspace(request, directory, session, stop)
+        descriptor = directory / "workspace-launch.json"
+        write(descriptor, {"session": str(session.path), "database": str(session.store.path)})
+        return self.run(request, directory, stop, _workspace=descriptor)
+
+    def check_workspace(self, request, directory, session, stop):
+        """No model call: fail closed unless the installed CLI denies actual writes."""
+        import tempfile
+
+        with tempfile.TemporaryDirectory(prefix="devorchestra-policy-") as temp:
+            name = ".devorchestra-probe-" + uuid.uuid4().hex
+            roots = [
+                Path(request.worktree),
+                Path(session.data["repo"]),
+                session.git.common(),
+                session.path.parent,
+                session.store.path.parent,
+            ]
+            for line in session.git.call("worktree", "list", "--porcelain").splitlines():
+                if line.startswith("worktree "):
+                    roots.append(Path(line.removeprefix("worktree ")))
+            probes = [str(root / name) for root in roots]
+            existing = [
+                str(Path(request.worktree) / ".git"),
+                str(session.git.common() / "config"),
+                str(session.path),
+                str(session.store.path),
+            ]
+            script = (
+                "from pathlib import Path\nimport os\n"
+                "for name in " + repr(probes) + ":\n"
+                " try:\n  Path(name).write_text('probe')\n"
+                " except PermissionError:\n  continue\n"
+                " raise SystemExit('read-only boundary unavailable')\n"
+                "for name in " + repr(existing) + ":\n"
+                " try:\n  fd = os.open(name, os.O_WRONLY)\n"
+                " except PermissionError:\n  continue\n"
+                " os.close(fd)\n raise SystemExit('protected file boundary unavailable')\n"
+            )
+            try:
+                rc, _ = execute(
+                    [
+                        self.config.command,
+                        "sandbox",
+                        "-P",
+                        ":read-only",
+                        "-C",
+                        request.worktree,
+                        sys.executable,
+                        "-I",
+                        "-c",
+                        script,
+                    ],
+                    Path(temp),
+                    30,
+                    directory / "workspace-policy.log",
+                    stop=stop,
+                )
+                if rc:
+                    raise PipelineError("workspace read-only OS boundary could not be verified")
+            finally:
+                for probe in probes:
+                    Path(probe).unlink(missing_ok=True)
+
+    def run(self, request: AgentRequest, directory: Path, stop=lambda: None, *, _workspace=None):
         from dev_orchestra.agents.prompts import prompt
 
         directory.mkdir(parents=True, exist_ok=True)
+        if writes_workspace(request) and _workspace is None:
+            raise PipelineError("workspace contract requires validated host tools")
         schema = directory / "schema.json"
         result = directory / "response.json"
         model = (
-            ReviewResultV2
-            if request.role == "reviewer" and request.context.get("review_contract") == 2
-            else AgentResult
+            WorkspaceResult
+            if writes_workspace(request)
+            else (
+                ReviewResultV2
+                if request.role == "reviewer" and request.context.get("review_contract") == 2
+                else AgentResult
+            )
         )
         wire_schema = model.model_json_schema()
         fields = response_fields(request)
@@ -82,6 +164,18 @@ class CodexClient:
             "--output-last-message",
             str(result),
         ]
+        if _workspace is not None:
+            argv += ["--ignore-rules"]
+            # Replace the MCP map so project/user servers cannot inherit write authority.
+            argv += ["-c", "mcp_servers={}"]
+            for key, value in {
+                "command": sys.executable,
+                "args": ["-I", "-m", "dev_orchestra.infrastructure.workspace_mcp", str(_workspace)],
+                "required": True,
+                "default_tools_approval_mode": "approve",
+                "enabled_tools": ["edit_file", "checkpoint_commit"],
+            }.items():
+                argv += ["-c", "mcp_servers.workspace." + key + "=" + json.dumps(value)]
         options = self.config.for_role(request.role)
         if options.model:
             argv += ["--model", options.model]
@@ -109,13 +203,11 @@ class CodexClient:
         if not result.exists():
             raise PipelineError("Codex returned no final JSON")
         try:
-            import json
-
             raw = json.loads(result.read_text())
             required = set(model.model_fields)
             if not isinstance(raw, dict) or set(raw) not in (required, fields):
                 raise ValueError("incomplete role response")
-            if "no_change_reason" in raw:
+            if "no_change_reason" in raw and model is not WorkspaceResult:
                 reason = raw.pop("no_change_reason")
                 if not isinstance(reason, str):
                     raise ValueError("no_change_reason must be a string")

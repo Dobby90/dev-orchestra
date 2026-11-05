@@ -10,6 +10,7 @@ from dev_orchestra.application.execution import ExecutionService
 from dev_orchestra.application.queries import RunQueryService
 from dev_orchestra.application.recovery import RecoveryService
 from dev_orchestra.config import Config
+from dev_orchestra.domain.execution import PATCH_V1, execution_contract
 from dev_orchestra.domain.models import PipelineError
 from dev_orchestra.infrastructure.evidence import checkpoints
 from dev_orchestra.infrastructure.files import digest, write
@@ -21,7 +22,9 @@ from dev_orchestra.infrastructure.store import Store, now
 
 
 class RunService:
-    def __init__(self, config: Config):
+    def __init__(self, config: Config, *, _execution_contract=PATCH_V1):
+        # Internal opt-in until the remaining integration/release checks are complete.
+        self.execution_contract = execution_contract({"execution_contract": _execution_contract})
         self.config = config
         self.store = Store(config.storage.database)
         self.queries = RunQueryService(self.store)
@@ -81,6 +84,7 @@ class RunService:
             if path.resolve().is_relative_to(root.resolve()):
                 raise PipelineError("storage and worktrees must be outside the target repository")
         data = {
+            "execution_contract": self.execution_contract,
             "id": run_id,
             "repo": str(repo),
             "base": base,
