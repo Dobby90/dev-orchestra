@@ -325,7 +325,11 @@ def test_runner_keeps_plan_approval_and_fix_loop(setup):
 def test_mcp_dispatch_rejects_extra_fields_and_arbitrary_tools(setup):
     session, _ = start_session(setup)
     definitions = dispatch(session, {"method": "tools/list"})
-    assert {tool["name"] for tool in definitions["tools"]} == {"edit_file", "checkpoint_commit"}
+    assert {tool["name"] for tool in definitions["tools"]} == {
+        "edit_file",
+        "checkpoint_commit",
+        "workspace_state",
+    }
     result = dispatch(
         session,
         {
@@ -364,7 +368,7 @@ if 'sandbox' in sys.argv:
     raise SystemExit(0)
 assert sys.argv[sys.argv.index('--sandbox') + 1] == 'read-only'
 assert '--ignore-user-config' in sys.argv and '--ignore-rules' in sys.argv
-assert '--ephemeral' in sys.argv
+assert '--ephemeral' not in sys.argv
 schema = json.loads(Path(sys.argv[sys.argv.index('--output-schema') + 1]).read_text())
 assert set(schema['properties']) == {{'summary', 'questions', 'no_change_reason'}}
 config = {{sys.argv[i+1].split('=', 1)[0]: sys.argv[i+1].split('=', 1)[1]
@@ -380,7 +384,7 @@ def call(method, params=None):
     assert 'error' not in response, response
     return response['result']
 assert call('initialize')['protocolVersion'] == '2024-11-05'
-assert len(call('tools/list')['tools']) == 2
+assert len(call('tools/list')['tools']) == 3
 result = call('tools/call', {{'name': 'edit_file', 'arguments': {{
     'file': 'ignored.py', 'expected_hash': None, 'content': 'actual host edit\\n'
 }}}})

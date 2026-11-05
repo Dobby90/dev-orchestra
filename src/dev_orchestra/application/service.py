@@ -131,7 +131,18 @@ class RunService:
             raise PipelineError("discard the saved test change proposal before adding instructions")
         ensure_stopped(Path(run["directory"]))
         checkpoints(self.store, run)
-        changes = {}
+        release_checkpoint = False
+        if run.get("workspace_checkpoint"):
+            from dev_orchestra.application.workspace_recovery import inspect_workspace
+
+            session, _ = inspect_workspace(self.store, run)
+            if answers and answers.strip():
+                if session.data["commits"] or session.data["files"] != session.data["initial"]:
+                    raise PipelineError(
+                        "unfinished workspace requirements are bound to its checkpoint; preserve files and create a new Run for changed requirements"
+                    )
+                release_checkpoint = True
+        changes = {"workspace_checkpoint": None} if release_checkpoint else {}
         if answers is not None and answers.strip():
             previous = run.get("answers", "")
             changes["answers"] = "\n\n".join(part for part in [previous, answers] if part)

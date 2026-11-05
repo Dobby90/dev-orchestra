@@ -43,10 +43,11 @@ def dependency_path(name):
 
 
 class WorkspaceSession:
-    def __init__(self, path, store):
+    def __init__(self, path, store, *, _run_id=None):
         self.path, self.store = Path(path), store
-        self.data = json.loads(self.path.read_text())
-        self.run_id = self.data["run_id"]
+        self.data = json.loads(self.path.read_text()) if _run_id is None else {}
+        self.run_id = _run_id or self.data["run_id"]
+        self.reload()
         self.root = Path(self.data["worktree"]).resolve()
         self.git = Git(self.root)
 
@@ -58,6 +59,8 @@ class WorkspaceSession:
             "tester",
         }:
             raise PipelineError("workspace editing is restricted to developer/tester/fixer")
+        from dev_orchestra.application.workspace_recovery import file_identity
+
         git = Git(Path(run["worktree"]))
         if git.sha() != request.input_sha or git.call("diff", "--cached", "--name-only"):
             raise PipelineError("workspace session requires unchanged HEAD and empty index")
@@ -71,6 +74,9 @@ class WorkspaceSession:
             "repo": run["repo"],
             "branch": run["branch"],
             "common": str(git.common().resolve()),
+            "worktree_identity": file_identity(run["worktree"]),
+            "common_identity": file_identity(git.common()),
+            "git_link_hash": digest((Path(run["worktree"]) / ".git").read_bytes()),
             "role": request.role,
             "iteration": request.iteration,
             "revision": run.get("revision", 0),
@@ -93,7 +99,7 @@ class WorkspaceSession:
         }
         path = Path(directory) / "workspace-session.json"
         write(path, data)
-        session = cls(path, store)
+        session = cls(path, store, _run_id=run["id"])
         snapshot = session.snapshot()
         if set(snapshot) != set(tracked):
             raise PipelineError(
@@ -107,10 +113,73 @@ class WorkspaceSession:
         return session
 
     def save(self):
-        write(self.path, self.data)
+        # The DB points only to immutable snapshots. A crash cannot replace the
+        # last acknowledged snapshot with an unacknowledged file write.
+        raw = json.dumps(self.data, ensure_ascii=False, indent=2)
+        sha = digest(raw.encode())
+        snapshot = self.path.parent / ("workspace-state-" + sha + ".json")
+        write(snapshot, raw)
+        root = Path(self.store.get(self.run_id)["directory"])
+        reference = {
+            key: self.data[key] for key in ["step_id", "role", "revision", "iteration", "input_sha"]
+        }
+        reference.update(
+            session=str(self.path.relative_to(root)),
+            snapshot=str(snapshot.relative_to(root)),
+            hash=sha,
+        )
+        self.store.update(self.run_id, workspace_checkpoint=reference)
+        write(self.path, raw)
 
     def reload(self):
-        self.data = json.loads(self.path.read_text())
+        from dev_orchestra.application.workspace_recovery import checkpoint_data
+
+        run = self.store.get(self.run_id)
+        reference = run.get("workspace_checkpoint")
+        if reference and reference["session"] == str(self.path.relative_to(Path(run["directory"]))):
+            _, self.data = checkpoint_data(self.store, run)
+        elif reference:
+            raise PipelineError("workspace session belongs to another active stage")
+        else:
+            self.data = json.loads(self.path.read_text())
+
+    def workspace_state(self):
+        self.reload()
+        self.guard()
+        return {
+            "input_sha": self.data["input_sha"],
+            "candidate_sha": self.git.sha(),
+            "files": self.data["files"],
+            "checkpoint_count": len(self.data["commits"]),
+            "completed_units": [c["summary"][:1000] for c in self.data["commits"][-5:]],
+            "test_evidence": self.data.get("test_evidence"),
+            "metadata_only": self.data.get("metadata_only", False),
+        }
+
+    def capture_response(self, response):
+        from pydantic import ValidationError
+
+        from dev_orchestra.agents.contracts import ResponseError
+        from dev_orchestra.domain.models import WorkspaceTestResult
+
+        model = WorkspaceTestResult if self.data["role"] == "tester" else WorkspaceResult
+        try:
+            value = model.model_validate(response.model_dump(), strict=True).model_dump()
+        except ValidationError as error:
+            raise ResponseError("invalid workspace role metadata") from error
+        if not value["summary"].strip():
+            raise ResponseError("workspace response requires a nonempty summary")
+        if sanitize(value) != value:
+            raise PipelineError("sensitive workspace response denied; files preserved")
+        self.reload()
+        self.data["response"] = value
+        self.save()
+
+    def saved_response(self):
+        from dev_orchestra.domain.models import WorkspaceTestResult
+
+        model = WorkspaceTestResult if self.data["role"] == "tester" else WorkspaceResult
+        return model.model_validate(self.data["response"], strict=True)
 
     def snapshot(self):
         git = self.source_git()
@@ -204,6 +273,8 @@ class WorkspaceSession:
         """Replace one UTF-8 file, with CAS and requirement-bound test authorization."""
         self.reload()
         self.guard()
+        if self.data.get("metadata_only"):
+            raise PipelineError("metadata repair cannot edit source files")
         if self.data.get("testing"):
             raise PipelineError("test execution is in progress; edits are locked")
         path = contained(self.root, file)
@@ -267,8 +338,10 @@ class WorkspaceSession:
         )
         return sorted(set(filter(None, names.split("\0"))))
 
-    def checkpoint_commit(self, request_id, expected_sha, files, message, summary):
+    def checkpoint_commit(self, request_id, expected_sha, files, message, summary, *, _host=False):
         self.reload()
+        if self.data.get("metadata_only") and not _host:
+            raise PipelineError("metadata repair cannot request commits")
         if self.data.get("testing"):
             raise PipelineError("test execution is in progress; commits are locked")
         if not re.fullmatch(r"[A-Za-z0-9_-]{1,80}", request_id):
@@ -391,6 +464,8 @@ class WorkspaceSession:
 
         self.reload()
         self.guard()
+        if self.data.get("metadata_only"):
+            raise PipelineError("metadata repair must reuse host test evidence")
         if self.data.get("testing"):
             raise PipelineError("test execution is already in progress")
         if self.data["role"] != "tester":
@@ -520,7 +595,9 @@ class WorkspaceSession:
         self.guard()
         value = self.read_test_payload()
         if response.test_evidence_id != value["evidence_id"]:
-            raise PipelineError("tester must reference the actual host test evidence")
+            from dev_orchestra.agents.contracts import ResponseError
+
+            raise ResponseError("tester must reference the actual host test evidence")
         self.validate_test_payload(value)
         return value
 
@@ -578,10 +655,13 @@ class WorkspaceSession:
                 {name: self.data["files"][name]["hash"] for name in files},
                 "역할 작업 완료: " + self.data["role"],
                 response.summary,
+                _host=True,
             )
         patch = self.git.diff(self.data["input_sha"], self.data["current_sha"])
         if not patch and self.data["role"] != "tester" and not response.no_change_reason.strip():
-            raise PipelineError("workspace no change requires an explicit reason")
+            from dev_orchestra.agents.contracts import ResponseError
+
+            raise ResponseError("workspace no change requires an explicit reason")
         if redact(patch) != patch:
             raise PipelineError("sensitive workspace diff denied")
         changed = set(
@@ -609,12 +689,11 @@ def load_session(path):
     """Private host launch descriptor; never supplied by model tool arguments."""
     descriptor = json.loads(Path(path).read_text())
     path = Path(descriptor["session"])
-    model = (
-        ReviewEvidenceSession
-        if json.loads(path.read_text()).get("kind") == "review"
-        else WorkspaceSession
-    )
-    return model(path, Store(Path(descriptor["database"])))
+    kind = descriptor.get("kind") or json.loads(path.read_text()).get("kind")
+    store = Store(Path(descriptor["database"]))
+    if kind == "review":
+        return ReviewEvidenceSession(path, store)
+    return WorkspaceSession(path, store, _run_id=descriptor.get("run_id"))
 
 
 class ReviewEvidenceSession:

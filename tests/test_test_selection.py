@@ -175,6 +175,7 @@ def test_tester_cannot_edit_product_or_invoke_commit(setup):
         edit(session, "main.py", "bad\n")
     assert {tool["name"] for tool in dispatch(session, {"method": "tools/list"})["tools"]} == {
         "edit_file",
+        "workspace_state",
         "run_tests",
         "test_policy",
         "read_test_evidence",

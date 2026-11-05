@@ -29,10 +29,15 @@ class EventService:
         if role is not None and role not in {"planner", "developer", "tester", "reviewer", "fixer"}:
             raise PipelineError("invalid role filter")
         directory = Path(self.store.get(run_id)["directory"])
-        paths = sorted(directory.glob("iterations/*/*/*/*.log"))
+        paths = sorted(
+            [
+                *directory.glob("iterations/*/*/*/*.log"),
+                *directory.glob("iterations/*/*/*/calls/*/*.log"),
+            ]
+        )
         if role is None and (directory / "workflow.log").exists():
             paths.insert(0, directory / "workflow.log")
-        return [p for p in paths if role is None or p.parent.parent.name == role]
+        return [p for p in paths if role is None or p.relative_to(directory).parts[2] == role]
 
     def log_chunks(self, run_id, cursor=None, role=None, limit=65536):
         """Replay durable file logs using per-attempt paths and byte offsets."""

@@ -36,7 +36,7 @@ def call(method,params=None):
 call('initialize')
 tools={{tool['name'] for tool in call('tools/list')['tools']}}
 if {role!r} == 'tester':
-    assert tools == {{'edit_file','run_tests','test_policy','read_test_evidence'}}
+    assert tools == {{'edit_file','run_tests','test_policy','read_test_evidence','workspace_state'}}
     result=call('tools/call',{{'name':'run_tests','arguments':{{'command_ids':['unit']}}}})
     assert not result.get('isError'),result
     value=json.loads(result['content'][0]['text'])

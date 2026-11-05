@@ -10,6 +10,7 @@ from dev_orchestra.agents.contracts import ResponseError, validate_role
 from dev_orchestra.agents.feedback import source_context
 from dev_orchestra.agents.policy import TestChangesRequired, apply_patch, validate_patch
 from dev_orchestra.application.test_changes import TestChangeService
+from dev_orchestra.application.workspace_recovery import WorkspaceBlocked
 from dev_orchestra.config import Config
 from dev_orchestra.domain.execution import WORKSPACE_V2, execution_contract, writes_workspace
 from dev_orchestra.domain.models import AgentRequest, PipelineError, StopRequested
@@ -97,6 +98,8 @@ class Runner:
                     self.store.update(run_id, "needs_input", error=str(cleanup_error))
                 else:
                     self.store.update(run_id, "cancelled" if str(error) == "cancel" else "paused")
+            except WorkspaceBlocked as error:
+                self.store.update(run_id, "needs_input", error=redact(str(error)))
             except Exception as error:
                 self.store.update(run_id, "failed", error=redact(str(error)))
             finally:
@@ -138,14 +141,32 @@ class Runner:
         checkpoints(self.store, run)
         directory, worktree = Path(run["directory"]), Path(run["worktree"])
         original = Git(Path(run["repo"]))
+        if run.get("workspace_checkpoint") and not worktree.exists():
+            raise WorkspaceBlocked("recorded workspace is missing; refusing to recreate it")
         # Each repository mutation has an intent in the run record before it is attempted.
         if not worktree.exists():
             self.store.update(run_id, "preparing")
             original.create(worktree, run["branch"], run["base_sha"])
         git = Git(worktree, config.tests.output_paths)
         if git.call("branch", "--show-current") != run["branch"]:
+            if run.get("workspace_checkpoint"):
+                raise WorkspaceBlocked("recorded workspace branch changed; files preserved")
             raise PipelineError("worktree branch changed externally")
-        if git.dirty():
+        resumed_workspace = None
+        if run.get("workspace_checkpoint"):
+            from dev_orchestra.application.workspace_recovery import recover_workspace
+
+            try:
+                resumed_workspace = recover_workspace(self.store, run)
+                run = self.store.get(run_id)
+            except (PipelineError, ValueError, OSError, KeyError) as error:
+                self.store.update(
+                    run_id,
+                    "needs_input",
+                    error="workspace recovery blocked; files preserved: " + redact(str(error)),
+                )
+                return
+        if git.dirty() and not resumed_workspace:
             self.store.update(
                 run_id,
                 "needs_input",
@@ -191,7 +212,9 @@ class Runner:
                         directory / "preflight",
                         lambda: self.store.get(run_id)["control"],
                     )
-                    if git.dirty():
+                    if resumed_workspace:
+                        resumed_workspace.guard()
+                    elif git.dirty():
                         raise PipelineError(
                             "dependency preparation created untracked source files; changes preserved"
                         )
@@ -241,51 +264,52 @@ class Runner:
                             error="response repair budget exhausted or interrupted; inspect before continuing",
                         )
                         return
-                if execution_contract(run) == WORKSPACE_V2 and role in {
-                    "developer",
-                    "fixer",
-                    "tester",
-                }:
-                    # Continuing an interrupted role is introduced in stage 3. Until then,
-                    # never silently restart an already edited/checkpointed role at a new SHA.
-                    for previous in self.store.steps(run_id):
-                        if (
-                            previous["role"] != role
-                            or previous["iteration"] != iteration
-                            or previous.get("revision", 0) != run.get("revision", 0)
-                        ):
-                            continue
-                        session_path = (
-                            directory
-                            / "iterations"
-                            / f"{iteration:03}"
-                            / role
-                            / f"attempt-{previous['attempt']:03}"
-                            / "workspace-session.json"
-                        )
-                        if session_path.exists():
-                            session_data = json.loads(session_path.read_text())
+                if resumed_workspace:
+                    saved = resumed_workspace.data
+                    step_id = saved["step_id"]
+                    step = next(s for s in self.store.steps(run_id) if s["id"] == step_id)
+                    attempt = step["attempt"]
+                    step_dir = resumed_workspace.path.parent
+                    sha = saved["input_sha"]
+                else:
+                    if execution_contract(run) == WORKSPACE_V2 and role in {
+                        "developer",
+                        "fixer",
+                        "tester",
+                    }:
+                        for previous in self.store.steps(run_id):
                             if (
-                                session_data["commits"]
-                                or session_data["files"] != session_data["initial"]
+                                previous["role"] == role
+                                and previous["iteration"] == iteration
+                                and previous.get("revision", 0) == run.get("revision", 0)
+                                and previous["status"] != "completed"
+                                and not previous["data"].get("artifact")
                             ):
-                                self.store.update(
-                                    run_id,
-                                    "needs_input",
-                                    error=(
-                                        "interrupted workspace stage preserved; role continuation requires inspection"
-                                    ),
+                                old = (
+                                    directory
+                                    / "iterations"
+                                    / f"{iteration:03}"
+                                    / role
+                                    / f"attempt-{previous['attempt']:03}"
+                                    / "workspace-session.json"
                                 )
-                                return
-                step_id, attempt = self.store.start_step(
-                    run_id,
-                    role,
-                    iteration,
-                    (run.get("test_change_application") or {}).get("input_sha", sha),
-                )
-                step_dir = (
-                    directory / "iterations" / f"{iteration:03}" / role / f"attempt-{attempt:03}"
-                )
+                                if old.exists():
+                                    raise WorkspaceBlocked(
+                                        "legacy workspace checkpoint has no trusted snapshot; files preserved"
+                                    )
+                    step_id, attempt = self.store.start_step(
+                        run_id,
+                        role,
+                        iteration,
+                        (run.get("test_change_application") or {}).get("input_sha", sha),
+                    )
+                    step_dir = (
+                        directory
+                        / "iterations"
+                        / f"{iteration:03}"
+                        / role
+                        / f"attempt-{attempt:03}"
+                    )
                 context = {
                     "execution_contract": execution_contract(run),
                     "prd": run["spec"],
@@ -328,7 +352,7 @@ class Runner:
                 from dev_orchestra.application.test_selection import select_tests
 
                 selection = (
-                    select_tests(run, worktree, sha)
+                    select_tests(run, worktree, git.sha())
                     if role == "tester" and run.get("test_selection_contract")
                     else None
                 )
@@ -349,10 +373,13 @@ class Runner:
 
                     if not hasattr(self.agent, "run_workspace"):
                         raise PipelineError("agent adapter does not support workspace contract")
-                    workspace = WorkspaceSession.create(self.store, run, request, step_id, step_dir)
+                    workspace = resumed_workspace or WorkspaceSession.create(
+                        self.store, run, request, step_id, step_dir
+                    )
+                    resumed_workspace = None
                     workspace._test_runner = self.tests
                 test_changes = TestChangeService(self.store)
-                if run.get("test_change_application"):
+                if run.get("test_change_application") and not workspace:
                     result, record, approval = test_changes.applied_result(run)
                 elif run.get("test_change_proposal"):
                     if run["test_change_proposal"].get("approval"):
@@ -389,15 +416,15 @@ class Runner:
                     result = None
                     try:
                         if workspace:
-                            response = self.agent.run_workspace(
-                                request,
-                                step_dir,
-                                workspace,
-                                lambda: self.store.get(run_id)["control"],
+                            result, workspace_sha, workspace_commits, workspace_execution = (
+                                self.run_workspace_stage(
+                                    request,
+                                    step_dir,
+                                    workspace,
+                                    config,
+                                )
                             )
-                            result, workspace_sha, workspace_commits = workspace.finish(response)
-                            if role == "tester" and not result.questions:
-                                workspace_execution = workspace.load_test_result(response)
+                            if workspace_execution:
                                 selection = workspace_execution["selection"]
                         elif (
                             role == "reviewer"
@@ -524,9 +551,13 @@ class Runner:
                             None, git.call("diff", "--name-only", "-z", sha, out_sha).split("\0")
                         )
                     )
-                    if result.test_changes:
+                    if run.get("test_change_application"):
+                        _, record, approval = test_changes.applied_result(run)
+                    elif result.test_changes:
                         record = test_changes.prepare(
-                            run, result, [change.file for change in result.test_changes]
+                            run | {"current_sha": workspace.data["input_sha"]},
+                            result,
+                            [change.file for change in result.test_changes],
                         )
                 elif not run.get("test_change_application"):
                     try:
@@ -646,7 +677,8 @@ class Runner:
                     "timeout",
                 }
                 atomic_result = (
-                    bool(record)
+                    bool(workspace)
+                    or bool(record)
                     or results.enabled()
                     and (
                         role == "tester" or (role == "reviewer" and run.get("review_contract") == 2)
@@ -675,6 +707,8 @@ class Runner:
                         self.store.finish_step(step_id, out_sha, evidence)
                     if record:
                         self.store.update(run_id, test_change_application=None)
+                    if workspace:
+                        self.store.update(run_id, workspace_checkpoint=None)
                 write(directory / FILES[role], payload)
                 if failed_test:
                     failures = [
@@ -694,6 +728,92 @@ class Runner:
             self.advance(run_id, role, payload, config)
             if self.store.get(run_id)["state"] in {"needs_input", "waiting_plan_approval"}:
                 return
+
+    def run_workspace_stage(self, request, directory, session, config):
+        from dev_orchestra.agents.contracts import ResponseError
+
+        while True:
+            session.reload()
+            session.guard()
+            data = session.data
+            try:
+                if data.get("response") is not None:
+                    response = session.saved_response()
+                else:
+                    if data.get("repair_pending"):
+                        if data.get("repair_calls", 0) >= config.workflow.response_retries:
+                            raise WorkspaceBlocked(
+                                "workspace response repair budget exhausted; checkpoint preserved"
+                            )
+                        data["repair_calls"] = data.get("repair_calls", 0) + 1
+                        session.save()
+                    if request.role == "tester":
+                        request.context["test_selection"] = session.test_policy()
+                        request.context["response_contract"]["command_ids"] = request.context[
+                            "test_selection"
+                        ]["included"]
+                    request.context["workspace_resume"] = {
+                        "continuing": data.get("continuing", False),
+                        "metadata_only": data.get("metadata_only", False),
+                        "candidate_sha": session.git.sha(),
+                        "completed_units": [c["summary"][:1000] for c in data["commits"][-5:]],
+                        "preserved_files": {
+                            name: value
+                            for name, value in data["files"].items()
+                            if value != data["initial"].get(name)
+                        },
+                        "remaining": data.get(
+                            "response_error",
+                            "Continue only the unfinished work on the preserved files.",
+                        ),
+                        "test_evidence": data.get("test_evidence"),
+                    }
+                    response = self.agent.run_workspace(
+                        request,
+                        directory,
+                        session,
+                        lambda: self.store.get(request.run_id)["control"],
+                    )
+                    session.capture_response(response)
+                result, sha, commits = session.finish(response)
+                validate_role(request.role, result)
+                execution = None
+                if request.role == "tester" and not result.questions:
+                    execution = session.load_test_result(response)
+                    self.validate_test_result(
+                        self.store.get(request.run_id), result, config, execution["selection"]
+                    )
+                return result, sha, commits, execution
+            except ResponseError as error:
+                try:
+                    session.reload()
+                    session.guard()
+                except PipelineError as boundary:
+                    raise WorkspaceBlocked(str(boundary)) from boundary
+                session.data.update(
+                    response=None,
+                    metadata_only=(
+                        request.role != "tester"
+                        or bool(session.data.get("test_evidence"))
+                        and not session.changed_files()
+                        and session.read_test_payload()["sha"] == session.git.sha()
+                    ),
+                    repair_pending=True,
+                    continuing=True,
+                    response_error=redact(str(error))[:4000],
+                )
+                session.save()
+                # Completed work stays locked; a Tester without evidence can still run tests.
+                continue
+            except StopRequested:
+                raise
+            except PipelineError:
+                try:
+                    session.reload()
+                    session.guard()
+                except PipelineError as boundary:
+                    raise WorkspaceBlocked(str(boundary)) from boundary
+                raise
 
     @staticmethod
     def validate_test_result(run, result, config, selection=None, *, legacy_scope=False):

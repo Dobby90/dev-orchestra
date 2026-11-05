@@ -77,6 +77,7 @@ class LogIndexer:
             paths = [
                 *root.glob("*.log"),
                 *root.glob("iterations/*/*/*/*.log"),
+                *root.glob("iterations/*/*/*/calls/*/*.log"),
                 *root.glob("git/*.log"),
                 *root.glob("preflight/*.log"),
             ]

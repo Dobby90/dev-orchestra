@@ -276,6 +276,16 @@ class Store:
             )
             return cursor.lastrowid, attempt
 
+    def resume_step(self, step):
+        with self.connection() as db:
+            row = db.execute("SELECT * FROM steps WHERE id=?", (step,)).fetchone()
+            if not row or row["status"] == "completed":
+                raise PipelineError("cannot reopen a completed or missing stage")
+            db.execute("UPDATE steps SET status='running',output_sha=NULL WHERE id=?", (step,))
+            if db.execute("SELECT version FROM schema_version").fetchone()[0] >= 5:
+                db.execute("UPDATE steps SET finished_at=NULL WHERE id=?", (step,))
+            self._event(db, row["run_id"], "step_resumed", {"step_id": step, "role": row["role"]})
+
     def finish_step(self, step, sha, data, status="completed"):
         with self.connection() as db:
             owner = db.execute("SELECT run_id FROM steps WHERE id=?", (step,)).fetchone()

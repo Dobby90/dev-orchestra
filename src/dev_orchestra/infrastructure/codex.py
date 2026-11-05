@@ -59,17 +59,60 @@ class CodexClient:
     def run_workspace(self, request, directory, session, stop=lambda: None):
         if not writes_workspace(request):
             raise PipelineError("workspace tools unavailable for this role")
+        session.reload()
+        session.guard()
         self.check_workspace(request, directory, session, stop)
         descriptor = directory / "workspace-launch.json"
-        write(descriptor, {"session": str(session.path), "database": str(session.store.path)})
-        return self.run(request, directory, stop, _workspace=descriptor)
+        write(
+            descriptor,
+            {
+                "session": str(session.path),
+                "database": str(session.store.path),
+                "run_id": session.run_id,
+                "kind": "workspace",
+            },
+        )
+        from dev_orchestra.infrastructure.conversations import (
+            ConversationUnavailable,
+            aggregate_calls,
+            next_call,
+            session_id,
+            thread_event,
+        )
+
+        options = self.config.for_role(request.role)
+        persistent = request.role in {"developer", "fixer"}
+        thread = session_id(session, options) if persistent else None
+        while True:
+            call = next_call(directory)
+            try:
+                return self.run(
+                    request,
+                    call,
+                    stop,
+                    _workspace=descriptor,
+                    _session_id=thread,
+                    _persistent=persistent,
+                    _metadata_only=session.data.get("metadata_only", False),
+                    _thread_event=thread_event(session, options, thread) if persistent else None,
+                )
+            except ConversationUnavailable:
+                if not thread:
+                    raise
+                thread = None
+                request.context.setdefault("workspace_resume", {})["conversation_fallback"] = True
+            finally:
+                aggregate_calls(directory, options)
 
     def run_readonly(self, request, directory, session, stop=lambda: None):
         if request.role != "reviewer":
             raise PipelineError("read-only evidence tools are restricted to reviewer")
         self.check_workspace(request, directory, session, stop)
         descriptor = directory / "review-evidence-launch.json"
-        write(descriptor, {"session": str(session.path), "database": str(session.store.path)})
+        write(
+            descriptor,
+            {"session": str(session.path), "database": str(session.store.path), "kind": "review"},
+        )
         return self.run(request, directory, stop, _workspace=descriptor)
 
     def check_workspace(self, request, directory, session, stop):
@@ -131,8 +174,19 @@ class CodexClient:
                 for probe in probes:
                     Path(probe).unlink(missing_ok=True)
 
-    def run(self, request: AgentRequest, directory: Path, stop=lambda: None, *, _workspace=None):
-        from dev_orchestra.agents.prompts import prompt
+    def run(
+        self,
+        request: AgentRequest,
+        directory: Path,
+        stop=lambda: None,
+        *,
+        _workspace=None,
+        _session_id=None,
+        _persistent=False,
+        _metadata_only=False,
+        _thread_event=None,
+    ):
+        from dev_orchestra.agents.prompts import continuation_prompt, prompt
 
         directory.mkdir(parents=True, exist_ok=True)
         if writes_workspace(request) and _workspace is None:
@@ -183,19 +237,36 @@ class CodexClient:
                 "required": True,
                 "default_tools_approval_mode": "approve",
                 "enabled_tools": (
-                    ["edit_file", "test_policy", "run_tests", "read_test_evidence"]
+                    [
+                        "edit_file",
+                        "test_policy",
+                        "run_tests",
+                        "read_test_evidence",
+                        "workspace_state",
+                    ]
                     if request.role == "tester"
                     else ["read_test_evidence"]
                     if request.role == "reviewer"
-                    else ["edit_file", "checkpoint_commit"]
+                    else ["edit_file", "checkpoint_commit", "workspace_state"]
                 ),
             }.items():
                 argv += ["-c", "mcp_servers.workspace." + key + "=" + json.dumps(value)]
+            if _metadata_only:
+                tools = ["workspace_state"] + (
+                    ["read_test_evidence", "test_policy"] if request.role == "tester" else []
+                )
+                argv += ["-c", "mcp_servers.workspace.enabled_tools=" + json.dumps(tools)]
+        if _persistent:
+            argv.remove("--ephemeral")
+        if _session_id:
+            argv.insert(argv.index("--sandbox") + 2, "resume")
         options = self.config.for_role(request.role)
         if options.model:
             argv += ["--model", options.model]
         if options.reasoning_effort:
             argv += ["-c", f'model_reasoning_effort="{options.reasoning_effort}"']
+        if _session_id:
+            argv.append(_session_id)
         argv.append("-")
         collector = UsageCollector(directory / "telemetry.json", options)
         succeeded = False
@@ -205,15 +276,30 @@ class CodexClient:
                 Path(request.worktree),
                 self.config.role_timeouts.get(request.role, self.config.timeout_seconds),
                 directory / "process.log",
-                prompt(request),
+                continuation_prompt(request) if _session_id or _metadata_only else prompt(request),
                 stop,
-                on_event=collector.event,
+                on_event=lambda value: (
+                    collector.event(value),
+                    _thread_event(value) if _thread_event else None,
+                ),
                 separate_stderr=True,
             )
             succeeded = rc == 0
         finally:
             collector.finish(succeeded)
         if rc:
+            if _session_id and any(
+                text in (directory / "process.log").read_text().lower()
+                for text in [
+                    "session not found",
+                    "no session found",
+                    "could not find session",
+                    "session is corrupt",
+                ]
+            ):
+                from dev_orchestra.infrastructure.conversations import ConversationUnavailable
+
+                raise ConversationUnavailable("recorded Codex session is unavailable")
             raise PipelineError(f"Codex {request.role} exited with code {rc}")
         if not result.exists():
             raise PipelineError("Codex returned no final JSON")

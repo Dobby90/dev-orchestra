@@ -73,6 +73,8 @@ TEST_TOOLS = {
 
 
 def dispatch(session, request):
+    if session.data["role"] != "reviewer":
+        session.reload()
     catalog = (
         {"read_test_evidence": TEST_TOOLS["read_test_evidence"]}
         if session.data["role"] == "reviewer"
@@ -80,6 +82,20 @@ def dispatch(session, request):
         if session.data["role"] == "tester"
         else TOOLS
     )
+    if session.data["role"] != "reviewer":
+        catalog = {
+            **catalog,
+            "workspace_state": (
+                Empty,
+                "Read current source hashes, confirmed commits and preserved test evidence; never writes files.",
+            ),
+        }
+        if session.data.get("metadata_only"):
+            catalog = {
+                key: value
+                for key, value in catalog.items()
+                if key in {"workspace_state", "test_policy", "read_test_evidence"}
+            }
     method = request.get("method")
     if method == "initialize":
         return {
