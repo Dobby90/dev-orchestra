@@ -2732,6 +2732,49 @@
         ],
         "title": "BranchPage"
       },
+      "CapacityView": {
+        "properties": {
+          "active": {
+            "type": "integer",
+            "title": "Active",
+            "default": 0
+          },
+          "total": {
+            "type": "integer",
+            "title": "Total",
+            "default": 1
+          },
+          "repository_active": {
+            "type": "integer",
+            "title": "Repository Active",
+            "default": 0
+          },
+          "repository_limit": {
+            "type": "integer",
+            "title": "Repository Limit",
+            "default": 1
+          },
+          "wait_reason": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "total_capacity",
+                  "repository_capacity",
+                  "shared_resource",
+                  "unknown"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Wait Reason"
+          }
+        },
+        "type": "object",
+        "title": "CapacityView"
+      },
       "ChangeInput": {
         "properties": {
           "expected_sha": {
@@ -2898,6 +2941,24 @@
           "history"
         ],
         "title": "ChangesView"
+      },
+      "CheckpointCommitView": {
+        "properties": {
+          "sha": {
+            "type": "string",
+            "title": "Sha"
+          },
+          "summary": {
+            "type": "string",
+            "title": "Summary"
+          }
+        },
+        "type": "object",
+        "required": [
+          "sha",
+          "summary"
+        ],
+        "title": "CheckpointCommitView"
       },
       "CleanupInput": {
         "properties": {
@@ -3450,6 +3511,80 @@
         },
         "type": "object",
         "title": "HTTPValidationError"
+      },
+      "LocalHandoffView": {
+        "properties": {
+          "repository": {
+            "type": "string",
+            "title": "Repository"
+          },
+          "branch": {
+            "type": "string",
+            "title": "Branch"
+          },
+          "approved_sha": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Approved Sha"
+          },
+          "candidate_sha": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Candidate Sha"
+          },
+          "current_branch_sha": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Current Branch Sha"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "pending",
+              "matching",
+              "changed"
+            ],
+            "title": "Status"
+          },
+          "commands": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Commands"
+          },
+          "notice": {
+            "type": "string",
+            "title": "Notice"
+          }
+        },
+        "type": "object",
+        "required": [
+          "repository",
+          "branch",
+          "status",
+          "commands",
+          "notice"
+        ],
+        "title": "LocalHandoffView"
       },
       "LogPage": {
         "properties": {
@@ -4595,6 +4730,29 @@
             ],
             "title": "Control"
           },
+          "handoff": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/LocalHandoffView"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "capacity": {
+            "$ref": "#/components/schemas/CapacityView"
+          },
+          "workspace_progress": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/WorkspaceProgressView"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "test_scope": {
             "type": "string",
             "enum": [
@@ -5104,6 +5262,45 @@
       },
       "StepView": {
         "properties": {
+          "commits": {
+            "items": {
+              "$ref": "#/components/schemas/CheckpointCommitView"
+            },
+            "type": "array",
+            "title": "Commits"
+          },
+          "preserved_changes": {
+            "type": "integer",
+            "title": "Preserved Changes",
+            "default": 0
+          },
+          "checkpoint_sha": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Checkpoint Sha"
+          },
+          "recovery": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "same_role",
+                  "metadata",
+                  "unavailable"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Recovery"
+          },
           "id": {
             "type": "integer",
             "title": "Id"
@@ -6114,6 +6311,51 @@
         },
         "type": "object",
         "title": "ValidationView"
+      },
+      "WorkspaceProgressView": {
+        "properties": {
+          "commits": {
+            "items": {
+              "$ref": "#/components/schemas/CheckpointCommitView"
+            },
+            "type": "array",
+            "title": "Commits"
+          },
+          "preserved_changes": {
+            "type": "integer",
+            "title": "Preserved Changes",
+            "default": 0
+          },
+          "checkpoint_sha": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Checkpoint Sha"
+          },
+          "recovery": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "same_role",
+                  "metadata",
+                  "unavailable"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Recovery"
+          }
+        },
+        "type": "object",
+        "title": "WorkspaceProgressView"
       }
     }
   }

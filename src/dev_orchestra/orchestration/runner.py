@@ -915,6 +915,7 @@ class Runner:
                 "base",
                 "base_sha",
                 "current_sha",
+                "final_sha",
                 "state",
                 "iteration",
                 "revision",
@@ -925,6 +926,10 @@ class Runner:
         content = "# DevOrchestra report\n\n" + "\n".join(
             f"- **{k}**: {v}" for k, v in summary.items()
         )
+        from dev_orchestra.application.handoff import handoff_markdown
+
+        content += handoff_markdown(run)
+        content += "\n\n리뷰 범위: Run 누적 변경과 직접 영향을 받는 코드·호출부·기존 미해결 이슈.\n"
         content += "\n\n## Requirements\n\n" + run["spec"]
         if run.get("directives"):
             content += "\n\n## User change requests\n\n" + "\n\n".join(run["directives"])
@@ -946,6 +951,13 @@ class Runner:
         content += "\n\n## Implementation and verification history\n\n"
         for step in steps:
             content += f"- {step['role']} iteration={step['iteration']} attempt={step['attempt']} {step['status']} SHA={step['output_sha']}\n"
+            from dev_orchestra.application.progress import role_progress
+
+            progress = role_progress(self.store, run, step)
+            for commit in progress["commits"]:
+                content += f"  - 작업 단위 커밋 `{commit['sha']}`: {commit['summary']} (저장 완료, 검증 통과와 별도)\n"
+            if progress["checkpoint_sha"]:
+                content += f"  - 마지막 복구 지점 `{progress['checkpoint_sha']}` · 보존 변경 {progress['preserved_changes']}개 · 재개 방식 {progress['recovery']}\n"
         content += (
             "\n## Test and review results\n\n```json\n"
             + json.dumps(

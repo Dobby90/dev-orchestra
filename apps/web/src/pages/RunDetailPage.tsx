@@ -37,6 +37,7 @@ import { LogViewer } from "../components/LogViewer";
 import { AgentUsagePanel } from "../components/AgentUsagePanel";
 import { WorkflowTimeline } from "../components/WorkflowTimeline";
 import { DeleteRunButton } from "../components/DeleteRunButton";
+import { RunHandoffPanel } from "../components/RunHandoffPanel";
 import { TestChangePanel } from "../components/TestChangePanel";
 import { useRunEvents } from "../hooks/events";
 type Action =
@@ -497,6 +498,7 @@ function RunDetailBody({ rid }: { rid: string }) {
           {operation.data.error && ` · ${operation.data.error}`}
         </p>
       )}
+      <RunHandoffPanel run={r} />
       <section className="panel timeline-panel">
         <div className="panel-heading">
           <h2>워크플로 타임라인</h2>
@@ -691,7 +693,8 @@ function RunDetailBody({ rid }: { rid: string }) {
             {action?.kind === "cleanup" && (
               <p className="notice">
                 격리된 Worktree를 제거하고 브랜치·보존된 결과와 변경 이력은
-                유지합니다.
+                유지합니다. 정리 후 이 작업은 재개할 수 없습니다. 공통 Git
+                객체·로그·캐시 전체를 삭제하지 않습니다.
               </p>
             )}
             {action?.kind === "request-changes" ? (

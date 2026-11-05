@@ -24,8 +24,10 @@ class RunQueryService:
         return RunSummary.model_validate(values)
 
     def steps(self, run_id):
-        self.get(run_id)
-        return self.store.steps(run_id)
+        run = self.get(run_id)
+        from dev_orchestra.application.progress import role_progress
+
+        return [step | role_progress(self.store, run, step) for step in self.store.steps(run_id)]
 
     def snapshot(self, run_id):
         with self.store.connection() as db:

@@ -239,7 +239,19 @@ devorchestra --config config.yaml defer RUN_ID --reason "추가 확인 후 승�
 
 수정 요청은 새 revision에서 Fix·Test·Review를 다시 수행하며 변경이 없는 Fix도 새 검증을 거칩니다. 수정 한도는 유지하고 필요하면 `--new-max-fix-attempts`로 상향합니다. 승인은 특정 SHA의 이력이며, 이후 변경된 승인 결과는 `status`에서 사용자 개입이 필요한 상태로 표시합니다.
 
-`cleanup`은 Worktree만 정리하고 브랜치·커밋·보고서·SQLite 이력을 보존합니다. 미커밋 변경이 있는 Worktree를 강제로 삭제하지 않습니다. 보존된 Diff·JUnit·보고서는 Worktree 정리 후에도 조회할 수 있습니다.
+최종 승인은 원본과 Worktree의 Git common directory·저장소 정체성, 실제 작업 브랜치와 최종 후보 SHA를 확인합니다. CLI 승인 결과·GUI 상세·보고서에서 원본 프로젝트, 실제 브랜치명, 최종 승인 SHA와 로컬 조회 명령을 확인할 수 있습니다. 원격 저장소나 Git 인증은 필요하지 않습니다. 원본 checkout의 브랜치·미커밋 변경은 유지하며 Merge는 사용자가 직접 수행합니다. 완료 후 브랜치가 변경되면 과거 승인 SHA와 현재 브랜치 SHA를 구분해 표시하고 자동 복구하지 않습니다.
+
+```sh
+git -C ~/projects/example branch --list -- 'devorchestra/RUN_ID'
+git -C ~/projects/example log -5 --oneline refs/heads/devorchestra/RUN_ID --
+git -C ~/projects/example diff BASE_SHA refs/heads/devorchestra/RUN_ID --
+```
+
+실제 브랜치명과 `BASE_SHA`는 해당 Run의 안내 값을 사용하세요. Worktree에서 체크아웃 중인 브랜치는 원본 폴더에서 동시에 전환할 수 없습니다. 정리 전에도 위 명령으로 조회할 수 있으며, 원본 폴더에서 전환하려면 Worktree를 정리한 뒤 자신의 미커밋 변경을 확인하고 직접 전환하세요. 자동 stash·reset·checkout은 수행하지 않습니다.
+
+GUI의 기존 타임라인은 역할·회차·시도·입출력 SHA와 작업 단위 커밋·마지막 복구 지점을 표시합니다. 중간 커밋 저장은 테스트·리뷰 통과와 별개입니다. 재개 안내는 같은 역할 이어가기와 결과 요약 보완을 구분하며 실제 재개 시 호스트가 근거를 다시 검증합니다. 전체·동일 저장소 용량 및 공유 테스트 자원 대기 사유와 현재 점유 수를 표시합니다. 종료가 확인되지 않은 자식 프로세스의 점유도 용량에 포함합니다.
+
+`cleanup`은 Worktree만 정리하고 브랜치·커밋·보고서·SQLite 이력을 보존합니다. 미커밋 변경이 있는 Worktree를 강제로 삭제하지 않습니다. 보존된 Diff·JUnit·보고서는 Worktree 정리 후에도 조회할 수 있습니다. 정리는 작업 폴더·그 안의 의존성 및 출력 공간을 줄이며 공통 Git 객체·보존 로그·캐시 전체를 지우지 않습니다.
 
 CLI·GUI 어느 쪽에서 정리해도 해당 작업은 재개할 수 없습니다. 계속 개발하려면 새 Run을 생성하세요. 제거 후 상태 기록이 중단됐을 때는 `cleanup`을 다시 실행해 기록을 완료할 수 있습니다.
 

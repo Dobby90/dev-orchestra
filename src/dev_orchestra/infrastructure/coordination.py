@@ -130,7 +130,7 @@ def _cleanup_owner(path, directory):
 
 
 @contextmanager
-def slot(root, directory, stop=lambda: None, limit=None):
+def _slot(root, directory, stop, limit, waiting):
     directory = Path(directory).resolve()
     held = None
     owner_path = None
@@ -191,6 +191,7 @@ def slot(root, directory, stop=lambda: None, limit=None):
                         held.close()
                         raise
         if held is None:
+            waiting()
             time.sleep(0.05)
     try:
         yield
@@ -204,14 +205,41 @@ def slot(root, directory, stop=lambda: None, limit=None):
 
 
 @contextmanager
+def slot(root, directory, stop=lambda: None, limit=None, *, wait_reason="shared_resource"):
+    marker = run_directory(directory) / "capacity-wait.json"
+    recorded = False
+
+    def waiting():
+        nonlocal recorded
+        if not recorded:
+            write(marker, {"owner": identity(os.getpid()), "reason": wait_reason})
+            recorded = True
+
+    try:
+        with _slot(root, directory, stop, limit, waiting):
+            if recorded:
+                marker.unlink(missing_ok=True)
+                recorded = False
+            yield
+    finally:
+        if recorded:
+            marker.unlink(missing_ok=True)
+
+
+@contextmanager
 def execution_capacity(database, run, stop):
     common, _ = repository_root(run["repo"])
     with (
         # Old workers take these gates exclusively. They cannot overlap new workers.
         lock(Path(database).with_suffix(".worker.lock"), wait=True, stop=stop, shared=True),
         lock(common / "devorchestra.lock", wait=True, stop=stop, shared=True),
-        slot(database_root(database), Path(run["directory"]), stop),
-        slot(common / "devorchestra-capacity-v1", Path(run["directory"]), stop),
+        slot(database_root(database), Path(run["directory"]), stop, wait_reason="total_capacity"),
+        slot(
+            common / "devorchestra-capacity-v1",
+            Path(run["directory"]),
+            stop,
+            wait_reason="repository_capacity",
+        ),
     ):
         yield
 

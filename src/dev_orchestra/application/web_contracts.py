@@ -246,7 +246,43 @@ class ValidationView(BaseModel):
     reason: str | None = None
 
 
+class LocalHandoffView(BaseModel):
+    repository: str
+    branch: str
+    approved_sha: str | None = None
+    candidate_sha: str | None = None
+    current_branch_sha: str | None = None
+    status: Literal["pending", "matching", "changed"]
+    commands: list[str]
+    notice: str
+
+
+class CapacityView(BaseModel):
+    active: int = 0
+    total: int = 1
+    repository_active: int = 0
+    repository_limit: int = 1
+    wait_reason: (
+        Literal["total_capacity", "repository_capacity", "shared_resource", "unknown"] | None
+    ) = None
+
+
+class CheckpointCommitView(BaseModel):
+    sha: str
+    summary: str
+
+
+class WorkspaceProgressView(BaseModel):
+    commits: list[CheckpointCommitView] = Field(default_factory=list)
+    preserved_changes: int = 0
+    checkpoint_sha: str | None = None
+    recovery: Literal["same_role", "metadata", "unavailable"] | None = None
+
+
 class RunDetail(RunSummary):
+    handoff: LocalHandoffView | None = None
+    capacity: CapacityView = Field(default_factory=CapacityView)
+    workspace_progress: WorkspaceProgressView | None = None
     test_scope: Literal["full", "affected"] = "full"
     plan: str | None = None
     criteria: list[dict[str, str]] = Field(default_factory=list)
@@ -302,7 +338,7 @@ class PreviewView(BaseModel):
     validation_warnings: list[str] = Field(default_factory=list)
 
 
-class StepView(BaseModel):
+class StepView(WorkspaceProgressView):
     id: int
     run_id: str
     role: str

@@ -897,6 +897,31 @@ export interface components {
             /** Items */
             items: string[];
         };
+        /** CapacityView */
+        CapacityView: {
+            /**
+             * Active
+             * @default 0
+             */
+            active: number;
+            /**
+             * Total
+             * @default 1
+             */
+            total: number;
+            /**
+             * Repository Active
+             * @default 0
+             */
+            repository_active: number;
+            /**
+             * Repository Limit
+             * @default 1
+             */
+            repository_limit: number;
+            /** Wait Reason */
+            wait_reason?: ("total_capacity" | "repository_capacity" | "shared_resource" | "unknown") | null;
+        };
         /** ChangeInput */
         ChangeInput: {
             /** Expected Sha */
@@ -941,6 +966,13 @@ export interface components {
             files: components["schemas"]["ChangedFile"][];
             /** History */
             history: components["schemas"]["SnapshotStamp"][];
+        };
+        /** CheckpointCommitView */
+        CheckpointCommitView: {
+            /** Sha */
+            sha: string;
+            /** Summary */
+            summary: string;
         };
         /** CleanupInput */
         CleanupInput: {
@@ -1126,6 +1158,28 @@ export interface components {
         HTTPValidationError: {
             /** Detail */
             detail?: components["schemas"]["ValidationError"][];
+        };
+        /** LocalHandoffView */
+        LocalHandoffView: {
+            /** Repository */
+            repository: string;
+            /** Branch */
+            branch: string;
+            /** Approved Sha */
+            approved_sha?: string | null;
+            /** Candidate Sha */
+            candidate_sha?: string | null;
+            /** Current Branch Sha */
+            current_branch_sha?: string | null;
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "pending" | "matching" | "changed";
+            /** Commands */
+            commands: string[];
+            /** Notice */
+            notice: string;
         };
         /** LogPage */
         LogPage: {
@@ -1527,6 +1581,9 @@ export interface components {
             current_role?: string | null;
             /** Control */
             control?: ("cancel" | "pause") | null;
+            handoff?: components["schemas"]["LocalHandoffView"] | null;
+            capacity?: components["schemas"]["CapacityView"];
+            workspace_progress?: components["schemas"]["WorkspaceProgressView"] | null;
             /**
              * Test Scope
              * @default full
@@ -1695,6 +1752,17 @@ export interface components {
         };
         /** StepView */
         StepView: {
+            /** Commits */
+            commits?: components["schemas"]["CheckpointCommitView"][];
+            /**
+             * Preserved Changes
+             * @default 0
+             */
+            preserved_changes: number;
+            /** Checkpoint Sha */
+            checkpoint_sha?: string | null;
+            /** Recovery */
+            recovery?: ("same_role" | "metadata" | "unavailable") | null;
             /** Id */
             id: number;
             /** Run Id */
@@ -2044,6 +2112,20 @@ export interface components {
             checked_at?: string | null;
             /** Reason */
             reason?: string | null;
+        };
+        /** WorkspaceProgressView */
+        WorkspaceProgressView: {
+            /** Commits */
+            commits?: components["schemas"]["CheckpointCommitView"][];
+            /**
+             * Preserved Changes
+             * @default 0
+             */
+            preserved_changes: number;
+            /** Checkpoint Sha */
+            checkpoint_sha?: string | null;
+            /** Recovery */
+            recovery?: ("same_role" | "metadata" | "unavailable") | null;
         };
     };
     responses: never;

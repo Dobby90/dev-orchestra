@@ -3,6 +3,8 @@
 import time
 from pathlib import Path
 
+from dev_orchestra.application.handoff import handoff
+from dev_orchestra.application.progress import capacity_view, role_progress
 from dev_orchestra.domain.models import PipelineError
 from dev_orchestra.infrastructure.evidence import verified_candidate
 from dev_orchestra.infrastructure.git import Git
@@ -70,6 +72,9 @@ def observe(store, run):
     }
     if run["state"] in {"waiting_approval", "completed"} and candidate and run.get("directory"):
         try:
+            from dev_orchestra.application.handoff import verify_branch
+
+            verify_branch(run, candidate, worktree=not run.get("worktree_removed", False))
             verified_candidate(store, run, candidate)
             if Path(run["worktree"]).exists():
                 from dev_orchestra.config import Config
@@ -151,6 +156,16 @@ def observe(store, run):
         actions = ["delete"] if run.get("project_id") else []
     return {
         "execution": execution,
+        "handoff": handoff(run),
+        "capacity": capacity_view(store, run),
+        "workspace_progress": next(
+            (
+                role_progress(store, run, s)
+                for s in reversed(store.steps(run["id"]))
+                if s["id"] == (run.get("workspace_checkpoint") or {}).get("step_id")
+            ),
+            None,
+        ),
         "validation": validation,
         "allowed_actions": actions,
         "deletion_pending": bool(run.get("deletion_pending")),

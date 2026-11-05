@@ -165,7 +165,9 @@ def pause(ctx: typer.Context, run_id: str):
 @guarded
 def approve(ctx: typer.Context, run_id: str):
     ctx.obj.approve(run_id)
-    typer.echo("Approved; no push or merge performed")
+    from dev_orchestra.application.handoff import handoff_markdown
+
+    typer.echo(handoff_markdown(ctx.obj.queries.get(run_id)))
 
 
 @app.command()

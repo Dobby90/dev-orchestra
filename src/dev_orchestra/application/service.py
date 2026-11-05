@@ -7,11 +7,13 @@ from dev_orchestra.application.approvals import ApprovalService
 from dev_orchestra.application.contracts import CreateRun, RepositoryInfo
 from dev_orchestra.application.events import EventService
 from dev_orchestra.application.execution import ExecutionService
+from dev_orchestra.application.handoff import repository_identity, verify_branch
 from dev_orchestra.application.queries import RunQueryService
 from dev_orchestra.application.recovery import RecoveryService
 from dev_orchestra.config import Config
 from dev_orchestra.domain.execution import PATCH_V1, execution_contract
 from dev_orchestra.domain.models import PipelineError
+from dev_orchestra.infrastructure.coordination import metadata
 from dev_orchestra.infrastructure.evidence import checkpoints
 from dev_orchestra.infrastructure.files import digest, write
 from dev_orchestra.infrastructure.git import Git
@@ -86,6 +88,7 @@ class RunService:
             if path.resolve().is_relative_to(root.resolve()):
                 raise PipelineError("storage and worktrees must be outside the target repository")
         data = {
+            "repository_identity": repository_identity(repo),
             "test_scope": command.test_scope,
             "test_selection_contract": 1,
             "execution_contract": self.execution_contract,
@@ -293,7 +296,11 @@ class RunService:
     def cleanup(self, run_id, expected_version=None, *, operation=None):
         run = self.store.get(run_id)
         directory = Path(run["directory"])
-        with lock(directory / "execution.lock"), execution_scope(directory):
+        with (
+            lock(directory / "execution.lock"),
+            execution_scope(directory),
+            metadata(Path(run["repo"]), directory),
+        ):
             run = self.store.get(run_id)
             # An operation may have committed removal before its caller crashed.
             applied = run.get("worktree_removed") and (
@@ -304,12 +311,16 @@ class RunService:
             if run["state"] not in {"completed", "cancelled", "failed", "needs_input"}:
                 raise PipelineError("active run cannot be cleaned up")
             ensure_stopped(directory)
+            if run["state"] == "completed":
+                verify_branch(run, run["final_sha"], worktree=Path(run["worktree"]).exists())
             from dev_orchestra.application.results import Results
 
             if Path(run["worktree"]).exists():
                 if run.get("current_sha"):
                     Results(self.store).save_snapshot(run_id, run["current_sha"])
-                Git(Path(run["repo"])).remove(Path(run["worktree"]))
+                # Already inside the short metadata lock: do not reacquire the
+                # non-reentrant serialized Git.remove wrapper.
+                Git(Path(run["repo"])).call("worktree", "remove", run["worktree"])
             with self.store.transaction() as db:
                 if not run.get("worktree_removed") or run.get("cleanup_requested"):
                     self.store.update(
