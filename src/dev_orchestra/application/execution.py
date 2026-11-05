@@ -8,6 +8,7 @@ from pathlib import Path
 
 import psutil
 
+from dev_orchestra.domain.models import PipelineError
 from dev_orchestra.infrastructure.files import write
 from dev_orchestra.infrastructure.process_owner import identity
 
@@ -25,6 +26,25 @@ class ExecutionService:
         job = None
         if queue.enabled():
             job = queue.reserve(run_id)
+            while job is None:
+                if detached:
+                    self.ensure_dispatcher(queue)
+                    return None  # Durable queued job; Dispatcher will claim it later.
+                try:
+                    time.sleep(0.05)
+                    queue.recover()
+                    try:
+                        # Dispatcher may have claimed it while foreground waited.
+                        # Adopt that exact job and keep waiting for its completion.
+                        job = queue.reserve(run_id)
+                    except PipelineError:
+                        run = self.store.get(run_id)
+                        if run["state"] != "queued" or run["control"]:
+                            self.status(run_id)
+                            return None
+                        raise
+                except KeyboardInterrupt:
+                    self.store.control(run_id, "pause")
             if not job.get("_launch"):
                 deadline = time.monotonic() + 10
                 while time.monotonic() < deadline:
@@ -58,6 +78,42 @@ class ExecutionService:
                         self.store.control(run_id, "pause")
                 raise OwnershipError("worker launch pending or owner lost; inspect before retry")
         return self.launch(run_id, detached, job)
+
+    def ensure_dispatcher(self, queue):
+        from dev_orchestra.infrastructure.locking import OwnershipError, lock
+
+        with lock(self.store.path.with_suffix(".dispatcher-start.lock"), wait=True):
+            deadline = time.monotonic() + 10
+            while time.monotonic() < deadline:
+                state = queue.dispatcher_status()
+                if not state["alive"]:
+                    break
+                if not state["stop_requested"]:
+                    return
+                time.sleep(0.05)
+            else:
+                raise OwnershipError("queued job retained; previous Dispatcher is still stopping")
+            with self.store.path.with_suffix(".dispatcher.log").open("a") as output:
+                process = subprocess.Popen(
+                    [
+                        sys.executable,
+                        "-m",
+                        "dev_orchestra.execution.dispatcher",
+                        str(self.store.path),
+                    ],
+                    stdout=output,
+                    stderr=subprocess.STDOUT,
+                    stdin=subprocess.DEVNULL,
+                    start_new_session=True,
+                )
+            while time.monotonic() < deadline:
+                state = queue.dispatcher_status()
+                if state["alive"] and not state["stop_requested"]:
+                    return
+                if process.poll() is not None:
+                    break
+                time.sleep(0.05)
+            raise OwnershipError("queued job retained; Dispatcher startup not confirmed")
 
     def wait_existing(self, run_id, job):
         from dev_orchestra.application.queue import QueueService

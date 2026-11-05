@@ -6,6 +6,7 @@ import uuid
 from pathlib import Path
 
 from dev_orchestra.domain.models import PipelineError
+from dev_orchestra.infrastructure.coordination import database_root, policy, repository_root
 from dev_orchestra.infrastructure.locking import OwnershipError, lock
 from dev_orchestra.infrastructure.process_owner import alive, ensure_stopped, identity
 from dev_orchestra.infrastructure.store import now
@@ -43,16 +44,13 @@ class QueueService:
 
     def reserve(self, run_id=None):
         with self.store.transaction() as db:
+            active = db.execute(
+                "SELECT j.run_id FROM jobs j WHERE j.state IN ('claimed','running')"
+            ).fetchall()
             if run_id is None:
-                if db.execute(
-                    "SELECT 1 FROM jobs WHERE state IN ('claimed','running') LIMIT 1"
-                ).fetchone():
-                    return None
-                row = db.execute(
-                    "SELECT j.* FROM jobs j JOIN runs r ON r.id=j.run_id WHERE j.state='queued' AND r.state='queued' AND r.control IS NULL ORDER BY j.rowid LIMIT 1"
-                ).fetchone()
-                if not row:
-                    return None
+                candidates = db.execute(
+                    "SELECT j.* FROM jobs j JOIN runs r ON r.id=j.run_id WHERE j.state='queued' AND r.state='queued' AND r.control IS NULL ORDER BY j.rowid"
+                ).fetchall()
             else:
                 run = self.store.get(run_id)
                 row = db.execute(
@@ -70,6 +68,18 @@ class QueueService:
                         (jid, run_id, now()),
                     )
                     row = db.execute("SELECT * FROM jobs WHERE id=?", (jid,)).fetchone()
+                candidates = [row]
+            if len(active) >= policy(database_root(self.store.path)):
+                return None
+            occupied = [repository_root(self.store.get(j["run_id"])["repo"])[1] for j in active]
+            row = None
+            for candidate in candidates:
+                common, key = repository_root(self.store.get(candidate["run_id"])["repo"])
+                if occupied.count(key) < policy(common / "devorchestra-capacity-v1"):
+                    row = candidate
+                    break
+            if row is None:
+                return None
             token = uuid.uuid4().hex
             db.execute(
                 "UPDATE jobs SET state='claimed',claim_token=?,claim_epoch=claim_epoch+1,attempt=attempt+1,launch_deadline=?,owner_pid=NULL,owner_create_time=NULL WHERE id=? AND state='queued'",

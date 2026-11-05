@@ -284,6 +284,23 @@ API 기본 주소는 `http://127.0.0.1:8000`, Vite GUI는 `http://127.0.0.1:5173
 
 API는 작업을 `queued`로 접수하고 독립 Dispatcher가 실행합니다. Dispatcher가 없으면 `queued_reason=dispatcher_offline`, 다른 작업이 실행 중이면 `waiting_capacity`를 반환합니다. `worker status`로 확인하고 `worker stop`으로 새 작업 실행을 중지할 수 있습니다. Dispatcher 종료와 API·SSE 연결 종료는 실행 중 Run 취소를 의미하지 않습니다. 미등록 CLI 작업은 GUI에서 조회 전용입니다.
 
+동시 실행 한도는 DB 전체와 Git 공통 저장소별로 각각 기본 1입니다. 명시적으로 늘리면 서로 다른 저장소뿐 아니라 같은 저장소의 독립 브랜치·Worktree도 병렬로 진행합니다. 한 Run 안의 역할 순서와 승인·수정 반복은 유지합니다.
+
+```sh
+# DB 전체 2개, 해당 저장소에서 최대 2개를 허용합니다.
+devorchestra --config config.yaml worker capacity --total 2 --repo ~/projects/example --repository 2
+# 현재 설정을 조회합니다.
+devorchestra --config config.yaml worker capacity --repo ~/projects/example
+```
+
+한도는 1~32이며 축소해도 실행 중 작업을 종료하지 않습니다. `claimed` 작업도 큐 용량에 포함합니다. CLI의 특정 Run 시작도 같은 선점 검사를 사용하며, 용량이 찬 경우 foreground는 대기하고 `--detach`는 큐에 남긴 뒤 Dispatcher를 기동합니다. CLI 기본 스키마 2의 Worker도 같은 실행 슬롯을 사용합니다. 승인·입력 대기에서는 자식 프로세스 종료 확인 후 슬롯을 반환합니다.
+
+DB 정책과 슬롯은 DB 경로 옆 `.capacity/` 디렉터리에, 저장소 정책과 슬롯은 Git common directory의 `devorchestra-capacity-v1/`에 보존합니다. linked Worktree와 다른 DB도 같은 저장소 한도를 공유하므로 설정 변경은 그 저장소를 쓰는 모든 새 Worker에 적용됩니다. 실행 중 이 파일이나 잠금 파일을 삭제하지 마세요. 구버전 Worker가 잡는 기존 배타 잠금은 호환 게이트로 유지하여 새 Worker와 동시에 실행되지 않으며, 병렬 실행은 같은 새 규약을 사용하는 Worker끼리만 허용합니다. DB 스키마는 변경하지 않습니다.
+
+Git의 Worktree 생성·제거·커밋과 승인 기록은 짧은 저장소 메타데이터 잠금으로 조정합니다. 긴 모델·테스트 호출은 이 잠금을 잡지 않습니다. loopback 테스트는 같은 호스트·사용자의 공통 슬롯으로 직렬화하고, npm 캐시 쓰기와 Playwright 설치도 자원별로 조정합니다. Java 실행 캐시·임시 디렉터리는 기존 Run별 격리를 유지합니다. 브랜치 분리 자체가 CPU·메모리나 외부 서비스를 격리하지는 않으므로 프로젝트 자원에 맞춰 한도를 설정하세요.
+
+공통 자원에는 Worker PID·생성 시각과 Run 소유 기록을 먼저 남깁니다. Worker가 비정상 종료하면 실행 잠금과 guardian의 자식 종료 근거를 확인한 뒤에만 자원을 재사용하며, 종료가 확인되지 않으면 보존·차단합니다. PID나 heartbeat 만료만으로 실행권을 넘기지 않습니다. 잠금 순서는 유지보수 → Run 실행 → 구버전 호환 게이트 → DB 슬롯 → 저장소 슬롯 → 짧은 메타데이터/공유 자원 잠금입니다. DB 트랜잭션을 유지한 채 모델·테스트·슬롯 반환을 기다리지 않습니다.
+
 SSE는 영속 event ID로 재연결·재생하며 GUI는 연결 단절 중 이력을 주기적으로 조회합니다. 로그 화면은 가상 목록과 최대 1,000개 구간·1 MiB 보관 한도를 사용합니다. 화면 로그 저장은 현재 보관 구간이며 전체 로그는 별도 다운로드를 사용합니다. 인증된 `/api/openapi.json`·`/api/docs`는 OpenAPI JSON을 제공하고 외부 CDN의 Swagger UI는 사용하지 않습니다. 화면과 프론트엔드 세부 사항은 [웹 앱 안내](apps/web/README.md)를 참고하세요.
 
 Dispatcher는 큐 선점 후 파일 수·시간 예산 안에서 로그를 색인합니다. 종료 로그의 처리 완료와 순회 위치는 Run 디렉터리에 기록하며, 완료된 이력은 매 회차 전체 로그를 열지 않고 순서대로 재확인합니다. 종료 후 추가·교체·축소된 로그는 완료 후 최소 30초가 지난 재확인 차례에 반영되므로 이력 수와 미처리량에 따라 반영이 늦어질 수 있습니다.

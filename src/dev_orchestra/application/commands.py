@@ -3,6 +3,7 @@
 import hashlib
 import json
 import uuid
+from contextlib import nullcontext
 from pathlib import Path
 
 from dev_orchestra.application.errors import ApplicationError
@@ -12,6 +13,7 @@ from dev_orchestra.application.reviews import Reviews
 from dev_orchestra.application.test_changes import TestChangeService
 from dev_orchestra.config import Config
 from dev_orchestra.domain.models import PipelineError
+from dev_orchestra.infrastructure.coordination import metadata
 from dev_orchestra.infrastructure.locking import lock
 from dev_orchestra.infrastructure.process import sanitize
 from dev_orchestra.infrastructure.process_owner import ensure_stopped
@@ -129,7 +131,12 @@ class Commands:
                 op = self.record(db, run_id, kind, scope, key_hash, request_hash, "accepted", {})
             self.finish_reconcile(op, run_id, expected_version)
             return self.get(op)
-        with lock(directory / "execution.lock"):
+        with (
+            lock(directory / "execution.lock"),
+            metadata(Path(run["repo"]), directory)
+            if kind in {"approve", "request-changes"}
+            else nullcontext(),
+        ):
             run = self.store.get(run_id)
             with self.store.connection() as db:
                 old = replay(db)

@@ -2,10 +2,22 @@
 
 import subprocess
 import uuid
+from functools import wraps
 from pathlib import Path
 
 from dev_orchestra.domain.models import PipelineError
 from dev_orchestra.infrastructure.process import execute, execution_directory
+
+
+def serialized(function):
+    @wraps(function)
+    def invoke(self, *args, **kwargs):
+        from dev_orchestra.infrastructure.coordination import metadata
+
+        with metadata(self.repo):
+            return function(self, *args, **kwargs)
+
+    return invoke
 
 
 class Git:
@@ -78,6 +90,7 @@ class Git:
         self.call("check-ref-format", "--branch", branch)
         return self.call("rev-parse", "--verify", f"refs/heads/{branch}^{{commit}}")
 
+    @serialized
     def create(self, path, branch, sha):
         self.call("check-ref-format", "--branch", branch)
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -88,6 +101,7 @@ class Git:
             "status", "--porcelain", "--untracked-files=all", "--", ".", *self.exclusions
         )
 
+    @serialized
     def commit(self, message):
         paths = self.call(
             "ls-files",
@@ -137,6 +151,7 @@ class Git:
             raise PipelineError("selected staging mismatch; index preserved")
         return self.call("write-tree")
 
+    @serialized
     def commit_selected(self, message, parent, tree):
         if self.sha() != parent or self.call("write-tree") != tree:
             raise PipelineError("checkpoint parent or staged tree changed")
@@ -149,5 +164,6 @@ class Git:
             raise PipelineError("checkpoint commit identity mismatch")
         return sha
 
+    @serialized
     def remove(self, path):
         self.call("worktree", "remove", str(path))

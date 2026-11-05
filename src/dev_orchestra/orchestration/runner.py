@@ -72,12 +72,9 @@ class Runner:
                 return self.store.get(run_id)["control"]
 
             try:
-                with (
-                    lock(self.store.path.with_suffix(".worker.lock"), wait=True, stop=stop),
-                    lock(
-                        Git(Path(run["repo"])).common() / "devorchestra.lock", wait=True, stop=stop
-                    ),
-                ):
+                from dev_orchestra.infrastructure.coordination import execution_capacity
+
+                with execution_capacity(self.store.path, run, stop):
                     ensure_stopped(directory)
                     if claim:
                         from dev_orchestra.application.queue import QueueService
@@ -157,7 +154,10 @@ class Runner:
             from dev_orchestra.application.workspace_recovery import recover_workspace
 
             try:
-                resumed_workspace = recover_workspace(self.store, run)
+                from dev_orchestra.infrastructure.coordination import metadata
+
+                with metadata(Path(run["repo"])):
+                    resumed_workspace = recover_workspace(self.store, run)
                 run = self.store.get(run_id)
             except (PipelineError, ValueError, OSError, KeyError) as error:
                 self.store.update(

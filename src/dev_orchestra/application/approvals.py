@@ -7,6 +7,7 @@ from dev_orchestra.application.contracts import ApprovalCommand
 from dev_orchestra.application.errors import ApplicationError
 from dev_orchestra.config import Config
 from dev_orchestra.domain.models import PipelineError
+from dev_orchestra.infrastructure.coordination import metadata
 from dev_orchestra.infrastructure.evidence import verified_candidate
 from dev_orchestra.infrastructure.files import digest
 from dev_orchestra.infrastructure.git import Git
@@ -22,7 +23,10 @@ class ApprovalService:
 
     def approve(self, run_id, expected_version=None, expected_sha=None):
         run = self.store.get(run_id)
-        with lock(Path(run["directory"]) / "execution.lock"):
+        with (
+            lock(Path(run["directory"]) / "execution.lock"),
+            metadata(Path(run["repo"]), Path(run["directory"])),
+        ):
             run = self.store.get(run_id)
             sha, evidence = self.verify_locked(run_id, expected_version, expected_sha)
             self.store.approve(run_id, sha, evidence, expected_version=run["version"])

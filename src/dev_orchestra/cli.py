@@ -295,6 +295,20 @@ worker_app = typer.Typer(help="Independent local queue Dispatcher")
 app.add_typer(worker_app, name="worker")
 
 
+@worker_app.command("capacity")
+@guarded
+def worker_capacity(
+    ctx: typer.Context,
+    total: int | None = typer.Option(None, min=1, max=32),
+    repo: Path | None = None,
+    repository: int | None = typer.Option(None, min=1, max=32),
+):
+    """DB 전체 및 Git 공통 저장소의 동시 실행 한도를 조회·설정합니다."""
+    from dev_orchestra.infrastructure.coordination import configure_capacity
+
+    typer.echo(json.dumps(configure_capacity(ctx.obj.store.path, total, repo, repository)))
+
+
 @worker_app.command("start")
 @guarded
 def worker_start(ctx: typer.Context, detach: bool = False):

@@ -14,9 +14,16 @@ import urllib.request
 from pathlib import Path, PurePosixPath
 
 from dev_orchestra.domain.models import PipelineError, StopRequested
+from dev_orchestra.infrastructure.coordination import host_root, slot
 from dev_orchestra.infrastructure.files import contained
 from dev_orchestra.infrastructure.locking import lock
-from dev_orchestra.infrastructure.process import environment, execute, sanitize
+from dev_orchestra.infrastructure.process import (
+    environment,
+    execute,
+    execution_directory,
+    execution_scope,
+    sanitize,
+)
 
 
 def browser_cache():
@@ -178,7 +185,11 @@ def prepare_browsers(worktree, config, directory, stop=lambda: None):
     cache.mkdir(parents=True, exist_ok=True)
     directory.mkdir(parents=True, exist_ok=True)
     versions = set()
-    with lock(cache / ".devorchestra-install.lock", wait=True, stop=stop):
+    with (
+        slot(host_root() / "playwright-install", execution_directory() or directory, stop, limit=1),
+        execution_scope(execution_directory() or directory),
+        lock(cache / ".devorchestra-install.lock", wait=True, stop=stop),
+    ):
         for key, command in commands:
             check_stop(stop)
             cwd = (
