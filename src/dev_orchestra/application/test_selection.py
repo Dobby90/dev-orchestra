@@ -10,7 +10,12 @@ from dev_orchestra.infrastructure.git import Git
 SELECTOR_VERSION = 1
 
 
-def selection_for_paths(run, candidate, paths, input_error=None):
+def selection_for_paths(run, candidate, paths, input_error=None, plan=None):
+    from dev_orchestra.application.automatic_tests import automatic, model_selection
+
+    if automatic(run):
+        return model_selection(run, candidate, paths, plan, input_error)
+
     tests = Config.model_validate(run["config"]).tests
     scope = run.get("test_scope", "full")
     if scope not in {"full", "affected"}:
@@ -111,12 +116,15 @@ def selection_for_paths(run, candidate, paths, input_error=None):
     return value | {"selection_hash": checksum(value)}
 
 
-def select_tests(run, worktree, candidate):
+def select_tests(run, worktree, candidate, plan=None):
     try:
         names = Git(worktree).call("diff", "--name-only", "-z", run["base_sha"], candidate, "--")
-        return selection_for_paths(run, candidate, list(filter(None, names.split("\0"))))
+        paths = list(filter(None, names.split("\0")))
     except PipelineError:
-        return selection_for_paths(run, candidate, [], input_error="git_diff_unavailable")
+        return selection_for_paths(
+            run, candidate, [], input_error="git_diff_unavailable", plan=plan
+        )
+    return selection_for_paths(run, candidate, paths, plan=plan)
 
 
 def selected_config(run, selection):
@@ -124,7 +132,11 @@ def selected_config(run, selection):
     return config.model_copy(
         update={
             "commands": {
-                key: command
+                key: command.model_copy(
+                    update={"argv": selection["resolved_commands"][key]["argv"]}
+                )
+                if selection.get("selector_version") == 2
+                else command
                 for key, command in config.commands.items()
                 if key in selection["included"]
             }
@@ -138,8 +150,14 @@ def verify_selection(run, payload):
         if run.get("test_selection_contract"):
             raise PipelineError("missing host test selection evidence")
         return
+    if run.get("test_selection_contract") == 2 and not selection.get("selection_hash"):
+        raise PipelineError("automatic test selection is not finalized")
     expected = selection_for_paths(
-        run, payload["sha"], selection["changed_files"], selection.get("input_error")
+        run,
+        payload["sha"],
+        selection["changed_files"],
+        selection.get("input_error"),
+        plan=selection.get("test_plan"),
     )
     if selection != expected or payload.get("revision", 0) != run.get("revision", 0):
         raise PipelineError("test selection SHA, scope, revision or policy mismatch")
@@ -148,7 +166,11 @@ def verify_selection(run, payload):
     if set(actual) != set(selection["included"]) or len(actual) != len(set(actual)):
         raise PipelineError("test execution does not cover the host required command set")
     for command in execution.get("commands", []):
-        policy = run["config"]["tests"]["commands"][command["command_id"]]
+        policy = (
+            selection["resolved_commands"]
+            if selection.get("selector_version") == 2
+            else run["config"]["tests"]["commands"]
+        )[command["command_id"]]
         if command.get("argv") != policy["argv"] or command.get("kind", "test") != policy.get(
             "kind", "test"
         ):

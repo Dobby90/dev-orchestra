@@ -321,6 +321,7 @@ class Runner:
                     "base_sha": run["base_sha"],
                     "test_paths": config.tests.write_paths,
                     "test_scope": run.get("test_scope", "full"),
+                    "automatic_test_selection": run.get("test_selection_contract") == 2,
                     "test_commands": {k: v.model_dump() for k, v in config.tests.commands.items()},
                     "approved_test_changes": run.get("test_change_approvals", []),
                     "test_change_records": run.get("test_change_records", []),
@@ -414,6 +415,11 @@ class Runner:
                             request.context["response_contract"]["checkpoint_tool"] = (
                                 "workspace.checkpoint_commit"
                             )
+                    if role == "tester" and run.get("test_selection_contract") == 2:
+                        request.context["response_contract"].pop("command_ids", None)
+                        request.context["response_contract"]["available_command_ids"] = list(
+                            config.tests.commands
+                        )
                     result = None
                     try:
                         if workspace:
@@ -459,7 +465,9 @@ class Runner:
                                     config,
                                     selection,
                                     legacy_scope=(
-                                        run.get("test_scope") == "affected" and not workspace
+                                        run.get("test_scope") == "affected"
+                                        and not workspace
+                                        and run.get("test_selection_contract") != 2
                                     ),
                                 )
                             try:
@@ -542,7 +550,11 @@ class Runner:
                         result,
                         config,
                         selection,
-                        legacy_scope=(run.get("test_scope") == "affected" and not workspace),
+                        legacy_scope=(
+                            run.get("test_scope") == "affected"
+                            and not workspace
+                            and run.get("test_selection_contract") != 2
+                        ),
                     )
                 if workspace:
                     workspace.guard()
@@ -641,7 +653,14 @@ class Runner:
                         from dev_orchestra.application.test_selection import selected_config
 
                         selection = (
-                            select_tests(run, worktree, out_sha)
+                            select_tests(
+                                run,
+                                worktree,
+                                out_sha,
+                                plan=[item.model_dump() for item in result.test_plan]
+                                if run.get("test_selection_contract") == 2
+                                else None,
+                            )
                             if run.get("test_selection_contract")
                             else None
                         )
@@ -650,7 +669,11 @@ class Runner:
                             result,
                             config,
                             selection,
-                            legacy_scope=(run.get("test_scope") == "affected" and not workspace),
+                            legacy_scope=(
+                                run.get("test_scope") == "affected"
+                                and not workspace
+                                and run.get("test_selection_contract") != 2
+                            ),
                         )
                         payload["execution"] = self.tests.run(
                             worktree,
@@ -750,9 +773,14 @@ class Runner:
                         session.save()
                     if request.role == "tester":
                         request.context["test_selection"] = session.test_policy()
-                        request.context["response_contract"]["command_ids"] = request.context[
-                            "test_selection"
-                        ]["included"]
+                        policy = request.context["test_selection"]
+                        if policy.get("selection_hash") or policy.get("selector_version") != 2:
+                            request.context["response_contract"]["command_ids"] = policy["included"]
+                        else:
+                            request.context["response_contract"].pop("command_ids", None)
+                            request.context["response_contract"]["available_command_ids"] = list(
+                                config.tests.commands
+                            )
                     request.context["workspace_resume"] = {
                         "continuing": data.get("continuing", False),
                         "metadata_only": data.get("metadata_only", False),
@@ -818,7 +846,32 @@ class Runner:
 
     @staticmethod
     def validate_test_result(run, result, config, selection=None, *, legacy_scope=False):
-        ids = set(selection["included"]) if selection else set(config.tests.commands)
+        if run.get("test_selection_contract") == 2 and not (selection or {}).get("selection_hash"):
+            plan_ids = [item.command_id for item in result.test_plan]
+            if (
+                not plan_ids
+                or len(plan_ids) != len(set(plan_ids))
+                or not set(plan_ids) <= set(config.tests.commands)
+                or any(not item.reason.strip() for item in result.test_plan)
+            ):
+                raise ResponseError(
+                    "automatic tester requires a unique configured test_plan with reasons"
+                )
+            ids = {item.command_id for item in result.test_plan}
+            ids |= {key for key, cmd in config.tests.commands.items() if cmd.kind == "check"}
+            if config.tests.affected:
+                ids |= set(config.tests.affected.required_commands)
+                while True:
+                    expanded = ids | {
+                        key
+                        for key, deps in config.tests.affected.dependencies.items()
+                        if set(deps) & ids
+                    }
+                    if expanded == ids:
+                        break
+                    ids = expanded
+        else:
+            ids = set(selection["included"]) if selection else set(config.tests.commands)
         reported_ids = set(config.tests.commands) if legacy_scope else ids
         if set(result.command_ids) != reported_ids or len(result.command_ids) != len(reported_ids):
             raise ResponseError(
@@ -839,7 +892,11 @@ class Runner:
                 f"allowed_commands={sorted(ids)}, received_commands={coverage}; "
                 "include each criterion exactly once with at least one configured test command"
             )
-        if selection and selection["actual_scope"] == "affected":
+        if (
+            selection
+            and selection.get("selector_version") == 1
+            and selection["actual_scope"] == "affected"
+        ):
             mapping = config.tests.affected.criterion_commands
             if any(
                 not set(commands) & set(mapping[key]) & test_ids

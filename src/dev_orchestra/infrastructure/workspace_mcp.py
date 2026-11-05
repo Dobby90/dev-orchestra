@@ -9,7 +9,7 @@ import sys
 
 from pydantic import Field, ValidationError
 
-from dev_orchestra.domain.models import Model, PipelineError, TestChange
+from dev_orchestra.domain.models import Model, PipelineError, TestChange, TestTarget
 from dev_orchestra.infrastructure.files import write
 from dev_orchestra.infrastructure.process import execution_scope, redact
 from dev_orchestra.infrastructure.workspace import load_session
@@ -32,6 +32,7 @@ class CheckpointCommit(Model):
 
 class RunTests(Model):
     command_ids: list[str]
+    test_plan: list[TestTarget] | None = None
 
 
 class Empty(Model):
@@ -60,11 +61,11 @@ TEST_TOOLS = {
     "edit_file": TOOLS["edit_file"],
     "test_policy": (
         Empty,
-        "Read the immutable host-required command set for the current candidate.",
+        "Read current test policy and available commands. For automatic selection analyze the cumulative changes and propose test_plan.",
     ),
     "run_tests": (
         RunTests,
-        "Commit pending test edits and run exactly the host-required command IDs; inspect actual outcomes and returned evidence_id.",
+        "Commit pending test edits and run host-validated commands. Automatic selection requires test_plan (command_id, exact files relative to command working_directory, reason); command_ids must include mandatory commands. Inspect returned evidence.",
     ),
     "read_test_evidence": (
         ReadEvidence,

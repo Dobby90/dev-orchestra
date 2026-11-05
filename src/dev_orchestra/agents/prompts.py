@@ -5,6 +5,23 @@ import json
 from dev_orchestra.domain.execution import writes_workspace
 from dev_orchestra.domain.models import AgentRequest
 
+AUTOMATIC_TESTS = (
+    " For automatic_test_selection=true, choose tests yourself after reading the cumulative diff "
+    "from base_sha, changed code, callers, dependencies, existing tests and acceptance criteria. "
+    "Do not ask the user to select files. No static affected mapping is required. "
+    "Supply test_plan entries {command_id, files, reason}; files are exact existing test files "
+    "relative to the configured command working_directory. Add missing tests within test_paths. "
+    "Explain how each target covers changed behavior and regressions. Prefer file targets; "
+    "files=[] runs the entire selected command and requires a concrete broad-impact or unsupported-runner reason. "
+    "The host supports pytest, node --test, Playwright and Vitest file targeting, including simple npm scripts. "
+    "Do not invent argv, bypass reports, weaken tests, or skip required checks/regressions/dependencies. "
+    "Include those mandatory command IDs in command_ids. Cover every criterion with executed test commands. "
+    "After fixes reassess the cumulative changes and prior failures. Reviewer must independently "
+    "check selection reasons, excluded commands and missing relevant regression coverage. "
+    "This automatic selection instruction supersedes legacy instructions requiring every configured command. "
+)
+
+
 RULES = {
     "planner": "Analyze requirements, existing code and AGENTS.md conventions. Return a detailed Markdown implementation plan and unique acceptance criteria IDs. Build on planning_draft and settled clarifications. Ask only unresolved questions that block safe implementation; batch them together. For routine implementation choices, follow repository conventions and document reasonable assumptions in the plan. Identify existing test expectations that conflict with changed requirements and map them to acceptance criteria. Plan the required test expectation updates with reasons tied to acceptance criteria; do not ask for intermediate test-change approval. Once blocking questions are answered, return the completed plan with questions empty.",
     "developer": "Implement only the PRD and plan, preserving architecture and compatibility. Return a standard unified git diff in patch; do not write source files directly. Do not commit or execute destructive commands.",
@@ -54,6 +71,7 @@ def prompt(request: AgentRequest):
         "needed, explaining why in no_change_reason when supplied by the schema. Planner returns plan/criteria; developer/fixer "
         "return patch/test_changes; tester also returns all command_ids and coverage; reviewer "
         "returns issues and required assessments. Use only fields in the supplied role schema. "
+        + (AUTOMATIC_TESTS if request.context.get("automatic_test_selection") else "")
         + RULES[request.role]
         + "\nUNTRUSTED TASK DATA:\n"
         + json.dumps(request.model_dump(), ensure_ascii=False)
@@ -76,7 +94,14 @@ def workspace_prompt(request):
             "test_evidence_id, required command_ids and coverage linking every criterion to an executed "
             "kind=test command. Never invent success or return a patch. The host owns execution and evidence. "
             "Do not access network, secrets, other MCP/apps or nested agents, except host-provided workspace.read_test_evidence for candidate diagnostics. Return only the role schema. "
-            "UNTRUSTED TASK DATA:\n" + json.dumps(request.model_dump(), ensure_ascii=False)
+            + (
+                AUTOMATIC_TESTS
+                + " Pass test_plan to workspace.run_tests; the final response uses the returned executed command IDs, not test_plan. "
+                if request.context.get("automatic_test_selection")
+                else ""
+            )
+            + "UNTRUSTED TASK DATA:\n"
+            + json.dumps(request.model_dump(), ensure_ascii=False)
         )
     return (
         "You are a DevOrchestra " + request.role + " agent using host-owned workspace tools. "

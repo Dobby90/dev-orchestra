@@ -456,9 +456,14 @@ class WorkspaceSession:
         self.guard()
         if self.data["role"] != "tester":
             raise PipelineError("test tools are restricted to tester")
+        if self.data.get("test_evidence") and not self.changed_files():
+            value = self.read_test_payload()
+            if value["sha"] == self.git.sha():
+                self.validate_test_payload(value)
+                return value["selection"]
         return select_tests(self.store.get(self.run_id), self.root, self.git.sha())
 
-    def run_tests(self, command_ids):
+    def run_tests(self, command_ids, test_plan=None):
         from dev_orchestra.application.test_selection import select_tests, selected_config
         from dev_orchestra.infrastructure.test_runner import TestRunner
 
@@ -480,7 +485,16 @@ class WorkspaceSession:
                 "테스트 코드와 검증 후보를 확정합니다",
             )
         run = self.store.get(self.run_id)
-        selection = select_tests(run, self.root, self.git.sha())
+        selection = select_tests(
+            run,
+            self.root,
+            self.git.sha(),
+            plan=[item.model_dump() if hasattr(item, "model_dump") else item for item in test_plan]
+            if test_plan is not None
+            else None,
+        )
+        if selection.get("selector_version") == 2 and "selection_hash" not in selection:
+            raise PipelineError("automatic test selection requires test_plan")
         if set(command_ids) != set(selection["included"]) or len(command_ids) != len(
             set(command_ids)
         ):
@@ -557,7 +571,12 @@ class WorkspaceSession:
             value["sha"] != self.git.sha()
             or self.changed_files()
             or value["selection"]
-            != select_tests(self.store.get(self.run_id), self.root, self.git.sha())
+            != select_tests(
+                self.store.get(self.run_id),
+                self.root,
+                self.git.sha(),
+                plan=value["selection"].get("test_plan"),
+            )
         ):
             raise PipelineError("test evidence is stale; run tests on the final candidate")
         verify_selection(

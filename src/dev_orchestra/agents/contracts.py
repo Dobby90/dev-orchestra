@@ -25,6 +25,8 @@ def response_fields(request):
             fields |= {"command_ids", "coverage", "test_evidence_id"}
         return fields
     fields = FIELDS[request.role].copy()
+    if request.role == "tester" and request.context.get("automatic_test_selection"):
+        fields.add("test_plan")
     if request.role == "reviewer" and request.context.get("review_contract") == 2:
         fields |= {"schema_version", "assessments"}
     return fields
@@ -32,7 +34,18 @@ def response_fields(request):
 
 def validate_role(role, result):
     allowed = FIELDS[role] | {"schema_version", "assessments"}
-    for key in ("plan", "criteria", "patch", "command_ids", "coverage", "issues", "test_changes"):
+    if role == "tester":
+        allowed.add("test_plan")
+    for key in (
+        "plan",
+        "criteria",
+        "patch",
+        "command_ids",
+        "coverage",
+        "issues",
+        "test_changes",
+        "test_plan",
+    ):
         if key not in allowed and getattr(result, key):
             raise ResponseError(f"{role} must not return {key}; return only role-specific results")
     if not result.summary.strip():

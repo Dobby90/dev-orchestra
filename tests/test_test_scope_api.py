@@ -34,6 +34,7 @@ def test_scope_changes_invalidate_preview_and_idempotency_and_persist(web, monke
     assert submitted.status_code == 202, submitted.text
     rid = submitted.json()["run_id"]
     assert svc.store.get(rid)["test_scope"] == "affected"
+    assert svc.store.get(rid)["test_selection_contract"] == 2
     assert svc.store.get(rid)["execution_contract"] == ("workspace-v2" if release else "patch-v1")
     assert svc.store.get(original_id)["execution_contract"] == "patch-v1"
     assert client.get("/api/runs/" + rid).json()["test_scope"] == "affected"

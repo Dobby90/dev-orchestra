@@ -100,7 +100,7 @@ class RunService:
         data = {
             "repository_identity": repository_identity(repo),
             "test_scope": command.test_scope,
-            "test_selection_contract": 1,
+            "test_selection_contract": 2 if command.test_scope == "affected" else 1,
             "execution_contract": self.execution_contract or self.default_execution_contract(),
             "id": run_id,
             "repo": str(repo),

@@ -84,7 +84,7 @@ def test_scope_survives_developer_tester_reviewer_fixer_and_final_approval(setup
             "global_paths": ["shared/**"],
         },
     }
-    svc.store.update(rid, config=config, test_scope=scope)
+    svc.store.update(rid, config=config, test_scope=scope, test_selection_contract=1)
 
     class Agent(FakeAgent):
         def run_workspace(self, request, directory, session, stop):

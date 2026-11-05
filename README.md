@@ -169,25 +169,13 @@ devorchestra --config config.yaml cleanup RUN_ID
 
 새 작업에서 **전체 테스트** 또는 **변경 영향 범위 테스트**를 선택합니다. CLI는 `run --test-scope full` 또는 `run --test-scope affected`를 사용합니다. 기본값과 범위 정보가 없는 기존 Run은 전체 검사입니다. 선택은 생성 시 저장되며 재개 답변으로 바뀌지 않습니다.
 
-영향 범위 검사는 기준 SHA부터 현재 후보까지의 누적 변경을 프로젝트 정책에 연결합니다. 프로젝트 고급 JSON 또는 CLI YAML의 `tests.affected`에서 다음을 지정할 수 있습니다. 명령 ID는 모두 기존 `tests.commands`에 등록돼 있어야 하며, 명령 인자나 테스트 필터를 모델이 새로 만들지 않습니다.
+새 Run의 영향 범위 검사는 모델이 기준 SHA부터 현재 후보까지의 누적 diff, 변경 코드의 호출부·의존 관계, 기존 테스트와 인수 조건을 분석해 자동 선택합니다. 사용자가 테스트 파일을 직접 선택하거나 `tests.affected` 매핑을 작성할 필요는 없습니다. 관련 테스트가 없으면 Tester가 허용된 테스트 경로에 추가합니다. 수정 후에도 누적 변경과 이전 실패를 다시 확인합니다.
 
-```yaml
-tests:
-  affected:
-    inputs:
-      api-tests: ["src/api/**", "tests/api/**"]
-      web-tests: ["apps/web/**"]
-    dependencies:
-      integration: ["api-tests", "web-tests"]
-    required_commands: ["regression"]
-    criterion_commands:
-      AC1: ["api-tests"]
-    global_paths: ["shared/**", "pyproject.toml", "*lock*", "auth/**", "migrations/**"]
-```
+모델은 등록된 `tests.commands` 중 실행할 명령과 구체적인 테스트 파일·선택 이유를 제안합니다. 호스트가 이를 검증하고 pytest, Node `--test`, Playwright, Vitest의 파일 인자로 변환해 실행합니다. 단순한 npm 스크립트도 지원하며 기존 전체 대상 경로는 선택한 파일로 교체합니다. 파일은 명령의 `working_directory` 기준 상대 경로입니다. 복합 스크립트나 지원하지 않는 러너는 해당 명령 전체를 선택하고 구체적인 확대 사유를 기록합니다. 임의 셸 명령이나 보고서 설정 변경은 허용하지 않습니다.
 
-`inputs`는 저장소 상대 경로의 glob 매핑이고, `dependencies`는 해당 명령이 영향을 받는 상위 명령 ID입니다. 위 예시에서 `api-tests`가 선택되면 `integration`도 실행합니다. `required_commands`와 모든 `kind=check` 명령은 필수로 포함됩니다. `criterion_commands`는 승인된 인수 조건 ID를 실제 테스트 명령에 연결합니다. 공통 모듈·공개 계약·DB·인증·의존성·검증 설정에 해당하는 경로는 프로젝트의 `global_paths`에 포함하세요.
+`tests.affected`는 선택 사항이며 `required_commands`와 `dependencies`, 모든 `kind=check` 명령은 계속 필수로 적용합니다. 필수 회귀 명령은 파일 필터로 축소할 수 없습니다. 정책 없음·미매핑 파일·인수 조건 매핑 누락만으로 전체 검사로 바꾸지 않습니다. 전체 명령이 필요한 광범위한 영향은 모델이 이유를 제시하고 호스트가 실행합니다. 테스트 0건·전부 건너뛰기·JUnit 누락은 성공이 아닙니다.
 
-선택 정책 없음·매핑되지 않은 파일·공통 경로 변경·선택 테스트 0개·인수 조건 매핑 부족·선택 실패 시 전체 설정 검사로 확대하고 이유를 표시합니다. 실행 결과와 보고서는 요청 범위, 실제 범위, 실행·미실행 명령과 확대 이유를 제공합니다. 영향 범위 통과를 전체 테스트 통과로 표시하지 않습니다.
+실행 결과는 요청·실제 범위, 실행·미실행 명령, 선택 파일과 이유, 실제 실행 인자·건수·소요 시간을 제공합니다. Reviewer가 같은 후보의 검증 범위와 회귀 누락을 독립적으로 확인합니다. 선택 근거와 실제 실행 결과는 SHA·revision·정책 체크섬에 연결됩니다. 기존 Run은 생성 당시의 매핑 기반 계약과 자동 확대 동작을 유지하며 재개만으로 새 계약으로 전환하지 않습니다.
 
 스키마 6에서 명시적으로 활성화한 직접 편집 계약에서는 Tester가 테스트 경로만 호스트 도구로 편집하고, 후보를 확정한 뒤 실제 테스트 결과와 근거 ID를 확인합니다. Reviewer는 누적 변경과 직접 영향을 받는 코드, 동일 SHA의 검증 범위 및 미해결 이슈를 독립적으로 확인합니다.
 
