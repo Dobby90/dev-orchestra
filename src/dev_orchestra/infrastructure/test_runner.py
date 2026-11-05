@@ -198,6 +198,16 @@ class TestRunner:
             raise PipelineError("configure at least one allowlisted test command")
         results = []
         directory.mkdir(parents=True, exist_ok=True)
+        observation = {"started_at": time.time(), "status": "incomplete", "commands": []}
+        observation_path = directory / ("test-invocation-" + uuid.uuid4().hex + ".json")
+
+        def observe():
+            try:
+                write(observation_path, observation)
+            except OSError:
+                pass  # Measurements never replace actual JUnit or execution evidence.
+
+        observe()
         for command_id, command in config.commands.items():
             cwd = (
                 worktree
@@ -355,11 +365,17 @@ class TestRunner:
                 )
             result["duration_seconds"] = time.monotonic() - started
             results.append(result)
+            observation["commands"].append(
+                {key: result[key] for key in ["command_id", "status", "duration_seconds"]}
+            )
+            observe()
         statuses = {r["status"] for r in results}
         status = next(
             (s for s in ["timeout", "unavailable", "parse_error", "failed"] if s in statuses),
             "passed",
         )
+        observation.update(status=status, finished_at=time.time())
+        observe()
         return sanitize(
             {
                 "passed": all(r["passed"] for r in results),

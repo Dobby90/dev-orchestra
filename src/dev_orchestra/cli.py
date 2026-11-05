@@ -254,10 +254,13 @@ def doctor(ctx: typer.Context):
 
 @app.command("database-upgrade")
 @guarded
-def database_upgrade(ctx: typer.Context):
+def database_upgrade(
+    ctx: typer.Context,
+    workspace: bool = typer.Option(False, "--workspace", help="Enable direct editing for new Runs"),
+):
     from dev_orchestra.infrastructure.migrations import upgrade
 
-    backup = upgrade(ctx.obj.store.path)
+    backup = upgrade(ctx.obj.store.path, workspace=workspace)
     typer.echo(str(backup) if backup else "Database schema is current")
 
 
@@ -267,7 +270,7 @@ def web_session(ctx: typer.Context):
     from dev_orchestra.api.security import bootstrap
 
     with ctx.obj.store.connection() as db:
-        if db.execute("SELECT version FROM schema_version").fetchone()[0] != 5:
+        if db.execute("SELECT version FROM schema_version").fetchone()[0] not in {5, 6}:
             raise PipelineError("run database-upgrade first")
     typer.echo(bootstrap(ctx.obj.store))
 

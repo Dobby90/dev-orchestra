@@ -2,6 +2,7 @@
 
 import json
 import os
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -39,9 +40,13 @@ git("commit", "-m", "임시 GUI 검증 기준선")
 release = root / "release"
 mock = root / "mock-codex"
 mock.write_text(f"""#!{sys.executable}
-import json,sys,time
+import json,os,sys,time
 from pathlib import Path
 from dev_orchestra.domain.models import AgentResult, Criterion, Coverage, ReviewResultV2
+if len(sys.argv)>1 and sys.argv[1]=='sandbox':
+ real_codex={shutil.which("codex")!r}
+ if not real_codex:raise SystemExit('installed Codex sandbox is required')
+ os.execv(real_codex,[real_codex,*sys.argv[1:]])
 if '--help' in sys.argv:
  print('--output-schema --ephemeral --ignore-user-config --json');sys.exit(0)
 if 'app-server' in sys.argv:

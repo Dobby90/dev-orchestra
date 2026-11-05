@@ -11,7 +11,7 @@ from dev_orchestra.application.handoff import repository_identity, verify_branch
 from dev_orchestra.application.queries import RunQueryService
 from dev_orchestra.application.recovery import RecoveryService
 from dev_orchestra.config import Config
-from dev_orchestra.domain.execution import PATCH_V1, execution_contract
+from dev_orchestra.domain.execution import PATCH_V1, WORKSPACE_V2, execution_contract
 from dev_orchestra.domain.models import PipelineError
 from dev_orchestra.infrastructure.coordination import metadata
 from dev_orchestra.infrastructure.evidence import checkpoints
@@ -24,9 +24,14 @@ from dev_orchestra.infrastructure.store import Store, now
 
 
 class RunService:
-    def __init__(self, config: Config, *, _execution_contract=PATCH_V1):
-        # Internal opt-in until the remaining integration/release checks are complete.
-        self.execution_contract = execution_contract({"execution_contract": _execution_contract})
+    def __init__(self, config: Config, *, _execution_contract=None):
+        # The private override is for isolated contract tests only. Public activation
+        # requires the backed-up schema boundary that older executables reject.
+        self.execution_contract = (
+            execution_contract({"execution_contract": _execution_contract})
+            if _execution_contract is not None
+            else None
+        )
         self.config = config
         self.store = Store(config.storage.database)
         self.queries = RunQueryService(self.store)
@@ -34,6 +39,11 @@ class RunService:
         self.approvals = ApprovalService(self.store, self.refresh_report)
         self.recovery = RecoveryService(self.store, self.refresh_report)
         self.execution = ExecutionService(self.store, self.status)
+
+    def default_execution_contract(self):
+        with self.store.connection() as db:
+            version = db.execute("SELECT version FROM schema_version").fetchone()[0]
+        return WORKSPACE_V2 if version == 6 else PATCH_V1
 
     def create(self, repo: Path, spec: Path, base=None, max_fixes=None, test_scope="full"):
         command = CreateRun(
@@ -91,7 +101,7 @@ class RunService:
             "repository_identity": repository_identity(repo),
             "test_scope": command.test_scope,
             "test_selection_contract": 1,
-            "execution_contract": self.execution_contract,
+            "execution_contract": self.execution_contract or self.default_execution_contract(),
             "id": run_id,
             "repo": str(repo),
             "base": base,

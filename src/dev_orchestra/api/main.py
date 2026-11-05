@@ -6,6 +6,7 @@ import os
 import re
 import sqlite3
 import uuid
+from contextlib import asynccontextmanager
 from pathlib import Path
 
 from fastapi import FastAPI, File, Header, HTTPException, Query, Request, Response, UploadFile
@@ -72,6 +73,7 @@ from dev_orchestra.application.web_contracts import (
 )
 from dev_orchestra.config import ROLES, load_config
 from dev_orchestra.domain.models import PipelineError
+from dev_orchestra.infrastructure.locking import lock
 from dev_orchestra.infrastructure.migrations import upgrade
 
 
@@ -84,7 +86,7 @@ def create_app(config=None, allowed_roots=None, port=8000, static_directory=None
     if new:
         upgrade(runs.store.path)
     with runs.store.connection() as db:
-        if db.execute("SELECT version FROM schema_version").fetchone()[0] != 5:
+        if db.execute("SELECT version FROM schema_version").fetchone()[0] not in {5, 6}:
             raise PipelineError("run devorchestra database-upgrade before starting API")
     roots = (
         allowed_roots
@@ -98,7 +100,15 @@ def create_app(config=None, allowed_roots=None, port=8000, static_directory=None
     security = Security(runs.store, key)
     agent_settings = AgentSettingsService(config)
     notifications = NotificationService(runs.store)
+
+    @asynccontextmanager
+    async def lifespan(app):
+        # An idle standalone API is a writer too; migration must wait for its exit.
+        with lock(runs.store.path.with_suffix(".maintenance.lock"), shared=True):
+            yield
+
     app = FastAPI(
+        lifespan=lifespan,
         title="DevOrchestra",
         version="0.1.0",
         docs_url=None,

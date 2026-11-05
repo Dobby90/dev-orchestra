@@ -18,6 +18,7 @@ from dev_orchestra.domain.models import (
     WorkspaceResult,
     WorkspaceTestResult,
 )
+from dev_orchestra.infrastructure.files import digest
 from dev_orchestra.infrastructure.git import Git
 from dev_orchestra.orchestration.runner import Runner
 
@@ -46,14 +47,27 @@ class Agent(FakeAgent):
         return WorkspaceResult(summary="남은 구현 완료")
 
 
-def test_partial_files_and_multiple_checkpoints_resume_same_stage(setup):
+@pytest.mark.parametrize("release_schema", [False, True])
+def test_partial_files_and_multiple_checkpoints_resume_same_stage(setup, release_schema):
+    if release_schema:
+        from dev_orchestra.infrastructure.migrations import upgrade
+
+        upgrade(setup[0].store.path, workspace=True)
+
     class Interrupted(Agent):
         def run_workspace(self, req, directory, session, stop):
             if req.role == "developer":
                 self.calls.append(req.role)
                 if self.calls.count(req.role) == 1:
                     edit(session, "main.py", "first\n")
-                    checkpoint(session, "one", ["main.py"])
+                    self.commit_args = (
+                        "one",
+                        session.git.sha(),
+                        {"main.py": digest(b"first\n")},
+                        "기능 구현 one",
+                        "독립 작업 단위",
+                    )
+                    self.first_commit = session.checkpoint_commit(*self.commit_args)
                     edit(session, "second.py", "second\n")
                     checkpoint(session, "two", ["second.py"])
                     edit(session, "pending.py", "preserved\n")
@@ -61,6 +75,8 @@ def test_partial_files_and_multiple_checkpoints_resume_same_stage(setup):
                 assert req.context["workspace_resume"]["continuing"]
                 assert req.input_sha == session.data["input_sha"]
                 assert (session.root / "pending.py").read_text() == "preserved\n"
+                assert len(session.data["commits"]) == 2
+                assert session.checkpoint_commit(*self.commit_args) == self.first_commit
                 assert len(session.data["commits"]) == 2
                 edit(session, "remaining.py", "remaining\n")
                 return WorkspaceResult(summary="보존된 파일에서 남은 작업 완료")

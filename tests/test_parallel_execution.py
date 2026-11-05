@@ -87,14 +87,18 @@ def clone_repo(repo, path):
 
 
 @pytest.mark.parametrize("same_repository", [False, True])
-@pytest.mark.parametrize("web_schema", [False, True])
+@pytest.mark.parametrize("web_schema", [False, True, "workspace"])
 def test_runs_overlap_and_preserve_isolated_results(service, tmp_path, same_repository, web_schema):
     original, initial, repo = service
     if web_schema:
         from dev_orchestra.infrastructure.migrations import upgrade
 
-        upgrade(original.store.path)
-    svc = RunService(original.config, _execution_contract=WORKSPACE_V2)
+        upgrade(original.store.path, workspace=web_schema == "workspace")
+    svc = (
+        RunService(original.config)
+        if web_schema == "workspace"
+        else RunService(original.config, _execution_contract=WORKSPACE_V2)
+    )
     spec = Path(svc.store.get(initial)["directory"]) / "spec.md"
     other_repo = repo if same_repository else clone_repo(repo, tmp_path / "other")
     ids = [svc.create(repo, spec), svc.create(other_repo, spec)]
@@ -102,7 +106,7 @@ def test_runs_overlap_and_preserve_isolated_results(service, tmp_path, same_repo
     configure_capacity(svc.store.path, repo=other_repo, repository=2)
     entered, release = CTX.Queue(), CTX.Event()
     processes = []
-    cancel_one = not (same_repository and web_schema)
+    cancel_one = web_schema == "workspace" or not (same_repository and web_schema)
     try:
         for rid in ids[:2]:
             p = CTX.Process(target=run_worker, args=(str(svc.store.path), rid, entered, release))
@@ -113,10 +117,12 @@ def test_runs_overlap_and_preserve_isolated_results(service, tmp_path, same_repo
         a, b = [svc.store.get(rid) for rid in ids[:2]]
         b_sha = Git(Path(b["worktree"])).sha()
         if cancel_one:
-            svc.cancel(ids[0], pause=True)
+            svc.cancel(ids[0], pause=web_schema != "workspace")
             processes[0].join(30)
             assert processes[0].exitcode == 0
-            assert svc.store.get(ids[0])["state"] == "paused"
+            assert svc.store.get(ids[0])["state"] == (
+                "cancelled" if web_schema == "workspace" else "paused"
+            )
             assert processes[1].is_alive()
             assert (Path(b["worktree"]) / (ids[1] + ".py")).is_file()
             assert not (Path(b["worktree"]) / (ids[0] + ".py")).exists()
@@ -146,7 +152,8 @@ def test_runs_overlap_and_preserve_isolated_results(service, tmp_path, same_repo
                 resumed.join(30)
                 assert resumed.exitcode == 0
             # Cleanup of A cannot remove B's worktree or release B's capacity record.
-            svc.cancel(ids[0])
+            if web_schema != "workspace":
+                svc.cancel(ids[0])
             with pytest.raises(PipelineError, match="worktree|dirty"):
                 svc.cleanup(ids[0])
         else:

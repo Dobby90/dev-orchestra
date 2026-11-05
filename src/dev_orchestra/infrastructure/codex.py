@@ -268,6 +268,24 @@ class CodexClient:
         if _session_id:
             argv.append(_session_id)
         argv.append("-")
+        task_input = (
+            continuation_prompt(request) if _session_id or _metadata_only else prompt(request)
+        )
+        # Size-only observations; never copy prompts, source or tool content into metrics.
+        write(
+            directory / "input-metrics.json",
+            {
+                "prompt_bytes": len(task_input.encode("utf-8")),
+                "continuation": bool(
+                    _session_id
+                    or _metadata_only
+                    or request.context.get("workspace_resume", {}).get("continuing")
+                    or request.context.get("response_feedback")
+                ),
+                "conversation_resumed": bool(_session_id),
+                "metadata_only": bool(_metadata_only),
+            },
+        )
         collector = UsageCollector(directory / "telemetry.json", options)
         succeeded = False
         try:
@@ -276,7 +294,7 @@ class CodexClient:
                 Path(request.worktree),
                 self.config.role_timeouts.get(request.role, self.config.timeout_seconds),
                 directory / "process.log",
-                continuation_prompt(request) if _session_id or _metadata_only else prompt(request),
+                task_input,
                 stop,
                 on_event=lambda value: (
                     collector.event(value),

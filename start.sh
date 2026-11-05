@@ -113,10 +113,10 @@ import sys
 from pathlib import Path
 from dev_orchestra.application.service import RunService
 from dev_orchestra.config import load_config
-from dev_orchestra.infrastructure.migrations import CURRENT_SCHEMA
+from dev_orchestra.infrastructure.migrations import CURRENT_SCHEMA, WORKSPACE_SCHEMA
 store = RunService(load_config(Path(sys.argv[1]) if sys.argv[1] else None)).store
 with store.connection() as db:
-    print(int(db.execute("SELECT version FROM schema_version").fetchone()[0] != CURRENT_SCHEMA))
+    print(int(db.execute("SELECT version FROM schema_version").fetchone()[0] not in {CURRENT_SCHEMA, WORKSPACE_SCHEMA}))
 PY
 )"
 if [ "$needs_upgrade" = "1" ]; then

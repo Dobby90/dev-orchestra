@@ -345,6 +345,21 @@ test("실제 로컬 API: 로그인 → 프로젝트 → 실행 → 재연결 →
   });
   expect(cliLogs).toContain("GUI 실시간 한글 로그");
   expect(cliLogs).not.toContain("CANARY");
+  // 승인 대기 상태가 먼저 기록될 수 있으므로 Worker의 실행 잠금 반환까지 기다립니다.
+  await expect
+    .poll(() =>
+      execFileSync(
+        f.python,
+        [
+          "-c",
+          "import sqlite3,sys;print(sqlite3.connect(sys.argv[1]).execute(\"SELECT count(*) FROM jobs WHERE run_id=? AND state IN ('claimed','running')\",(sys.argv[2],)).fetchone()[0])",
+          f.database,
+          rid,
+        ],
+        { encoding: "utf8" },
+      ).trim(),
+    )
+    .toBe("0");
   await page.getByRole("button", { name: "최종 승인", exact: true }).click();
   await expect(
     page.getByRole("button", { name: "최종 승인 확인" }),

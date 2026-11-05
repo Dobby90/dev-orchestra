@@ -45,6 +45,7 @@ class RecoveryService:
             queued_execution = db.execute("SELECT version FROM schema_version").fetchone()[0] in {
                 4,
                 5,
+                6,
             }
         if queued_execution:
             from dev_orchestra.application.queue import QueueService

@@ -10,6 +10,7 @@ import sys
 from pydantic import Field, ValidationError
 
 from dev_orchestra.domain.models import Model, PipelineError, TestChange
+from dev_orchestra.infrastructure.files import write
 from dev_orchestra.infrastructure.process import execution_scope, redact
 from dev_orchestra.infrastructure.workspace import load_session
 
@@ -72,7 +73,7 @@ TEST_TOOLS = {
 }
 
 
-def dispatch(session, request):
+def _dispatch(session, request):
     if session.data["role"] != "reviewer":
         session.reload()
     catalog = (
@@ -131,6 +132,28 @@ def dispatch(session, request):
             else redact(str(error))
         )
         return {"isError": True, "content": [{"type": "text", "text": message}]}
+
+
+def dispatch(session, request):
+    result = _dispatch(session, request)
+    if request.get("method") == "tools/call":
+        try:
+            # Observation only: counts include retries and errors, not just successful tools.
+            path = session.path.parent / "tool-metrics.json"
+            values = json.loads(path.read_text()) if path.exists() else {}
+            name = request["params"]["name"]
+            entry = values.setdefault(name, {"calls": 0, "argument_bytes": 0, "result_bytes": 0})
+            entry["calls"] += 1
+            entry["argument_bytes"] += len(
+                json.dumps(request["params"].get("arguments", {}), ensure_ascii=False).encode(
+                    "utf-8"
+                )
+            )
+            entry["result_bytes"] += len(json.dumps(result, ensure_ascii=False).encode("utf-8"))
+            write(path, values)
+        except (OSError, ValueError, TypeError, KeyError):
+            pass  # Metrics never change the completed host operation or its evidence.
+    return result
 
 
 def main():

@@ -22,21 +22,53 @@ from dev_orchestra.orchestration.runner import Runner
 
 @pytest.mark.parametrize(
     "scope,web",
-    [("full", False), ("affected", False), ("affected", True)],
-    ids=["full-cli", "affected-cli", "affected-web"],
+    [
+        ("full", False),
+        ("affected", False),
+        ("affected", True),
+        ("full", "workspace"),
+        ("affected", "workspace"),
+        ("affected", "fallback"),
+        ("full", "test_failure"),
+    ],
+    ids=[
+        "full-cli",
+        "affected-cli",
+        "affected-web",
+        "full-release",
+        "affected-release",
+        "fallback-release",
+        "test-failure-release",
+    ],
 )
 def test_scope_survives_developer_tester_reviewer_fixer_and_final_approval(setup, scope, web):
     svc, rid, repo = setup
     if web:
         from dev_orchestra.infrastructure.migrations import upgrade
 
-        upgrade(svc.store.path)
+        upgrade(svc.store.path, workspace=isinstance(web, str))
+        if isinstance(web, str):
+            from dev_orchestra.application.service import RunService
+
+            svc = RunService(svc.config)
+            rid = svc.create(
+                repo, Path(svc.store.get(rid)["directory"]) / "spec.md", test_scope=scope
+            )
+            assert svc.store.get(rid)["execution_contract"] == "workspace-v2"
         svc.store.update(rid, review_contract=2)
     config = svc.store.get(rid)["config"]
     commands = {}
     for key in ["a", "b"]:
         xml = '<testsuite><testcase name="' + key + '"/></testsuite>'
         script = f"from pathlib import Path;Path('build/{key}.xml').write_text({xml!r})"
+        if web == "test_failure" and key == "a":
+            script = (
+                "from pathlib import Path;import sys;"
+                "failed='developer' in Path('main.py').read_text();"
+                "Path('build/a.xml').write_text('<testsuite><testcase name=\"a\">'"
+                "+ ('<failure message=\"wrong behavior\"/>' if failed else '')"
+                "+ '</testcase></testsuite>');sys.exit(1 if failed else 0)"
+            )
         commands[key] = {
             "argv": [sys.executable, "-c", script],
             "junit_report": "build/" + key + ".xml",
@@ -60,7 +92,9 @@ def test_scope_survives_developer_tester_reviewer_fixer_and_final_approval(setup
             if request.role == "tester":
                 policy = session.test_policy()
                 value = session.run_tests(policy["included"])
-                assert value["execution"]["status"] == "passed"
+                assert value["execution"]["status"] == (
+                    "failed" if web == "test_failure" and request.iteration == 0 else "passed"
+                )
                 assert session.run_tests(policy["included"])["evidence_id"] == value["evidence_id"]
                 return WorkspaceTestResult(
                     summary="실제 결과와 검증 범위 확인",
@@ -71,12 +105,14 @@ def test_scope_survives_developer_tester_reviewer_fixer_and_final_approval(setup
             assert request.role in {"developer", "fixer"}
             if request.role == "fixer":
                 assert "patch" not in request.context["test_result"]
-                assert (
+                assert web == "test_failure" or (
                     request.context["open_issues"]
                     if web
                     else request.context["review_result"]["issues"]
                 )
             edit(session, "main.py", request.role + "\n")
+            if web == "fallback" and request.role == "developer":
+                edit(session, "unmapped.py", "unmapped input\n")
             return WorkspaceResult(summary="현재 코드에서 요구사항 구현")
 
         def run(self, request, *args):
@@ -107,7 +143,7 @@ def test_scope_survives_developer_tester_reviewer_fixer_and_final_approval(setup
             self.commands.append(sorted(config.commands))
             return super().run(worktree, config, directory, stop)
 
-    tests, agent = Tests(), Agent(block=1)
+    tests, agent = Tests(), Agent(block=0 if web == "test_failure" else 1)
     runner = Runner(svc.store, agent, tests)
     runner.execute(rid)
     assert svc.store.get(rid)["state"] == "waiting_plan_approval"
@@ -124,12 +160,25 @@ def test_scope_survives_developer_tester_reviewer_fixer_and_final_approval(setup
         "tester",
         "reviewer",
     ]
-    expected = ["a", "b", "static"] if scope == "full" else ["a", "static"]
+    expected = ["a", "b", "static"] if scope == "full" or web == "fallback" else ["a", "static"]
     assert tests.commands == [expected, expected]
     selection = run["test_result"]["test_selection"]
-    assert selection["requested_scope"] == selection["actual_scope"] == scope
+    assert selection["requested_scope"] == scope
+    assert selection["actual_scope"] == ("full" if web == "fallback" else scope)
+    if web == "fallback":
+        assert selection["expanded"] and selection["reasons"]
     assert run["test_result"]["sha"] == run["review_result"]["sha"] == run["final_sha"]
     svc.approve(rid)
     assert svc.store.get(rid)["state"] == "completed"
     assert (Path(run["directory"]) / "final-report.md").is_file()
     assert (repo / "main.py").read_text() == "original local changes\n"
+    from dev_orchestra.application.measurement import measurement
+
+    observed = measurement(svc.store, rid, version_label="candidate", scenario="normal")
+    invocations = [
+        item for stage in observed["stages"] for item in (stage["test_invocations"] or [])
+    ]
+    assert len(invocations) == 2  # Repeated run_tests requests reuse the same execution.
+    assert [item["status"] for item in invocations] == (
+        ["failed", "passed"] if web == "test_failure" else ["passed", "passed"]
+    )
