@@ -182,7 +182,7 @@ class ProjectView(BaseModel):
     repository_path: str
     default_base_branch: str
     policy: Policy
-    branch_prefix: str = "feature/ai"
+    branch_prefix: str = "feature/codex"
     version: int
     created_at: str
     updated_at: str

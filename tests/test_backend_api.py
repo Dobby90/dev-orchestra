@@ -116,6 +116,59 @@ def test_project_exposes_configured_branch_prefix(web):
     assert c.get("/api/projects").json()["items"][0]["branch_prefix"] == "custom/tasks"
 
 
+def test_default_branch_prefix_applies_to_cli_and_web_preview(web):
+    c, svc, rid, repo, _ = web
+    assert svc.store.get(rid)["branch"] == f"feature/codex/{rid}"
+    p = project(c, svc, repo)
+    assert p["branch_prefix"] == "feature/codex"
+    response = c.post(
+        f"/api/projects/{p['id']}/run-previews",
+        json={"project_id": p["id"], "spec": {"kind": "text", "text": "PRD"}},
+    )
+    assert response.status_code == 200, response.text
+    preview = response.json()
+    assert preview["branch"] == f"feature/codex/{preview['run_id']}"
+
+
+@pytest.mark.parametrize("include_archived", [False, True])
+def test_projects_newest_registration_first_with_stable_pagination(web, include_archived):
+    c, svc, _, repo, _ = web
+    p = project(c, svc, repo)
+    with svc.store.transaction() as db:
+        db.execute(
+            "UPDATE projects SET created_at=?,updated_at=? WHERE id=?",
+            ("2026-01-01T00:00:00+00:00", "2026-01-05T00:00:00+00:00", p["id"]),
+        )
+        for pid, day, archived in [
+            ("prj-a", 3, None),
+            ("prj-z", 2, None),
+            ("prj-y", 2, None),
+            ("prj-x", 4, "archived"),
+        ]:
+            db.execute(
+                "INSERT INTO projects SELECT ?,name,repository_path || '/' || ?,git_common_directory,identity,"
+                "default_base_branch,policy,version,?,updated_at,? FROM projects WHERE id=?",
+                (pid, pid, f"2026-01-0{day}T00:00:00+00:00", archived, p["id"]),
+            )
+    expected = ["prj-a", "prj-z", "prj-y", p["id"]]
+    if include_archived:
+        expected.insert(0, "prj-x")
+    params = {"include_archived": include_archived}
+    assert [
+        item["id"] for item in c.get("/api/projects", params=params).json()["items"]
+    ] == expected
+    seen, cursor = [], ""
+    while True:
+        page = c.get("/api/projects", params=params | {"limit": 1, "cursor": cursor}).json()
+        seen.extend(item["id"] for item in page["items"])
+        if not page["has_more"]:
+            assert page["next_cursor"] is None
+            break
+        assert page["next_cursor"] != cursor
+        cursor = page["next_cursor"]
+    assert seen == expected
+
+
 def test_project_duplicate_path_denied(web):
     c, svc, _, repo, _ = web
     project(c, svc, repo)

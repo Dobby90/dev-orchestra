@@ -4099,7 +4099,7 @@
           "branch_prefix": {
             "type": "string",
             "title": "Branch Prefix",
-            "default": "feature/ai"
+            "default": "feature/codex"
           },
           "version": {
             "type": "integer",

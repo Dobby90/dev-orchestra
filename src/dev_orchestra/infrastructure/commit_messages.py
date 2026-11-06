@@ -19,8 +19,12 @@ def validate_commit_message(message):
 
 def format_branch_commit(message, branch):
     message = message.strip()
-    suffix = branch.removeprefix("feature/ai/")
-    prefix = f"[{suffix}] " if branch.startswith("feature/ai/") and suffix else ""
+    prefix = ""
+    # Keep the previous branch convention for existing runs and recovery evidence.
+    for base in ("feature/codex/", "feature/ai/"):
+        if branch.startswith(base) and (suffix := branch.removeprefix(base)):
+            prefix = f"[{suffix}] "
+            break
     if prefix and message.startswith(prefix):
         message = message.removeprefix(prefix)
     # Validate the description itself so a prefix cannot hide a generic subject.

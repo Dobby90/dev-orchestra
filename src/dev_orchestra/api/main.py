@@ -337,8 +337,10 @@ def create_app(config=None, allowed_roots=None, port=8000, static_directory=None
     ):
         with runs.store.connection() as db:
             rows = db.execute(
-                "SELECT id FROM projects WHERE id>? AND (? OR archived_at IS NULL) ORDER BY id LIMIT ?",
-                (cursor, include_archived, limit + 1),
+                "SELECT id FROM projects WHERE (? OR archived_at IS NULL) "
+                "AND (?='' OR (created_at,id)<(SELECT created_at,id FROM projects WHERE id=?)) "
+                "ORDER BY created_at DESC,id DESC LIMIT ?",
+                (include_archived, cursor, cursor, limit + 1),
             ).fetchall()
         items = [backend.project(r["id"]) for r in rows[:limit]]
         return {

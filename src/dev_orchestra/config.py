@@ -11,7 +11,7 @@ from dev_orchestra.domain.models import Model
 
 class Project(Model):
     default_base_branch: str = "main"
-    branch_prefix: str = "feature/ai"
+    branch_prefix: str = "feature/codex"
 
 
 Role = Literal["planner", "developer", "tester", "reviewer", "fixer"]

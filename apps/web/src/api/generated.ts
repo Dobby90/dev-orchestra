@@ -1373,7 +1373,7 @@ export interface components {
             policy: components["schemas"]["Policy"];
             /**
              * Branch Prefix
-             * @default feature/ai
+             * @default feature/codex
              */
             branch_prefix: string;
             /** Version */

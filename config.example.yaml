@@ -1,6 +1,6 @@
 project:
   default_base_branch: main
-  branch_prefix: feature/ai
+  branch_prefix: feature/codex
 codex:
   command: codex
   model: null

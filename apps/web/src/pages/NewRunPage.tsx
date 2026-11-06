@@ -115,7 +115,7 @@ export function NewRunPage() {
       </Link>
       <Heading
         eyebrow="WORKSPACE / NEW RUN"
-        title="새 개발 작업"
+        title="새 작업"
         description="요구사항과 정책을 확인하고, 격리된 작업 공간에서 실행합니다."
       />
       <div className="new-run-grid">
@@ -340,7 +340,7 @@ export function NewRunPage() {
         <aside>
           <section className="panel panel-body policy-summary">
             <p className="eyebrow">EXECUTION POLICY</p>
-            <h2>검증을 포함하는 개발 흐름</h2>
+            <h2>작업 순서</h2>
             {selected.data && (
               <section>
                 <h3>실행할 검증 명령</h3>

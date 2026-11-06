@@ -31,6 +31,9 @@ def test_legacy_response_fallback_describes_files():
 @pytest.mark.parametrize(
     ("branch", "message", "expected"),
     [
+        ("feature/codex/xxx", "응답 개선\n\n변경 이유", "[xxx] 응답 개선\n\n변경 이유"),
+        ("feature/codex/xxx", "[xxx] 응답 개선", "[xxx] 응답 개선"),
+        ("feature/codex/xxx/subtask", "응답 개선", "[xxx/subtask] 응답 개선"),
         ("feature/ai/xxx", "응답 개선\n\n변경 이유", "[xxx] 응답 개선\n\n변경 이유"),
         ("feature/ai/xxx", "[xxx] 응답 개선", "[xxx] 응답 개선"),
         ("feature/ai/xxx/subtask", "응답 개선", "[xxx/subtask] 응답 개선"),
@@ -43,9 +46,10 @@ def test_branch_prefix_preserves_description(branch, message, expected):
 
 
 @pytest.mark.parametrize("message", ["[한글] English only", "[한글] 자동 개발: 작업"])
-def test_branch_prefix_cannot_bypass_subject_validation(message):
+@pytest.mark.parametrize("branch", ["feature/codex/한글", "feature/ai/한글"])
+def test_branch_prefix_cannot_bypass_subject_validation(message, branch):
     with pytest.raises(PipelineError, match="concrete Korean subject"):
-        format_branch_commit(message, "feature/ai/한글")
+        format_branch_commit(message, branch)
 
 
 def test_workspace_commit_uses_description_and_metadata(service):
