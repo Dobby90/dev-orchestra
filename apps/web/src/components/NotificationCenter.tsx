@@ -63,6 +63,7 @@ export function NotificationCenter() {
     ),
   )
     .map(([, item]) => item)
+    .filter((item) => !item.read)
     .sort((a, b) => b.id - a.id);
   const count = page?.unread_count ?? 0;
   return (
@@ -70,7 +71,7 @@ export function NotificationCenter() {
       open={open}
       onOpenChange={setOpen}
       title="알림"
-      description="입력 필요, 일시중지, 승인 대기와 실패 이력을 확인하세요. 읽음 처리는 작업 상태를 변경하지 않습니다."
+      description="입력 필요, 일시중지, 승인 대기와 실패 알림을 확인하세요. 읽은 알림은 목록에서 사라지며 작업 상태는 변경되지 않습니다."
       trigger={
         <button
           className="icon-button notification-bell"
@@ -125,7 +126,7 @@ export function NotificationCenter() {
         ))}
       </ul>
       {query.isSuccess && !items.length && (
-        <p className="subtle">아직 알림이 없습니다.</p>
+        <p className="subtle">읽지 않은 알림이 없습니다.</p>
       )}
       {query.hasNextPage && (
         <Button

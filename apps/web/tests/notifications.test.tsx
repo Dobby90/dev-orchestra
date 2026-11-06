@@ -129,6 +129,68 @@ describe("공통 작업 알림", () => {
     client.clear();
   });
 
+  it("이미 읽은 알림을 숨기고 개별 읽음 후 다시 열어도 표시하지 않는다", async () => {
+    let read = false;
+    vi.spyOn(api, "notifications").mockImplementation(async () => ({
+      ...initial,
+      unread_count: read ? 0 : 1,
+      items: [
+        { ...item, read },
+        { ...item, id: 2, run_id: "already-read", read: true },
+      ],
+    }));
+    vi.spyOn(api, "readNotifications").mockImplementation(async () => {
+      read = true;
+    });
+    const client = mount("/projects");
+    fireEvent.click(
+      await screen.findByRole("button", { name: "알림, 읽지 않음 1 개" }),
+    );
+    expect(await screen.findByRole("link", { name: /r1/ })).toBeInTheDocument();
+    expect(screen.queryByRole("link", { name: /already-read/ })).toBeNull();
+    fireEvent.click(screen.getByRole("link", { name: /r1/ }));
+    const bell = await screen.findByRole("button", {
+      name: "알림, 읽지 않음 0 개",
+    });
+    fireEvent.click(bell);
+    expect(
+      await screen.findByText("읽지 않은 알림이 없습니다."),
+    ).toBeInTheDocument();
+    expect(screen.queryByRole("link", { name: /r1/ })).toBeNull();
+    client.clear();
+  });
+
+  it("모두 읽음 후 불러온 이전 페이지의 알림까지 목록에서 사라진다", async () => {
+    let read = false;
+    vi.spyOn(api, "notifications").mockImplementation(async (before) => ({
+      ...initial,
+      cursor: 2,
+      unread_count: read ? 0 : 2,
+      items: [{ ...item, id: before ? 1 : 2, read }],
+      next_cursor: before ? null : 2,
+    }));
+    vi.spyOn(api, "readNotifications").mockImplementation(async () => {
+      read = true;
+    });
+    const client = mount("/projects");
+    fireEvent.click(
+      await screen.findByRole("button", { name: "알림, 읽지 않음 2 개" }),
+    );
+    fireEvent.click(
+      await screen.findByRole("button", { name: "이전 알림 더 보기" }),
+    );
+    await waitFor(() =>
+      expect(screen.getAllByRole("link", { name: /r1/ })).toHaveLength(2),
+    );
+    fireEvent.click(screen.getByRole("button", { name: "모두 읽음" }));
+    expect(
+      await screen.findByText("읽지 않은 알림이 없습니다."),
+    ).toBeInTheDocument();
+    expect(screen.queryByRole("link", { name: /r1/ })).toBeNull();
+    expect(screen.getByRole("button", { name: "모두 읽음" })).toBeDisabled();
+    client.clear();
+  });
+
   it("상세 상태 표시는 큰 글자와 아이콘을 사용한다", () => {
     render(<Status state="planning" large />);
     expect(screen.getByText("기획 중")).toHaveClass("status-large");
