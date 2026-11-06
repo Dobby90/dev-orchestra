@@ -1,21 +1,17 @@
-"""Persisted execution contracts. Missing identifiers always retain legacy behavior."""
+"""Workspace-only execution; historical contracts remain readable, never executable."""
 
 from dev_orchestra.domain.models import PipelineError
 
-PATCH_V1 = "patch-v1"
 WORKSPACE_V2 = "workspace-v2"
 
 
 def execution_contract(run):
-    value = run.get("execution_contract", PATCH_V1)
-    if value not in {PATCH_V1, WORKSPACE_V2}:
-        raise PipelineError("unsupported execution contract")
-    return value
+    if run.get("execution_contract") != WORKSPACE_V2:
+        raise PipelineError(
+            "unsupported execution contract; historical runs are read-only; create a new workspace-v2 run"
+        )
+    return WORKSPACE_V2
 
 
 def writes_workspace(request):
-    return execution_contract(request.context) == WORKSPACE_V2 and request.role in {
-        "developer",
-        "fixer",
-        "tester",
-    }
+    return request.role in {"developer", "fixer", "tester"}

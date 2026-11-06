@@ -418,7 +418,7 @@ def test_git_selection_uses_cumulative_changes_across_checkpoints(setup, mapped)
     assert set(result["included"]) == set(config["tests"]["commands"])
 
 
-def test_legacy_affected_metadata_inventory_cannot_choose_execution(mapped):
+def test_reported_command_inventory_must_match_host_selection(mapped):
     from dev_orchestra.config import Config
     from dev_orchestra.domain.models import AgentResult
     from dev_orchestra.orchestration.runner import Runner
@@ -426,17 +426,15 @@ def test_legacy_affected_metadata_inventory_cannot_choose_execution(mapped):
     selection = selection_for_paths(mapped, "a" * 40, ["src/a/model.py"])
     result = AgentResult(
         summary="legacy",
-        command_ids=list(mapped["config"]["tests"]["commands"]),
+        command_ids=selection["included"],
         coverage=[Coverage(criterion_id="AC1", command_ids=["a"])],
     )
-    Runner.validate_test_result(
-        mapped, result, Config.model_validate(mapped["config"]), selection, legacy_scope=True
-    )
-    assert "b" in result.command_ids and "b" not in selection["included"]
+    Runner.validate_test_result(mapped, result, Config.model_validate(mapped["config"]), selection)
+    assert "b" not in result.command_ids and "b" not in selection["included"]
     result.coverage = [Coverage(criterion_id="AC1", command_ids=["b"])]
     with pytest.raises(PipelineError):
         Runner.validate_test_result(
-            mapped, result, Config.model_validate(mapped["config"]), selection, legacy_scope=True
+            mapped, result, Config.model_validate(mapped["config"]), selection
         )
 
 

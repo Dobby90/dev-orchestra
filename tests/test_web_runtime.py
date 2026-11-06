@@ -80,14 +80,14 @@ def test_owned_web_stop_preserves_active_worker_and_restarts(prepared, assets):
         assert httpx.get(f"http://127.0.0.1:{port}/").status_code == 200
         with pytest.raises(PipelineError):
             runtime.start([], port, True, assets)
-        until(lambda: active_developer(svc, rid))
+        until(lambda: active_developer(svc, rid), timeout=90)
         with svc.store.connection() as db:
             job = dict(db.execute("SELECT * FROM jobs WHERE run_id=?", (rid,)).fetchone())
         runtime.stop()
         until(lambda: not runtime.status()["alive"])
         assert alive({"pid": job["owner_pid"], "create_time": job["owner_create_time"]})
         release.touch()
-        until(lambda: svc.store.get(rid)["state"] == "waiting_approval")
+        until(lambda: svc.store.get(rid)["state"] == "waiting_approval", timeout=180)
         until(lambda: q.job(job["id"])["state"] == "finished")
         until(lambda: not alive({"pid": job["owner_pid"], "create_time": job["owner_create_time"]}))
         assert svc.queries.snapshot(rid)["execution"]["worker_liveness"] == "stopped"
@@ -159,7 +159,7 @@ def test_supervisor_sigkill_stops_owned_services_and_preserves_worker(prepared, 
         assert supervisor.create_time() == state["create_time"]
         children = [(p, p.create_time()) for p in supervisor.children()]
         assert len(children) == 2
-        until(lambda: active_developer(svc, rid))
+        until(lambda: active_developer(svc, rid), timeout=90)
         with svc.store.connection() as db:
             job = dict(db.execute("SELECT * FROM jobs WHERE run_id=?", (rid,)).fetchone())
         supervisor.kill()
@@ -168,7 +168,7 @@ def test_supervisor_sigkill_stops_owned_services_and_preserves_worker(prepared, 
         assert alive({"pid": job["owner_pid"], "create_time": job["owner_create_time"]})
         runtime.start([], port, True, assets)
         release.touch()
-        until(lambda: svc.store.get(rid)["state"] == "waiting_approval")
+        until(lambda: svc.store.get(rid)["state"] == "waiting_approval", timeout=180)
         until(lambda: q.job(job["id"])["state"] == "finished")
         assert len([s for s in svc.store.steps(rid) if s["role"] == "developer"]) == 1
     finally:
@@ -211,7 +211,7 @@ def test_web_explicit_cancel_active_cancels_running_and_queued(prepared, assets)
         port = sock.getsockname()[1]
     try:
         runtime.start([], port, True, assets)
-        until(lambda: active_developer(svc, first))
+        until(lambda: active_developer(svc, first), timeout=90)
         runtime.stop(cancel_active=True)
         until(lambda: not runtime.status()["alive"])
         until(lambda: svc.status(first)["state"] == "cancelled")

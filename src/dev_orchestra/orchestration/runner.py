@@ -7,14 +7,11 @@ from contextlib import nullcontext
 from pathlib import Path
 
 from dev_orchestra.agents.contracts import ResponseError, validate_role
-from dev_orchestra.agents.feedback import source_context
-from dev_orchestra.agents.policy import TestChangesRequired, apply_patch, validate_patch
 from dev_orchestra.application.test_changes import TestChangeService
 from dev_orchestra.application.workspace_recovery import WorkspaceBlocked
 from dev_orchestra.config import Config
-from dev_orchestra.domain.execution import WORKSPACE_V2, execution_contract, writes_workspace
+from dev_orchestra.domain.execution import execution_contract, writes_workspace
 from dev_orchestra.domain.models import AgentRequest, PipelineError, StopRequested
-from dev_orchestra.infrastructure.commit_messages import describe_commit
 from dev_orchestra.infrastructure.evidence import checkpoints, verified_candidate
 from dev_orchestra.infrastructure.files import contained, digest, write
 from dev_orchestra.infrastructure.git import Git
@@ -82,6 +79,12 @@ class Runner:
 
                         QueueService(self.store).running(*claim)
                         self.validate_registered_repository(run)
+                    execution_contract(run)
+                    with self.store.connection() as db:
+                        if db.execute("SELECT version FROM schema_version").fetchone()[0] != 6:
+                            raise PipelineError(
+                                "workspace-v2 requires schema 6; run database-upgrade --workspace"
+                            )
                     if hasattr(self.tests, "check_policy"):
                         self.tests.check_policy(Config.model_validate(run["config"]).tests)
                     if hasattr(self.agent, "check"):
@@ -273,7 +276,7 @@ class Runner:
                     step_dir = resumed_workspace.path.parent
                     sha = saved["input_sha"]
                 else:
-                    if execution_contract(run) == WORKSPACE_V2 and role in {
+                    if role in {
                         "developer",
                         "fixer",
                         "tester",
@@ -365,10 +368,9 @@ class Runner:
                     from dev_orchestra.application.reviews import Reviews
 
                     request.context["open_issues"] = Reviews(self.store).open(run_id)
-                if run.get("test_selection_contract") or execution_contract(run) == WORKSPACE_V2:
-                    from dev_orchestra.agents.context import role_context
+                from dev_orchestra.agents.context import role_context
 
-                    role_context(request)
+                role_context(request)
                 approval, record = None, None
                 workspace, workspace_commits, workspace_execution = None, [], None
                 if writes_workspace(request):
@@ -382,140 +384,105 @@ class Runner:
                     resumed_workspace = None
                     workspace._test_runner = self.tests
                 test_changes = TestChangeService(self.store)
-                if run.get("test_change_application") and not workspace:
-                    result, record, approval = test_changes.applied_result(run)
-                elif run.get("test_change_proposal"):
-                    if run["test_change_proposal"].get("approval"):
-                        result, approval = test_changes.approved_result(run)
-                    else:
-                        _, result = test_changes.load(run)
-                    if sha != run["test_change_proposal"]["input_sha"]:
-                        raise PipelineError("saved test change input SHA changed")
-                else:
-                    feedback = run.get("response_feedback")
-                    if feedback and feedback.get("key") == repair_key:
-                        self.store.update(run_id, response_retry_inflight=repair_key)
-                        request.context["response_feedback"] = feedback
-                    request.context["response_contract"] = {
-                        "input_sha": sha,
-                        "criterion_ids": [c["id"] for c in run.get("criteria", [])],
-                        "command_ids": list(config.tests.commands),
-                        "patch_format": "Git unified diff with ---/+++ and @@ hunks; never *** markers",
-                    }
-                    if workspace:
-                        request.context["response_contract"].pop("patch_format")
-                        request.context["response_contract"]["edit_tool"] = "workspace.edit_file"
-                        if role == "tester":
-                            request.context["response_contract"]["run_tests_tool"] = (
-                                "workspace.run_tests"
-                            )
-                            request.context["response_contract"]["command_ids"] = (
-                                selection["included"] if selection else list(config.tests.commands)
-                            )
-                        else:
-                            request.context["response_contract"]["checkpoint_tool"] = (
-                                "workspace.checkpoint_commit"
-                            )
-                    if role == "tester" and run.get("test_selection_contract") == 2:
-                        request.context["response_contract"].pop("command_ids", None)
-                        request.context["response_contract"]["available_command_ids"] = list(
-                            config.tests.commands
+                if run.get("test_change_proposal"):
+                    raise PipelineError("historical test change proposals cannot be executed")
+                feedback = run.get("response_feedback")
+                if feedback and feedback.get("key") == repair_key:
+                    self.store.update(run_id, response_retry_inflight=repair_key)
+                    request.context["response_feedback"] = feedback
+                request.context["response_contract"] = {
+                    "input_sha": sha,
+                    "criterion_ids": [c["id"] for c in run.get("criteria", [])],
+                    "command_ids": list(config.tests.commands),
+                }
+                if workspace:
+                    request.context["response_contract"]["edit_tool"] = "workspace.edit_file"
+                    if role == "tester":
+                        request.context["response_contract"]["run_tests_tool"] = (
+                            "workspace.run_tests"
                         )
-                    result = None
-                    try:
-                        if workspace:
-                            result, workspace_sha, workspace_commits, workspace_execution = (
-                                self.run_workspace_stage(
-                                    request,
-                                    step_dir,
-                                    workspace,
-                                    config,
-                                )
-                            )
-                            if workspace_execution:
-                                selection = workspace_execution["selection"]
-                        elif (
-                            role == "reviewer"
-                            and run.get("test_selection_contract")
-                            and hasattr(self.agent, "run_readonly")
-                        ):
-                            from dev_orchestra.infrastructure.workspace import ReviewEvidenceSession
-
-                            readonly = ReviewEvidenceSession.create(
-                                self.store, run, step_id, step_dir
-                            )
-                            request.context["test_evidence_id"] = readonly.data["evidence_id"]
-                            result = self.agent.run_readonly(
+                        request.context["response_contract"]["command_ids"] = (
+                            selection["included"] if selection else list(config.tests.commands)
+                        )
+                    else:
+                        request.context["response_contract"]["checkpoint_tool"] = (
+                            "workspace.checkpoint_commit"
+                        )
+                if role == "tester" and run.get("test_selection_contract") == 2:
+                    request.context["response_contract"].pop("command_ids", None)
+                    request.context["response_contract"]["available_command_ids"] = list(
+                        config.tests.commands
+                    )
+                result = None
+                try:
+                    if workspace:
+                        result, workspace_sha, workspace_commits, workspace_execution = (
+                            self.run_workspace_stage(
                                 request,
                                 step_dir,
-                                readonly,
-                                lambda: self.store.get(run_id)["control"],
+                                workspace,
+                                config,
                             )
-                        else:
-                            result = self.agent.run(
-                                request, step_dir, lambda: self.store.get(run_id)["control"]
-                            )
-                        if not workspace and (git.sha() != sha or git.dirty()):
-                            raise PipelineError("read-only agent changed the worktree")
-                        validate_role(role, result)
-                        if not result.questions and not workspace:
-                            if role == "tester":
-                                self.validate_test_result(
-                                    run,
-                                    result,
-                                    config,
-                                    selection,
-                                    legacy_scope=(
-                                        run.get("test_scope") == "affected"
-                                        and not workspace
-                                        and run.get("test_selection_contract") != 2
-                                    ),
-                                )
-                            try:
-                                validate_patch(
-                                    worktree, result.patch, role, config.tests.write_paths
-                                )
-                            except TestChangesRequired as protected:
-                                test_changes.explanations(run, result, protected.paths)
-                    except ResponseError as error:
-                        if workspace:
-                            raise PipelineError(
-                                "workspace response invalid; confirmed commits and edits preserved"
-                            ) from error
-                        if git.sha() != sha or git.dirty():
-                            raise PipelineError(
-                                "candidate changed during response repair"
-                            ) from error
-                        feedback = {
-                            "key": repair_key,
-                            "input_sha": sha,
-                            "error": redact(str(error))[:4000],
-                            "current_files": sanitize(source_context(worktree, result.patch))
-                            if result
-                            else [],
-                        }
-                        with self.store.transaction():
-                            self.store.finish_step(
-                                step_id, sha, {"error": feedback["error"]}, status="failed"
-                            )
-                            self.store.update(
-                                run_id,
-                                response_feedback=feedback,
-                                response_retry_inflight=None,
-                                response_failures={
-                                    **run.get("response_failures", {}),
-                                    repair_key: failures + 1,
-                                },
-                            )
-                        if failures >= config.workflow.response_retries:
-                            self.store.update(
-                                run_id,
-                                "needs_input",
-                                error="response repair budget exhausted: " + feedback["error"],
-                            )
-                            return
-                        continue
-                    self.store.update(run_id, response_feedback=None, response_retry_inflight=None)
+                        )
+                        if workspace_execution:
+                            selection = workspace_execution["selection"]
+                    elif (
+                        role == "reviewer"
+                        and run.get("test_selection_contract")
+                        and hasattr(self.agent, "run_readonly")
+                    ):
+                        from dev_orchestra.infrastructure.workspace import ReviewEvidenceSession
+
+                        readonly = ReviewEvidenceSession.create(self.store, run, step_id, step_dir)
+                        request.context["test_evidence_id"] = readonly.data["evidence_id"]
+                        result = self.agent.run_readonly(
+                            request,
+                            step_dir,
+                            readonly,
+                            lambda: self.store.get(run_id)["control"],
+                        )
+                    else:
+                        result = self.agent.run(
+                            request, step_dir, lambda: self.store.get(run_id)["control"]
+                        )
+                    if not workspace and (git.sha() != sha or git.dirty()):
+                        raise PipelineError("read-only agent changed the worktree")
+                    validate_role(role, result)
+                except ResponseError as error:
+                    if workspace:
+                        raise PipelineError(
+                            "workspace response invalid; confirmed commits and edits preserved"
+                        ) from error
+                    if git.sha() != sha or git.dirty():
+                        raise PipelineError("candidate changed during response repair") from error
+                    feedback = {
+                        "key": repair_key,
+                        "input_sha": sha,
+                        "error": redact(str(error))[:4000],
+                        "current_files": [],
+                    }
+                    with self.store.transaction():
+                        self.store.finish_step(
+                            step_id, sha, {"error": feedback["error"]}, status="failed"
+                        )
+                        self.store.update(
+                            run_id,
+                            response_feedback=feedback,
+                            response_retry_inflight=None,
+                            response_failures={
+                                **run.get("response_failures", {}),
+                                repair_key: failures + 1,
+                            },
+                        )
+                    if failures >= config.workflow.response_retries:
+                        self.store.update(
+                            run_id,
+                            "needs_input",
+                            error="response repair budget exhausted: " + feedback["error"],
+                        )
+                        return
+                    continue
+                self.store.update(run_id, response_feedback=None, response_retry_inflight=None)
                 if not workspace and (git.sha() != sha or git.dirty()):
                     raise PipelineError("read-only agent changed the worktree")
                 if result.questions:
@@ -545,18 +512,6 @@ class Runner:
                             raise PipelineError("review finding has invalid source location")
                         if not issue.evidence.strip():
                             raise PipelineError("review finding requires evidence")
-                if role == "tester":
-                    self.validate_test_result(
-                        run,
-                        result,
-                        config,
-                        selection,
-                        legacy_scope=(
-                            run.get("test_scope") == "affected"
-                            and not workspace
-                            and run.get("test_selection_contract") != 2
-                        ),
-                    )
                 if workspace:
                     workspace.guard()
                     out_sha = workspace_sha
@@ -573,26 +528,6 @@ class Runner:
                             result,
                             [change.file for change in result.test_changes],
                         )
-                elif not run.get("test_change_application"):
-                    try:
-                        patched_paths = apply_patch(
-                            worktree, result.patch, role, config.tests.write_paths
-                        )
-                    except TestChangesRequired as error:
-                        record = test_changes.prepare(run, result, error.paths)
-                        patched_paths = apply_patch(
-                            worktree,
-                            result.patch,
-                            role,
-                            config.tests.write_paths,
-                            approved_patch_hash=approval["patch_hash"] if approval else None,
-                            validated_patch_hash=record["patch_hash"],
-                        )
-                    out_sha = git.commit(
-                        describe_commit(result.commit_message, result.summary, patched_paths)
-                        + f"\n\nDevOrchestra-Run: {run_id}\nDevOrchestra-Role: {role}"
-                        + f"\nDevOrchestra-Iteration: {iteration}\nDevOrchestra-Step: {step_id}"
-                    )
                 else:
                     out_sha, patched_paths = sha, []
                 if patched_paths:
@@ -653,37 +588,7 @@ class Runner:
                         payload["execution"] = workspace_execution["execution"]
                         payload["test_evidence_reference"] = workspace.data["test_evidence"]
                     else:
-                        from dev_orchestra.application.test_selection import selected_config
-
-                        selection = (
-                            select_tests(
-                                run,
-                                worktree,
-                                out_sha,
-                                plan=[item.model_dump() for item in result.test_plan]
-                                if run.get("test_selection_contract") == 2
-                                else None,
-                            )
-                            if run.get("test_selection_contract")
-                            else None
-                        )
-                        self.validate_test_result(
-                            run,
-                            result,
-                            config,
-                            selection,
-                            legacy_scope=(
-                                run.get("test_scope") == "affected"
-                                and not workspace
-                                and run.get("test_selection_contract") != 2
-                            ),
-                        )
-                        payload["execution"] = self.tests.run(
-                            worktree,
-                            selected_config(run, selection) if selection else config.tests,
-                            step_dir,
-                            lambda: self.store.get(run_id)["control"],
-                        )
+                        raise PipelineError("tester requires host workspace evidence")
                     if selection:
                         payload["test_selection"] = selection
                         from dev_orchestra.application.test_selection import verify_selection
@@ -848,7 +753,7 @@ class Runner:
                 raise
 
     @staticmethod
-    def validate_test_result(run, result, config, selection=None, *, legacy_scope=False):
+    def validate_test_result(run, result, config, selection=None):
         if run.get("test_selection_contract") == 2 and not (selection or {}).get("selection_hash"):
             plan_ids = [item.command_id for item in result.test_plan]
             if (
@@ -875,7 +780,7 @@ class Runner:
                     ids = expanded
         else:
             ids = set(selection["included"]) if selection else set(config.tests.commands)
-        reported_ids = set(config.tests.commands) if legacy_scope else ids
+        reported_ids = ids
         if set(result.command_ids) != reported_ids or len(result.command_ids) != len(reported_ids):
             raise ResponseError(
                 f"tester command_ids mismatch: expected={sorted(reported_ids)}, received={result.command_ids}"

@@ -5,7 +5,7 @@ import sqlite3
 from pathlib import Path
 
 import pytest
-from test_workflow import service as service
+from test_workflow import legacy_service as legacy_service
 from test_workspace import edit, start_session
 from test_workspace import setup as setup
 
@@ -18,6 +18,11 @@ from dev_orchestra.infrastructure.migrations import SCHEMA, upgrade
 from dev_orchestra.infrastructure.schema4 import SCHEMA as SCHEMA4
 from dev_orchestra.infrastructure.store import ReadOnlyStore, Store
 from dev_orchestra.infrastructure.workspace_mcp import dispatch
+
+
+@pytest.fixture
+def service(legacy_service):
+    return legacy_service
 
 
 @pytest.mark.parametrize("version", [2, 3, 4, 5])
@@ -157,6 +162,7 @@ def test_measurement_preserves_unknown_and_counts_failed_calls_without_contents(
     assert timed["stages"][0]["latest_resume_seconds"] >= 0
     assert [event["kind"] for event in timed["stages"][0]["timeline"]] == [
         "step_started",
+        "step.interrupted",
         "step_resumed",
         "step_completed",
     ]
@@ -238,3 +244,62 @@ def test_measurement_database_handle_has_no_write_authority(service, tmp_path):
     with pytest.raises(sqlite3.OperationalError):
         ReadOnlyStore(absent)
     assert not absent.exists()
+
+
+@pytest.mark.parametrize("version", [2, 5])
+def test_new_runs_require_explicit_schema6_activation(service, version):
+    svc, rid, repo = service
+    if version == 5:
+        upgrade(svc.store.path)
+    original = svc.store.get(rid), svc.store.events(rid)
+    spec = Path(original[0]["directory"]) / "spec.md"
+    directories = set(svc.config.storage.runs_directory.iterdir())
+    with pytest.raises(PipelineError, match="requires schema 6"):
+        RunService(svc.config).create(repo, spec)
+    assert original == (svc.store.get(rid), svc.store.events(rid))
+    assert directories == set(svc.config.storage.runs_directory.iterdir())
+    with svc.store.connection() as db:
+        assert db.execute("SELECT version FROM schema_version").fetchone()[0] == version
+
+
+@pytest.mark.parametrize("contract", [None, "patch-v1", "unknown"])
+def test_old_run_is_not_executed_after_schema6_upgrade(service, contract):
+    from test_workflow import FakeAgent, FakeTests
+
+    from dev_orchestra.orchestration.runner import Runner
+
+    svc, rid, _ = service
+    svc.store.update(rid, execution_contract=contract)
+    upgrade(svc.store.path, workspace=True)
+    before = svc.store.get(rid)
+    agent = FakeAgent()
+    Runner(svc.store, agent, FakeTests()).execute(rid)
+    run = svc.store.get(rid)
+    assert run["state"] == "failed" and "historical runs are read-only" in run["error"]
+    assert not agent.calls and not svc.store.steps(rid)
+    assert not Path(run["worktree"]).exists()
+    assert run["execution_contract"] == before["execution_contract"]
+    assert run["base_sha"] == before["base_sha"] and run["config"] == before["config"]
+
+
+@pytest.mark.parametrize("version", [2, 5])
+def test_schema_number_cannot_be_bypassed_by_contract_identifier(service, version):
+    from test_workflow import FakeAgent, FakeTests
+
+    from dev_orchestra.orchestration.runner import Runner
+
+    svc, rid, _ = service
+    if version == 5:
+        upgrade(svc.store.path)
+    svc.store.update(rid, execution_contract="workspace-v2")
+
+    class Agent(FakeAgent):
+        def check(self, **kwargs):
+            pytest.fail("schema gate must precede agent preflight")
+
+    agent = Agent()
+    Runner(svc.store, agent, FakeTests()).execute(rid)
+    run = svc.store.get(rid)
+    assert run["state"] == "failed" and "requires schema 6" in run["error"]
+    assert not agent.calls and not svc.store.steps(rid)
+    assert not Path(run["worktree"]).exists()

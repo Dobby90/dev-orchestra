@@ -2,13 +2,13 @@ from pathlib import Path
 
 import pytest
 from test_workflow import FakeAgent, FakeTests
+from test_workflow import WorkerRunner as Runner
 from test_workflow import service as service
 
 from dev_orchestra.application.commands import Commands
 from dev_orchestra.application.plan_approval import binding, decide
 from dev_orchestra.domain.models import PipelineError, ReviewResultV2
 from dev_orchestra.infrastructure.migrations import upgrade
-from dev_orchestra.orchestration.runner import Runner
 
 
 @pytest.fixture
@@ -105,6 +105,8 @@ def test_new_instructions_before_development_require_replanning(planned, tmp_pat
     h = binding(svc.store, svc.store.get(rid))["plan_hash"]
     decide(svc, rid, h, True)
     svc.store.update(rid, "paused")
+    with svc.store.connection() as db:
+        db.execute("UPDATE jobs SET state='finished' WHERE run_id=?", (rid,))
     answers = tmp_path / "answers.md"
     answers.write_text("추가 요구사항")
     svc.resume(rid, answers)

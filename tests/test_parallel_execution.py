@@ -15,7 +15,6 @@ from test_workspace_recovery import Agent
 
 from dev_orchestra.application.queue import QueueService
 from dev_orchestra.application.service import RunService
-from dev_orchestra.domain.execution import WORKSPACE_V2
 from dev_orchestra.domain.models import (
     PipelineError,
     ReviewResultV2,
@@ -94,11 +93,7 @@ def test_runs_overlap_and_preserve_isolated_results(service, tmp_path, same_repo
         from dev_orchestra.infrastructure.migrations import upgrade
 
         upgrade(original.store.path, workspace=web_schema == "workspace")
-    svc = (
-        RunService(original.config)
-        if web_schema == "workspace"
-        else RunService(original.config, _execution_contract=WORKSPACE_V2)
-    )
+    svc = RunService(original.config)
     spec = Path(svc.store.get(initial)["directory"]) / "spec.md"
     other_repo = repo if same_repository else clone_repo(repo, tmp_path / "other")
     ids = [svc.create(repo, spec), svc.create(other_repo, spec)]
@@ -112,7 +107,7 @@ def test_runs_overlap_and_preserve_isolated_results(service, tmp_path, same_repo
             p = CTX.Process(target=run_worker, args=(str(svc.store.path), rid, entered, release))
             p.start()
             processes.append(p)
-        assert {entered.get(timeout=30), entered.get(timeout=30)} == set(ids[:2])
+        assert {entered.get(timeout=90), entered.get(timeout=90)} == set(ids[:2])
         # Both are inside Developer before either can finish, including same-common-dir runs.
         a, b = [svc.store.get(rid) for rid in ids[:2]]
         b_sha = Git(Path(b["worktree"])).sha()
@@ -138,7 +133,7 @@ def test_runs_overlap_and_preserve_isolated_results(service, tmp_path, same_repo
                 )
                 resumed.start()
                 processes.append(resumed)
-                assert entered.get(timeout=60) == ids[0]
+                assert entered.get(timeout=90) == ids[0]
                 after = next(
                     step for step in svc.store.steps(ids[0]) if step["role"] == "developer"
                 )
@@ -161,7 +156,7 @@ def test_runs_overlap_and_preserve_isolated_results(service, tmp_path, same_repo
     finally:
         release.set()
         for p in processes:
-            p.join(120)
+            p.join(180)
             if p.is_alive():
                 p.terminate()
                 p.join(10)

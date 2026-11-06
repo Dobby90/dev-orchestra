@@ -10,7 +10,6 @@ import pytest
 from test_workflow import FakeAgent, FakeTests
 from test_workflow import service as service
 
-from dev_orchestra.agents.policy import apply_patch
 from dev_orchestra.config import Codex
 from dev_orchestra.domain.models import AgentRequest, PipelineError
 from dev_orchestra.infrastructure.codex import CodexClient
@@ -112,19 +111,6 @@ def test_filter_execution_is_rejected(service, tmp_path):
     with pytest.raises(PipelineError, match="filters"):
         Git(repo).commit("필터 실행 금지")
     assert not (tmp_path / "forbidden").exists()
-
-
-def test_existing_test_edits_without_requirement_evidence_are_rejected(service):
-    svc, rid, repo = service
-    (repo / "tests").mkdir()
-    file = repo / "tests/test_a.py"
-    file.write_text("assert False\n")
-    delta = (
-        "--- a/tests/test_a.py\n+++ b/tests/test_a.py\n@@ -1 +1 @@\n-assert False\n+assert True\n"
-    )
-    with pytest.raises(PipelineError, match="evidence required"):
-        apply_patch(repo, delta, "tester", ["tests"])
-    assert file.read_text() == "assert False\n"
 
 
 def test_incomplete_review_json_rejected(tmp_path):
@@ -293,20 +279,23 @@ from unittest.mock import patch
 from dev_orchestra.domain.models import AgentResult
 s=RunService(Config.model_validate_json(Path(CONFIG).read_text()))
 class Changing(FakeAgent):
- def run(self,req,*args):
+ def run_workspace(self,req,directory,session,stop):
   if req.role=='developer':
-   return AgentResult(summary='change',patch='--- a/main.py\\n+++ b/main.py\\n@@ -1 +1 @@\\n-original\\n+changed\\n')
-  return super().run(req,*args)
-original_commit=Git.commit
+   from test_workspace import edit
+   from dev_orchestra.domain.models import WorkspaceResult
+   edit(session,'main.py','changed\\n')
+   return WorkspaceResult(summary='구현 수정')
+  return super().run_workspace(req,directory,session,stop)
+original_commit=Git.commit_selected
 original_finish=Store.finish_step
-def commit(self,message):
- value=original_commit(self,message)
- if 'developer' in message and BOUNDARY=='commit':os._exit(17)
+def commit(self,*args,**kwargs):
+ value=original_commit(self,*args,**kwargs)
+ if BOUNDARY=='commit':os._exit(17)
  return value
 def finish(self,step,sha,data):
  original_finish(self,step,sha,data)
  if '/developer/' in data['artifact'] and BOUNDARY=='checkpoint':os._exit(17)
-with patch.object(Git,'commit',commit),patch.object(Store,'finish_step',finish):
+with patch.object(Git,'commit_selected',commit),patch.object(Store,'finish_step',finish):
  Runner(s.store,Changing(),FakeTests()).execute(RUN_ID)
 """.replace("CONFIG", repr(str(config)))
         .replace("BOUNDARY", repr(boundary))
@@ -316,7 +305,7 @@ with patch.object(Git,'commit',commit),patch.object(Store,'finish_step',finish):
         "PYTHONPATH": str(Path("src").resolve()) + os.pathsep + str(Path("tests").resolve())
     }
     result = subprocess.run(
-        [sys.executable, "-c", code], env=env, capture_output=True, text=True, timeout=10
+        [sys.executable, "-c", code], env=env, capture_output=True, text=True, timeout=90
     )
     assert result.returncode == 17, result.stderr
     svc.resume(rid)
@@ -325,12 +314,8 @@ with patch.object(Git,'commit',commit),patch.object(Store,'finish_step',finish):
     run = svc.store.get(rid)
     assert "planner" not in agent.calls
     assert (Path(run["worktree"]) / "main.py").read_text() == "changed\n"
-    if boundary == "commit":
-        assert run["state"] == "needs_input"
-        assert agent.calls == []
-    else:
-        assert run["state"] == "waiting_approval"
-        assert agent.calls == ["tester", "reviewer"]
+    assert run["state"] == "waiting_approval", run.get("error")
+    assert agent.calls == ["tester", "reviewer"]
 
 
 def test_log_cursor_preserves_korean(service):

@@ -5,11 +5,10 @@ import uuid
 from pathlib import Path
 
 from dev_orchestra.agents.contracts import ResponseError
-from dev_orchestra.agents.policy import TestChangesRequired, validate_patch
 from dev_orchestra.config import Config
 from dev_orchestra.domain.models import AgentResult, PipelineError
 from dev_orchestra.infrastructure.evidence import checkpoints
-from dev_orchestra.infrastructure.files import contained, digest, write
+from dev_orchestra.infrastructure.files import contained, digest
 from dev_orchestra.infrastructure.git import Git
 from dev_orchestra.infrastructure.process import sanitize
 from dev_orchestra.infrastructure.store import now
@@ -103,40 +102,6 @@ class TestChangeService:
         ):
             raise PipelineError("applied test change approval evidence mismatch")
         return result, record, approval
-
-    def propose(self, run, result, paths, step_dir):
-        # Kept for decisions on proposals persisted by earlier versions.
-        payload = self.explanations(run, result, paths)
-        artifact = step_dir / "test-change-result.json"
-        result_hash = write(artifact, payload)
-        proposal = {
-            "id": "test-change-" + uuid.uuid4().hex,
-            "run_id": run["id"],
-            "role": run["next_role"],
-            "iteration": run.get("iteration", 0),
-            "revision": run.get("revision", 0),
-            "input_sha": run["current_sha"],
-            "patch_hash": digest(result.patch.encode()),
-            "result_hash": result_hash,
-            "artifact": str(artifact.relative_to(Path(run["directory"]))),
-            "policy_hash": checksum(run["config"]["tests"]),
-            "criteria_hash": checksum(run["criteria"]),
-            "task_hash": task_hash(run),
-            "changes": payload["test_changes"],
-            "created_at": now(),
-        }
-        proposal["proposal_hash"] = checksum(proposal)
-        with self.store.transaction() as db:
-            self.store.update(
-                run["id"],
-                "needs_input",
-                test_change_proposal=proposal,
-                error="기존 테스트 변경 승인 필요: " + ", ".join(paths),
-                questions=[],
-            )
-            self.store._event(
-                db, run["id"], "test_changes.proposed", {"proposal_id": proposal["id"]}
-            )
 
     def load(self, run):
         proposal = run.get("test_change_proposal")
@@ -253,45 +218,13 @@ class TestChangeService:
                         "approved patch may have been applied; inspect preserved worktree"
                     )
             return proposal
-        proposal, result = self.load(run)
-        git = Git(Path(run["worktree"]), Config.model_validate(run["config"]).tests.output_paths)
-        if git.sha() != input_sha or git.dirty():
-            raise PipelineError("test change approval requires unchanged HEAD and a clean worktree")
-        if proposal.get("approval"):
-            raise PipelineError("test change proposal already approved")
-        checkpoints(self.store, run)
-        try:
-            validate_patch(
-                Path(run["worktree"]),
-                result.patch,
-                proposal["role"],
-                Config.model_validate(run["config"]).tests.write_paths,
-            )
-        except TestChangesRequired as error:
-            if set(error.paths) != {c["file"] for c in proposal["changes"]}:
-                raise PipelineError("protected test paths changed") from error
-        else:
-            raise PipelineError("proposal no longer changes protected tests")
-        return proposal
+        raise PipelineError(
+            "historical test change proposals are read-only; create a new workspace-v2 run"
+        )
 
     def decision_changes(self, run, proposal, approve, reason=""):
         if approve:
-            approval = {
-                "proposal_id": proposal["id"],
-                "proposal_hash": proposal["proposal_hash"],
-                "patch_hash": proposal["patch_hash"],
-                "input_sha": proposal["input_sha"],
-                "role": proposal["role"],
-                "iteration": proposal["iteration"],
-                "revision": proposal["revision"],
-                "changes": proposal["changes"],
-                "approved_version": run["version"],
-                "approved_at": now(),
-            }
-            return {
-                "test_change_proposal": proposal | {"approval": approval},
-                "test_change_approvals": [*run.get("test_change_approvals", []), approval],
-            }
+            raise PipelineError("historical test change proposals are read-only")
         reason = sanitize(reason)
         if not reason.strip():
             raise PipelineError("rejecting test changes requires instructions")
@@ -304,15 +237,3 @@ class TestChangeService:
             ],
             "directives": [*run.get("directives", []), "테스트 변경 반려: " + reason],
         }
-
-    def approved_result(self, run):
-        proposal, result = self.load(run)
-        approval = proposal.get("approval")
-        if not approval or approval not in run.get("test_change_approvals", []):
-            raise PipelineError("explicit test change approval required before applying patch")
-        for key in ["proposal_hash", "patch_hash", "input_sha", "role", "iteration", "revision"]:
-            if approval[key] != proposal[key]:
-                raise PipelineError("test change approval binding mismatch")
-        if approval["proposal_id"] != proposal["id"]:
-            raise PipelineError("test change approval identity mismatch")
-        return result, approval

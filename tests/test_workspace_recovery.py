@@ -5,6 +5,7 @@ from pathlib import Path
 
 import pytest
 from test_workflow import FakeAgent, FakeTests
+from test_workflow import WorkerRunner as Runner
 from test_workspace import checkpoint, edit, start_session
 from test_workspace import setup as setup
 
@@ -20,7 +21,6 @@ from dev_orchestra.domain.models import (
 )
 from dev_orchestra.infrastructure.files import digest
 from dev_orchestra.infrastructure.git import Git
-from dev_orchestra.orchestration.runner import Runner
 
 
 def planned(setup, agent, tests):

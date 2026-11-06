@@ -8,7 +8,7 @@ from test_workflow import service as service
 
 from dev_orchestra.application.commands import Commands
 from dev_orchestra.application.results import Results
-from dev_orchestra.domain.models import AgentResult, PipelineError, ReviewAssessment, ReviewResultV2
+from dev_orchestra.domain.models import PipelineError, ReviewAssessment, ReviewResultV2
 from dev_orchestra.infrastructure.git import Git
 from dev_orchestra.infrastructure.migrations import upgrade
 from dev_orchestra.orchestration.runner import Runner
@@ -21,11 +21,6 @@ class Reviewer(FakeAgent):
 
     def run(self, request, directory, stop):
         value = super().run(request, directory, stop)
-        if request.role == "developer":
-            return AgentResult(
-                summary="change",
-                patch="diff --git a/main.py b/main.py\n--- a/main.py\n+++ b/main.py\n@@ -1 +1 @@\n-original\n+changed\n",
-            )
         if request.role == "reviewer":
             assessments = (
                 []
@@ -40,8 +35,21 @@ class Reviewer(FakeAgent):
                     for i in request.context.get("open_issues", [])
                 ]
             )
-            return ReviewResultV2(**value.model_dump(), assessments=assessments)
+            return ReviewResultV2(
+                **value.model_dump(exclude={"assessments"}), assessments=assessments
+            )
         return value
+
+    def run_workspace(self, request, directory, session, stop):
+        if request.role == "developer":
+            from test_workspace import edit
+
+            from dev_orchestra.domain.models import WorkspaceResult
+
+            edit(session, "main.py", "changed\n")
+            self.calls.append(request.role)
+            return WorkspaceResult(summary="기능 변경")
+        return super().run_workspace(request, directory, session, stop)
 
 
 @pytest.fixture

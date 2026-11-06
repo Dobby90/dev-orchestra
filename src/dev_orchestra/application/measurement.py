@@ -137,7 +137,7 @@ def measurement(store, run_id, *, version_label, scenario):
         "version_label": version_label,
         "scenario": scenario,
         "state": run["state"],
-        "execution_contract": run.get("execution_contract", "patch-v1"),
+        "execution_contract": run.get("execution_contract", "unknown"),
         "test_scope": scope,
         "conditions": conditions,
         "validation": validation,

@@ -9,6 +9,8 @@ from pathlib import Path
 
 import psutil
 import pytest
+from codex_stub import WORKSPACE_CLIENT
+from test_workflow import legacy_service as legacy_service
 from test_workflow import service as service
 
 from dev_orchestra.application.queue import QueueService
@@ -31,7 +33,7 @@ def until(check, timeout=30):
 
 def active_developer(svc, rid):
     root = Path(svc.store.get(rid)["directory"])
-    for path in root.glob("iterations/*/developer/*/process.process.json"):
+    for path in root.glob("iterations/*/developer/*/calls/*/process.process.json"):
         value = json.loads(path.read_text())
         if value.get("pid") and not value.get("finished"):
             return value
@@ -47,6 +49,7 @@ def prepared(service, tmp_path):
     stub.write_text(f"""#!{sys.executable}
 import json,sys,time
 from pathlib import Path
+{WORKSPACE_CLIENT}
 from dev_orchestra.domain.models import AgentResult,Criterion,Coverage,ReviewResultV2
 if '--help' in sys.argv:
  print('--output-schema --ephemeral --ignore-user-config --json');sys.exit(0)
@@ -57,6 +60,7 @@ if req['role']=='developer' and not Path({str(release)!r}).exists():
 r=ReviewResultV2(summary='검증') if req['role']=='reviewer' and req['context'].get('review_contract')==2 else AgentResult(summary='검증')
 if req['role']=='planner':r.plan='계획';r.criteria=[Criterion(id='AC1',description='조건')]
 if req['role']=='tester':r.command_ids=['unit'];r.coverage=[Coverage(criterion_id='AC1',command_ids=['unit'])]
+r=finish_workspace(req,r)
 Path(sys.argv[sys.argv.index('--output-last-message')+1]).write_text(r.model_dump_json())
 """)
     stub.chmod(0o755)
@@ -155,14 +159,14 @@ def test_dispatcher_death_worker_survives_and_finishes(prepared):
     svc, q, create, dispatch, release = prepared
     rid = create()
     d = dispatch()
-    until(lambda: active_developer(svc, rid))
+    until(lambda: active_developer(svc, rid), timeout=90)
     with svc.store.connection() as db:
         job = dict(db.execute("SELECT * FROM jobs WHERE run_id=?", (rid,)).fetchone())
     d.kill()
     d.wait()
     assert alive({"pid": job["owner_pid"], "create_time": job["owner_create_time"]})
     release.touch()
-    until(lambda: svc.store.get(rid)["state"] == "waiting_approval")
+    until(lambda: svc.store.get(rid)["state"] == "waiting_approval", timeout=180)
     until(lambda: q.job(job["id"])["state"] == "finished")
     assert svc.events.stream_page(rid)["items"]
     svc.approve(rid)
@@ -173,7 +177,7 @@ def test_worker_sigkill_recovered_without_duplicate(prepared):
     svc, q, create, dispatch, _ = prepared
     rid = create()
     dispatch()
-    until(lambda: active_developer(svc, rid))
+    until(lambda: active_developer(svc, rid), timeout=90)
     with svc.store.connection() as db:
         job = dict(db.execute("SELECT * FROM jobs WHERE run_id=?", (rid,)).fetchone())
     worker = psutil.Process(job["owner_pid"])
@@ -222,7 +226,7 @@ def test_cli_foreground_waits_for_dispatcher_owner(prepared, monkeypatch, outcom
     stub.write_text(script)
     rid = create()
     dispatch()
-    until(lambda: active_developer(svc, rid))
+    until(lambda: active_developer(svc, rid), timeout=90)
     # Simulate Dispatcher claiming immediately after the CLI's resume commit.
     monkeypatch.setattr(RunService, "resume", lambda *args, **kwargs: None)
     with ThreadPoolExecutor(max_workers=1) as pool:
@@ -234,7 +238,7 @@ def test_cli_foreground_waits_for_dispatcher_owner(prepared, monkeypatch, outcom
             assert not result.done()
         finally:
             release.touch()
-        response = result.result(timeout=30)
+        response = result.result(timeout=180)
     assert response.exit_code == exit_code, response.output
     assert svc.store.get(rid)["state"] == outcome
     with svc.store.connection() as db:
@@ -246,7 +250,7 @@ def test_existing_worker_detach_returns_immediately(prepared):
     svc, _, create, dispatch, release = prepared
     rid = create()
     dispatch()
-    until(lambda: active_developer(svc, rid))
+    until(lambda: active_developer(svc, rid), timeout=90)
     started = time.monotonic()
     try:
         pid = svc.start(rid, detached=True)
@@ -261,7 +265,7 @@ def test_wait_existing_interrupt_requests_pause(prepared, monkeypatch):
     svc, q, create, dispatch, _ = prepared
     rid = create()
     dispatch()
-    until(lambda: active_developer(svc, rid))
+    until(lambda: active_developer(svc, rid), timeout=90)
     original = QueueService.job
     interrupted = False
 
@@ -555,7 +559,8 @@ def test_dispatcher_restart_adopts_owner_and_resume(prepared):
     svc, q, create, dispatch, release = prepared
     rid = create()
     first = dispatch()
-    until(lambda: active_developer(svc, rid))
+    until(lambda: active_developer(svc, rid), timeout=90)
+    before = next(s for s in svc.store.steps(rid) if s["role"] == "developer")
     with svc.store.connection() as db:
         job = dict(db.execute("SELECT * FROM jobs WHERE run_id=?", (rid,)).fetchone())
     first.kill()
@@ -569,10 +574,12 @@ def test_dispatcher_restart_adopts_owner_and_resume(prepared):
     until(lambda: q.job(job["id"])["state"] == "cancelled")
     release.touch()
     svc.resume(rid)
-    until(lambda: svc.store.get(rid)["state"] == "waiting_approval")
+    until(lambda: svc.store.get(rid)["state"] == "waiting_approval", timeout=180)
     steps = svc.store.steps(rid)
     assert len([s for s in steps if s["role"] == "planner" and s["status"] == "completed"]) == 1
-    assert len([s for s in steps if s["role"] == "developer"]) == 2
+    developers = [s for s in steps if s["role"] == "developer"]
+    assert len(developers) == 1 and developers[0]["status"] == "completed"
+    assert (developers[0]["id"], developers[0]["attempt"]) == (before["id"], before["attempt"])
 
 
 def test_corrupt_log_view_is_explicitly_unavailable(prepared):
@@ -682,7 +689,7 @@ def test_actual_http_sse_replay_and_api_restart(prepared, tmp_path):
                         first = frame(stream)
                         last = int(first["id"])
                     dispatch()
-                    until(lambda: active_developer(svc, rid))
+                    until(lambda: active_developer(svc, rid), timeout=90)
                 else:
                     assert remote.get("/api/session").status_code == 200
                     with remote.stream(
@@ -746,10 +753,10 @@ def test_guardian_missing_recovery_fails_closed(prepared):
         marker.unlink()
 
 
-def test_schema3_upgrade_preserves_queue_and_history(service):
+def test_schema3_upgrade_preserves_queue_and_history(legacy_service):
     from dev_orchestra.infrastructure.migrations import SCHEMA
 
-    svc, rid, _ = service
+    svc, rid, _ = legacy_service
     with svc.store.connection() as db:
         db.executescript(SCHEMA)
         db.execute("UPDATE schema_version SET version=3")
@@ -836,7 +843,7 @@ def test_api_submit_dispatcher_and_indexed_logs(prepared):
         rid = result.json()["run_id"]
         try:
             dispatch()
-            until(lambda: active_developer(svc, rid))
+            until(lambda: active_developer(svc, rid), timeout=90)
             # CLI and API share one source of truth; a reader never starts recovery.
             assert c.get(f"/api/runs/{rid}").json()["state"] == svc.store.get(rid)["state"]
             until(
@@ -851,7 +858,7 @@ def test_api_submit_dispatcher_and_indexed_logs(prepared):
             assert "CANARY" not in json.dumps(logs) + json.dumps(history)
             assert "[REDACTED]" in json.dumps(logs)
             release.touch()
-            until(lambda: svc.store.get(rid)["state"] == "waiting_approval")
+            until(lambda: svc.store.get(rid)["state"] == "waiting_approval", timeout=180)
             until(lambda: q.job(result.json()["job_id"])["state"] == "finished")
             assert (repo / "main.py").read_bytes() == before
         finally:

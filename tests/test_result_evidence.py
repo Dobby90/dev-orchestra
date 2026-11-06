@@ -6,6 +6,7 @@ import sys
 from pathlib import Path
 
 import pytest
+from test_workflow import legacy_service as legacy_service
 from test_workflow import service as service
 
 from dev_orchestra.config import TestCommand as Command
@@ -96,8 +97,8 @@ def test_missing_junit_retains_command_exit_code_and_redacted_diagnostic(service
     assert "CANARY" not in json.dumps(value)
 
 
-def test_schema4_upgrade_keeps_log_cursor_and_snapshot_references(service):
-    svc, rid, _ = service
+def test_schema4_upgrade_keeps_log_cursor_and_snapshot_references(legacy_service):
+    svc, rid, _ = legacy_service
     with svc.store.connection() as db:
         db.executescript(SCHEMA + SCHEMA4)
         db.execute("UPDATE schema_version SET version=4")

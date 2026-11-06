@@ -56,6 +56,8 @@ uv sync --frozen --extra web
 ./start.sh --allow-root ~/projects
 ```
 
+새 DB는 서비스 기동 전에 `devorchestra database-upgrade --workspace`로 스키마 6을 명시적으로 활성화하세요. 별도 YAML 설정을 쓰면 같은 `--config`를 지정하세요.
+
 `start.sh`는 `.venv`를 사용해 GUI를 빌드하고 SQLite를 준비한 뒤 GUI·API·Dispatcher를 백그라운드로 시작합니다. 별도 DB 서버는 필요하지 않습니다. 출력된 `http://127.0.0.1:8000` 주소로 접속하고 일회용 코드를 입력하세요. 브라우저는 자동으로 열지 않습니다. Dispatcher를 시작하면 기존 대기 작업도 실행할 수 있습니다.
 
 | 옵션 | 동작 |
@@ -141,6 +143,8 @@ UI에서 저장한 설정은 DB 옆의 `.agents.json` 확장자 파일에 보관
 `--config`·`--database`는 하위 명령 앞에 지정합니다. 아래 예시는 모든 명령에서 같은 설정을 사용합니다.
 
 ```sh
+# 최초 실행 전 모든 DB writer를 종료하고 스키마 6을 명시적으로 활성화합니다.
+devorchestra --config config.yaml database-upgrade --workspace
 devorchestra --config config.yaml doctor
 devorchestra --config config.yaml run --repo ~/projects/example --spec PRD.md --base main --max-fix-attempts 3
 # CLI 종료 후에도 실행하려면 run에 --detach를 지정합니다.
@@ -197,7 +201,7 @@ queued → preparing → planning → waiting_plan_approval → developing → t
 
 복구에는 구체적인 검증 오류와 필요시 추적 중인 대상 파일의 제한된 현재 문맥을 전달합니다. Worktree 변경, 허용 경로 위반, 프로세스·실행 오류는 이 자동 복구로 우회하지 않습니다. 복구 한도 초과는 `needs_input`으로 보존하고, 중단된 재시도를 다시 시작할 때도 추가 호출 전에 개입을 요청합니다. 답변 없는 단순 재개로 같은 단계의 복구 한도를 초기화하지 않습니다. 명시적으로 새 답변을 제공하면 새로운 입력으로 한도를 계산하며, 기존 기획 승인 규칙은 유지합니다. 기존 테스트 변경 근거·생성 시 고정한 테스트 정책·독립 리뷰·최종 승인은 그대로 필요합니다.
 
-기존 `patch-v1` 실행 계약에서는 각 역할이 새 읽기 전용 Codex 세션에서 구조화된 결과를 반환하고, 호스트가 unified diff를 검증·적용합니다. 요구사항 변경으로 기존 테스트의 기대값을 수정하거나 검사를 추가해야 하면, 에이전트는 변경 사유와 인수 조건 ID를 `test_changes`로 함께 반환합니다. 호스트는 파일별 변경 근거·패치·테스트 명령·인수 조건 커버리지를 적용 전에 검증하고 중간 승인 없이 자동 진행합니다. 테스트 변경을 이유로 `needs_input`에 진입하지 않으며 고정된 테스트 범위와 독립 리뷰를 거쳐 최종 승인만 받습니다.
+실행 계약은 `workspace-v2`만 지원합니다. Developer/Fixer/Tester는 제한된 호스트 도구로 실제 파일을 편집하며, 호스트가 파일별 정책·요구사항 근거를 검증하고 커밋합니다. Planner/Reviewer는 읽기 전용입니다. 패치는 호스트가 실제 Git 변경에서 수집하는 표시·검증 근거이며, 모델 응답의 패치를 적용하지 않습니다. 기존 `patch-v1` 또는 계약 식별자가 없는 Run은 자동 전환하지 않고 실행을 차단합니다. 이력과 산출물을 보존하고 새 Run을 생성하세요.
 
 명시적으로 활성화한 `workspace-v2`는 중단된 역할의 실제 파일·중간 커밋·응답·테스트 근거를 보존합니다. 종료와 실행 소유권을 확인하고 파일 해시·브랜치·커밋 이력·정책·요구사항이 기록과 일치하면 같은 역할과 시도에서 이어갑니다. Developer/Fixer는 저장된 명시적 Codex 세션 ID로 재개하며, 세션이 없거나 손상되면 검증된 파일과 완료 작업 요약을 새 세션에 전달합니다. Reviewer는 독립된 읽기 전용 세션을 유지합니다.
 
@@ -263,11 +267,11 @@ devorchestra --config config.yaml revise-plan RUN_ID --plan-hash PLAN_HASH --rea
 
 ## API·Dispatcher와 GUI 개발
 
-CLI 기본 DB는 스키마 2를 사용하며 웹·큐는 스키마 5 또는 6이 필요합니다. API 시작만으로 기존 DB를 자동 업그레이드하지 않습니다. 아래 명령은 같은 `config.yaml`을 공유합니다.
+DB 초기화는 스키마 2를 사용하며, 새 Run 생성·실행은 명시적으로 활성화한 스키마 6에서만 지원합니다. 스키마 5는 기존 웹·큐 이력 조회를 위해 유지합니다. API 시작만으로 기존 DB를 자동 업그레이드하지 않습니다. 아래 명령은 같은 `config.yaml`을 공유합니다.
 
 ```sh
 # 최초 웹 사용 또는 구버전 DB 업그레이드 시 실행합니다.
-devorchestra --config config.yaml database-upgrade
+devorchestra --config config.yaml database-upgrade --workspace
 
 # API와 GUI 개발 서버는 각각 별도 터미널에서 실행합니다.
 devorchestra --config config.yaml api-start --allow-root ~/projects
@@ -278,7 +282,7 @@ npm ci
 npm run dev:web
 ```
 
-마이그레이션 전에 API·웹 서비스·Dispatcher·Run Worker 등 DB writer를 중지하세요. 실행 중 Worker·미확인 프로세스·잠금이 있으면 거부하며, 스키마 2·3·4의 SQLite 백업과 증거 참조 manifest를 DB 옆에 보존한 뒤 트랜잭션으로 업그레이드합니다. 구버전 실행 파일과 혼용하지 말고 복원도 모든 writer가 종료된 상태에서 수행하세요.
+마이그레이션 전에 API·웹 서비스·Dispatcher·Run Worker 등 DB writer를 중지하세요. 실행 중 Worker·미확인 프로세스·잠금이 있으면 거부하며, 스키마 2·3·4·5의 SQLite 백업과 증거 참조 manifest를 DB 옆에 보존한 뒤 트랜잭션으로 업그레이드합니다. 구버전 실행 파일과 혼용하지 말고 복원도 모든 writer가 종료된 상태에서 수행하세요.
 
 API 기본 주소는 `http://127.0.0.1:8000`, Vite GUI는 `http://127.0.0.1:5173`입니다. `localhost`로 바꾸지 마세요. API 포트를 바꿨다면 `DEVORCHESTRA_API_PORT=8001 npm run dev:web`처럼 지정합니다. API는 loopback에만 바인딩하고 세션·정확한 Origin/Host·쓰기 CSRF를 검사합니다. 프로젝트는 `--allow-root` 아래 Git 저장소만 등록할 수 있으며 등록 해제는 원본 저장소를 삭제하지 않습니다.
 
@@ -293,7 +297,7 @@ devorchestra --config config.yaml worker capacity --total 2 --repo ~/projects/ex
 devorchestra --config config.yaml worker capacity --repo ~/projects/example
 ```
 
-한도는 1~32이며 축소해도 실행 중 작업을 종료하지 않습니다. `claimed` 작업도 큐 용량에 포함합니다. CLI의 특정 Run 시작도 같은 선점 검사를 사용하며, 용량이 찬 경우 foreground는 대기하고 `--detach`는 큐에 남긴 뒤 Dispatcher를 기동합니다. CLI 기본 스키마 2의 Worker도 같은 실행 슬롯을 사용합니다. 승인·입력 대기에서는 자식 프로세스 종료 확인 후 슬롯을 반환합니다.
+한도는 1~32이며 축소해도 실행 중 작업을 종료하지 않습니다. `claimed` 작업도 큐 용량에 포함합니다. CLI의 특정 Run 시작도 같은 선점 검사를 사용하며, 용량이 찬 경우 foreground는 대기하고 `--detach`는 큐에 남긴 뒤 Dispatcher를 기동합니다. 승인·입력 대기에서는 자식 프로세스 종료 확인 후 슬롯을 반환합니다.
 
 DB 정책과 슬롯은 DB 경로 옆 `.capacity/` 디렉터리에, 저장소 정책과 슬롯은 Git common directory의 `devorchestra-capacity-v1/`에 보존합니다. linked Worktree와 다른 DB도 같은 저장소 한도를 공유하므로 설정 변경은 그 저장소를 쓰는 모든 새 Worker에 적용됩니다. 실행 중 이 파일이나 잠금 파일을 삭제하지 마세요. 구버전 Worker가 잡는 기존 배타 잠금은 호환 게이트로 유지하여 새 Worker와 동시에 실행되지 않으며, 병렬 실행은 같은 새 규약을 사용하는 Worker끼리만 허용합니다. 병렬 용량 설정만으로 DB 스키마나 기존 Run의 실행 계약을 변경하지 않습니다.
 
@@ -307,7 +311,7 @@ Dispatcher는 큐 선점 후 파일 수·시간 예산 안에서 로그를 색�
 
 ### 직접 편집 활성화와 구버전 경계
 
-기본 설치와 일반 `database-upgrade`는 기존 `patch-v1` 동작을 유지합니다. 직접 편집을 사용하려면 API·웹 서비스·Dispatcher·Run Worker를 모두 종료한 뒤 명시적으로 전환합니다.
+새 Run 생성과 실행에는 스키마 6이 필요합니다. 기본 설치와 일반 `database-upgrade`는 스키마 6을 자동 활성화하지 않습니다. API·웹 서비스·Dispatcher·Run Worker를 모두 종료한 뒤 다음 명령으로 명시적으로 전환합니다.
 
 ```sh
 devorchestra --config config.yaml database-upgrade --workspace
@@ -315,7 +319,7 @@ devorchestra --config config.yaml database-upgrade --workspace
 
 이 명령은 스키마 2·3·4·5의 백업과 근거 manifest를 보존하고 트랜잭션으로 스키마 6에 전환합니다. 스키마 6은 스키마 5의 테이블을 재사용하는 실행 호환성 경계입니다. 이전 실행 파일은 알 수 없는 DB 스키마로 거부하므로, 직접 편집한 파일을 구계약으로 실행하지 않습니다. API·Dispatcher·Worker의 잠금과 미확인 자식 프로세스가 있으면 전환을 거부합니다. 스키마 6을 일반 업그레이드 명령으로 낮추지 않습니다.
 
-전환 뒤 CLI·웹에서 생성한 **새 Run**은 `workspace-v2`를 사용합니다. 기존 Run의 계약·설정·SHA·revision·승인 근거는 유지하며 자동 전환하지 않습니다. Developer/Fixer는 읽기 전용 셸과 제한된 호스트 편집 도구로 실제 파일을 수정하고 작업 단위 커밋을 요청합니다. Tester는 `tests.write_paths` 안에서 테스트를 보완하고 호스트의 실제 실행 결과를 확인합니다. Planner/Reviewer는 읽기 전용이며 기존 기획 승인·수정 루프·최종 승인 순서를 유지합니다. OS 격리 검증이 불가능하면 새 계약의 실행을 차단합니다.
+전환 뒤 CLI·웹에서 생성한 **새 Run**은 `workspace-v2`를 사용합니다. 기존 Run의 계약·설정·SHA·revision·승인 근거는 유지하며 자동 전환하지 않습니다. 구계약 Run의 실행은 지원하지 않으므로 새 Run을 생성하세요. Developer/Fixer는 읽기 전용 셸과 제한된 호스트 편집 도구로 실제 파일을 수정하고 작업 단위 커밋을 요청합니다. Tester는 `tests.write_paths` 안에서 테스트를 보완하고 호스트의 실제 실행 결과를 확인합니다. Planner/Reviewer는 읽기 전용이며 기존 기획 승인·수정 루프·최종 승인 순서를 유지합니다. OS 격리 검증이 불가능하면 새 계약의 실행을 차단합니다.
 
 롤백이 필요하면 모든 writer를 종료하고 전환 전 DB 백업과 그 DB가 참조하는 실행 디렉터리를 함께 보존·복원하세요. 전환 뒤 새 Run과 직접 편집 파일은 별도로 보존해야 합니다. DB 버전 숫자만 낮추거나 미커밋 작업을 자동 reset·clean하지 마세요. 운영 DB는 개발 검증에 사용하지 않습니다. 실제 모델의 품질·사용량 비교는 별도 승인된 실험에서 확인해야 합니다.
 
@@ -343,7 +347,7 @@ uv build
 빌드 도구는 `apps/web/dist/`를 `src/dev_orchestra/_web/`로 복사하고 체크섬 manifest를 생성합니다. GUI가 포함된 wheel을 설치한 환경에서는 Node 없이 Python의 `web` extra로 실행할 수 있습니다. 소스 저장소의 `start.sh`는 매번 빌드하므로 Node가 필요하고, 설치된 패키지는 다음 통합 명령을 사용합니다.
 
 ```sh
-devorchestra --config config.yaml database-upgrade
+devorchestra --config config.yaml database-upgrade --workspace
 devorchestra --config config.yaml web start --detach --allow-root ~/projects --port 8000
 devorchestra --config config.yaml web-session
 devorchestra --config config.yaml web status

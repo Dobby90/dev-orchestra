@@ -6,6 +6,7 @@ from pathlib import Path
 import pytest
 from fastapi.testclient import TestClient
 from test_gui_integration import completed as completed
+from test_workflow import legacy_service as legacy_service
 from test_workflow import service as service
 
 from dev_orchestra.api.main import create_app
@@ -55,8 +56,8 @@ def test_evidence_routes_auth_scope_and_read_only(completed):
 
 
 @pytest.mark.parametrize("version", [2, 3, 4])
-def test_failed_migration_rolls_back_and_backup_restores(service, monkeypatch, version):
-    svc, rid, _ = service
+def test_failed_migration_rolls_back_and_backup_restores(legacy_service, monkeypatch, version):
+    svc, rid, _ = legacy_service
     with svc.store.connection() as db:
         if version >= 3:
             db.executescript(migrations.SCHEMA)
@@ -83,39 +84,36 @@ def test_failed_migration_rolls_back_and_backup_restores(service, monkeypatch, v
         assert destination.execute("PRAGMA foreign_key_check").fetchall() == []
 
 
-def test_gitignored_model_test_cannot_validate_uncommitted_code(service):
+def test_gitignored_test_is_committed_before_validation(service):
     from test_workflow import FakeAgent, FakeTests
+    from test_workspace import edit
 
-    from dev_orchestra.domain.models import AgentResult, PipelineError
     from dev_orchestra.orchestration.runner import Runner
 
     svc, rid, repo = service
 
     class IgnoredTestAgent(FakeAgent):
-        def run(self, request, *args):
+        def run_workspace(self, request, directory, session, stop):
             if request.role == "developer":
-                return AgentResult(
-                    summary="ignore",
-                    patch="--- /dev/null\n+++ b/.gitignore\n@@ -0,0 +1 @@\n+tests/hidden.py\n",
-                )
-            value = super().run(request, *args)
+                edit(session, ".gitignore", "tests/hidden.py\n")
             if request.role == "tester":
-                value.patch = "--- /dev/null\n+++ b/tests/hidden.py\n@@ -0,0 +1,2 @@\n+def test_hidden():\n+    assert True\n"
-            return value
+                edit(session, "tests/hidden.py", "def test_hidden():\n    assert True\n")
+            return super().run_workspace(request, directory, session, stop)
 
-    class CountingTests(FakeTests):
+    class CommittedTests(FakeTests):
         calls = 0
 
-        def run(self, *args):
-            self.calls += 1
-            return super().run(*args)
+        def run(self, tree, *args):
+            from dev_orchestra.infrastructure.git import Git
 
-    tests = CountingTests()
+            assert "tests/hidden.py" in Git(tree).call("ls-files")
+            self.calls += 1
+            return super().run(tree, *args)
+
+    tests = CommittedTests()
     Runner(svc.store, IgnoredTestAgent(), tests).execute(rid)
     run = svc.store.get(rid)
-    assert run["state"] == "failed"
-    assert "absent from committed candidate" in run["error"]
-    assert tests.calls == 0
+    assert run["state"] == "waiting_approval", run.get("error")
+    assert tests.calls == 1
     assert (repo / "main.py").read_text() == "developer local edits\n"
-    with pytest.raises(PipelineError, match="approval requires"):
-        svc.approve(rid)
+    svc.approve(rid)

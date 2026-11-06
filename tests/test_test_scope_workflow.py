@@ -107,7 +107,7 @@ def test_scope_survives_developer_tester_reviewer_fixer_and_final_approval(setup
                 assert "patch" not in request.context["test_result"]
                 assert web == "test_failure" or (
                     request.context["open_issues"]
-                    if web
+                    if request.context.get("review_contract") == 2
                     else request.context["review_result"]["issues"]
                 )
             edit(session, "main.py", request.role + "\n")
@@ -122,7 +122,7 @@ def test_scope_survives_developer_tester_reviewer_fixer_and_final_approval(setup
             result = super().run(request, *args)
             if request.role == "reviewer" and web:
                 return ReviewResultV2(
-                    **result.model_dump(),
+                    **result.model_dump(exclude={"assessments"}),
                     assessments=[
                         ReviewAssessment(
                             issue_id=issue["issue_id"],

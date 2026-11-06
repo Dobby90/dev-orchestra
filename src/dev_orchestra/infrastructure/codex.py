@@ -331,14 +331,6 @@ class CodexClient:
                 fields - {"commit_message"},
             ):
                 raise ValueError("incomplete role response")
-            if "no_change_reason" in raw and model not in {WorkspaceResult, WorkspaceTestResult}:
-                reason = raw.pop("no_change_reason")
-                if not isinstance(reason, str):
-                    raise ValueError("no_change_reason must be a string")
-                if not raw.get("patch") and not raw.get("questions"):
-                    if not reason.strip():
-                        raise ValueError("empty patch requires no_change_reason")
-                    raw["summary"] += "\nNo change: " + reason
             validated = model.model_validate(raw, strict=True)
             from dev_orchestra.infrastructure.process import sanitize
 

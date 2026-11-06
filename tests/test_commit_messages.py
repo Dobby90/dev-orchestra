@@ -27,27 +27,25 @@ def test_legacy_response_fallback_describes_files():
     assert describe_commit("", "변경 이유", ["main.py"]) == "main.py 변경 반영\n\n변경 이유"
 
 
-def test_patch_commit_uses_description_and_metadata(service):
+def test_workspace_commit_uses_description_and_metadata(service):
     svc, rid, _ = service
 
     class Agent(FakeAgent):
-        def run(self, request, directory, stop):
-            result = super().run(request, directory, stop)
+        def run_workspace(self, request, directory, session, stop):
             if request.role == "developer":
-                result.patch = (
-                    "diff --git a/main.py b/main.py\n--- a/main.py\n+++ b/main.py\n"
-                    "@@ -1 +1 @@\n-original\n+changed\n"
+                edit(session, "main.py", "changed\n")
+                return WorkspaceResult(
+                    summary="인사 응답 수정",
+                    commit_message="인사 응답 형식 변경\n\n요구사항에 맞게 응답을 변경합니다.",
                 )
-                result.commit_message = "인사 응답 형식 변경\n\n요구사항에 맞게 응답을 변경합니다."
-            return result
+            return super().run_workspace(request, directory, session, stop)
 
     Runner(svc.store, Agent(), FakeTests()).execute(rid)
     run = svc.store.get(rid)
     assert run["state"] == "waiting_approval", run.get("error")
     message = Git(Path(run["worktree"])).call("log", "-1", "--format=%B")
     assert message.startswith("인사 응답 형식 변경\n\n요구사항에 맞게 응답을 변경합니다.")
-    assert "DevOrchestra-Role: developer" in message
-    assert "DevOrchestra-Run: " + rid in message
+    assert "DevOrchestra-Checkpoint: " + rid in message
 
 
 def test_remaining_edits_get_their_own_description_and_stable_retry(setup):
@@ -85,17 +83,6 @@ def test_test_edits_description_is_committed_before_execution(setup):
     message = session.git.call("log", "-1", "--format=%B")
     assert message.startswith("빈 입력 회귀 테스트 추가\n\n빈 입력의 응답을 검증합니다.")
     assert session.read_test_payload()["sha"] == session.git.sha()
-
-
-def test_invalid_patch_message_is_repairable_before_editing():
-    from dev_orchestra.agents.contracts import ResponseError, validate_role
-    from dev_orchestra.domain.models import AgentResult
-
-    with pytest.raises(ResponseError, match="concrete Korean subject"):
-        validate_role(
-            "developer",
-            AgentResult(summary="수정", patch="pending patch", commit_message="자동 개발: RUN_ID"),
-        )
 
 
 def test_generic_checkpoint_is_rejected_without_staging(setup):

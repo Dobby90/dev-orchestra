@@ -11,7 +11,7 @@ from test_workflow import FakeAgent, FakeTests
 
 from dev_orchestra.application.service import RunService
 from dev_orchestra.config import Config
-from dev_orchestra.domain.execution import PATCH_V1, WORKSPACE_V2, execution_contract
+from dev_orchestra.domain.execution import WORKSPACE_V2, execution_contract
 from dev_orchestra.domain.models import (
     AgentRequest,
     Coverage,
@@ -55,7 +55,10 @@ def setup(tmp_path):
             },
         }
     )
-    svc = RunService(config, _execution_contract=WORKSPACE_V2)
+    svc = RunService(config)
+    from dev_orchestra.infrastructure.migrations import upgrade
+
+    upgrade(svc.store.path, workspace=True)
     run_id = svc.create(repo, spec)
     return svc, run_id, repo
 
@@ -248,15 +251,14 @@ def test_output_paths_cannot_hide_source(setup):
         start_session(setup)
 
 
-def test_default_and_missing_contract_remain_patch_v1(setup):
-    assert execution_contract({}) == PATCH_V1
+@pytest.mark.parametrize("contract", [None, "patch-v1", "unknown"])
+def test_historical_or_missing_contract_is_not_executable(setup, contract):
     with pytest.raises(PipelineError, match="unsupported"):
-        execution_contract({"execution_contract": "unknown"})
+        execution_contract({} if contract is None else {"execution_contract": contract})
     svc, _, repo = setup
-    legacy = RunService(svc.config)
     spec = Path(svc.config.storage.runs_directory).parent / "prd.md"
-    run_id = legacy.create(repo, spec)
-    assert legacy.store.get(run_id)["execution_contract"] == PATCH_V1
+    run_id = RunService(svc.config).create(repo, spec)
+    assert svc.store.get(run_id)["execution_contract"] == WORKSPACE_V2
 
 
 def test_runner_keeps_plan_approval_and_fix_loop(setup):

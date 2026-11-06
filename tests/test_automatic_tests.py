@@ -190,8 +190,7 @@ def test_real_pytest_execution_excludes_failing_unrelated_test_and_checks_eviden
         verify_selection(svc.store.get(rid), forged)
 
 
-@pytest.mark.parametrize("contract", ["patch-v1", "workspace-v2"])
-def test_automatic_selection_reaches_final_approval_without_static_mapping(candidate, contract):
+def test_automatic_selection_reaches_final_approval_without_static_mapping(candidate):
     from test_workflow import FakeAgent
     from test_workspace import edit
 
@@ -200,15 +199,9 @@ def test_automatic_selection_reaches_final_approval_without_static_mapping(candi
     from dev_orchestra.orchestration.runner import Runner
 
     svc, rid, repo = candidate
-    svc.store.update(rid, execution_contract=contract)
 
     class Agent(FakeAgent):
         def run(self, request, *args):
-            if request.role == "developer":
-                return AgentResult(
-                    summary="요구 기능 수정",
-                    patch="diff --git a/main.py b/main.py\n--- a/main.py\n+++ b/main.py\n@@ -1 +1 @@\n-original local changes\n+implemented\n",
-                )
             if request.role == "tester":
                 assert request.context["automatic_test_selection"]
                 return AgentResult(
