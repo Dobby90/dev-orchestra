@@ -1282,15 +1282,18 @@ dd {
 @media (min-width: 821px) {
   .sidebar .sidebar-toggle {
     display: inline-flex;
-    position: absolute;
-    top: 31px;
-    right: -14px;
+    align-self: flex-end;
+    flex-shrink: 0;
+    margin-bottom: 16px;
     width: 28px;
     height: 28px;
     border: 1px solid var(--border);
     border-radius: 50%;
     background: var(--panel);
     color: var(--text);
+  }
+  .sidebar-collapsed .sidebar .sidebar-toggle {
+    align-self: center;
   }
   .sidebar-collapsed .sidebar {
     width: 64px;
