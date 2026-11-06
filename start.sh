@@ -4,6 +4,9 @@ set -euo pipefail
 
 caller_dir="$PWD"
 repo_dir="$(CDPATH= cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
+# 기본 프로젝트 허용 경로 설정입니다. --allow-root를 지정하면 해당 값으로 대체합니다.
+# workspace/tools/dev-orchestra 배치에서 workspace 디렉터리를 가리킵니다.
+default_allowed_roots=("$(dirname -- "$(dirname -- "$repo_dir")")")
 config_file=""
 port="8000"
 rebuild=0
@@ -13,7 +16,7 @@ usage() {
   cat <<'HELP'
 사용법: ./start.sh [옵션]
   --allow-root 경로  등록할 프로젝트의 상위 경로 (여러 번 지정 가능)
-                    기본값: DevOrchestra 저장소의 상위 디렉터리
+                    기본값: start.sh의 default_allowed_roots (저장소의 두 단계 상위)
   --port 포트        기본값: 8000 (1024~65535)
   --config 파일      모든 명령에 동일하게 적용할 YAML 설정 파일
   --rebuild          GUI 의존성도 재설치 (서비스 종료 후 사용)
@@ -56,7 +59,7 @@ port=$((10#$port))
 [ "$port" -ge 1024 ] && [ "$port" -le 65535 ] || fail "포트는 1024~65535여야 합니다."
 [ -z "$config_file" ] || [ -f "$config_file" ] || fail "설정 파일을 찾을 수 없습니다: $config_file"
 if [ "${#allowed_roots[@]}" -eq 0 ]; then
-  allowed_roots+=("$(dirname -- "$repo_dir")")
+  allowed_roots=("${default_allowed_roots[@]}")
 fi
 for root in "${allowed_roots[@]}"; do
   [ -d "$root" ] || fail "프로젝트 허용 경로가 없습니다: $root"
