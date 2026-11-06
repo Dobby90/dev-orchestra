@@ -89,6 +89,7 @@ export function RunDetailPage() {
   return <RunDetailBody key={id} rid={id} />;
 }
 function RunDetailBody({ rid }: { rid: string }) {
+  const [pushActions, setPushActions] = useState<HTMLSpanElement | null>(null);
   const client = useQueryClient(),
     [params, setParams] = useSearchParams();
   const selected = params.get("tab") ?? "plan";
@@ -388,12 +389,24 @@ function RunDetailBody({ rid }: { rid: string }) {
                   </Button>
                 </>
               )}
+              <span ref={setPushActions} />
               {["completed", "cancelled", "failed", "needs_input"].includes(
                 r.state,
               ) &&
                 !r.execution?.worktree_removed && (
-                  <Button variant="ghost" onClick={() => open("cleanup")}>
-                    Worktree 정리
+                  <Button
+                    variant="ghost"
+                    disabled={
+                      control.isPending ||
+                      r.execution?.cleanup_status === "accepted"
+                    }
+                    onClick={() => open("cleanup")}
+                  >
+                    {r.execution?.cleanup_status === "accepted"
+                      ? "Worktree 정리 중…"
+                      : r.execution?.cleanup_status === "needs_input"
+                        ? "Worktree 정리 재시도"
+                        : "Worktree 정리"}
                   </Button>
                 )}
               <Button variant="ghost" onClick={() => open("reconcile")}>
@@ -414,6 +427,14 @@ function RunDetailBody({ rid }: { rid: string }) {
         </p>
       )}
       {openError && <ErrorNotice error={openError} />}
+      {!r.execution?.worktree_removed &&
+        r.execution?.cleanup_status === "needs_input" && (
+          <p role="alert" className="notice">
+            Worktree 정리에 실패했습니다. 디렉터리가 남아 있습니다.
+            {r.execution.cleanup_error && ` ${r.execution.cleanup_error}`}{" "}
+            확인되지 않은 파일은 직접 확인한 뒤 정리를 재시도해 주세요.
+          </p>
+        )}
       {(r.test_change_pending || r.test_change_count > 0) &&
         !r.deletion_pending && <TestChangePanel run={r} />}
       {opening && (
@@ -500,7 +521,7 @@ function RunDetailBody({ rid }: { rid: string }) {
         </p>
       )}
       {registered && r.state === "completed" && (
-        <RunPushPanel run={r} onCleanup={() => open("cleanup")} />
+        <RunPushPanel run={r} actionContainer={pushActions} />
       )}
       <RunHandoffPanel run={r} />
       <section className="panel timeline-panel">
@@ -698,7 +719,9 @@ function RunDetailBody({ rid }: { rid: string }) {
               <p className="notice">
                 격리된 Worktree를 제거하고 브랜치·보존된 결과와 변경 이력은
                 유지합니다. 정리 후 이 작업은 재개할 수 없습니다. 공통 Git
-                객체·로그·캐시 전체를 삭제하지 않습니다.
+                객체·로그·캐시 전체를 삭제하지 않습니다. 저장된 테스트 근거와
+                일치하는 JUnit 보고서는 작업 기록 폴더로 옮겨 보존합니다. 그 외
+                미커밋 변경·확인되지 않은 파일이 있으면 정리를 중단합니다.
               </p>
             )}
             {action?.kind === "request-changes" ? (

@@ -14,6 +14,78 @@ from dev_orchestra.infrastructure.migrations import upgrade
 from dev_orchestra.orchestration.runner import Runner
 
 
+class ReportTests(FakeTests):
+    def run(self, worktree, config, directory, stop=lambda: None):
+        from dev_orchestra.infrastructure.files import digest
+        from dev_orchestra.infrastructure.test_runner import junit_bundle
+
+        result = super().run(worktree, config, directory, stop)
+        report = worktree / config.commands["unit"].junit_report
+        report.parent.mkdir(parents=True, exist_ok=True)
+        report.write_text('<testsuite><testcase name="unit" /></testsuite>')
+        retained = directory / "unit.junit.xml"
+        retained.parent.mkdir(parents=True, exist_ok=True)
+        retained.write_text(junit_bundle([report]))
+        result["commands"][0].update(
+            junit_path=str(retained), junit_hash=digest(retained.read_bytes())
+        )
+        return result
+
+
+@pytest.fixture
+def completed_reports(service):
+    svc, old, repo = service
+    upgrade(svc.store.path)
+    rid = svc.create(repo, Path(svc.store.get(old)["directory"]) / "spec.md")
+    Runner(svc.store, Reviewer(), ReportTests()).execute(rid)
+    svc.approve(rid)
+    return svc, rid, repo
+
+
+def test_cleanup_preserves_verified_report_and_branch(completed_reports):
+    svc, rid, repo = completed_reports
+    run = svc.store.get(rid)
+    report = Path(run["worktree"]) / "build/results.xml"
+    original = report.read_bytes()
+    svc.cleanup(rid)
+    assert not Path(run["worktree"]).exists()
+    archived = list(Path(run["directory"]).glob("cleanup-reports-*/build/results.xml"))
+    assert len(archived) == 1 and archived[0].read_bytes() == original
+    assert Git(repo).sha() == run["base_sha"]
+    assert Git(repo).call("rev-parse", run["branch"]) == run["final_sha"]
+
+
+@pytest.mark.parametrize("change", ["unknown", "report", "tracked", "symlink", "retained"])
+def test_cleanup_failure_is_persistent_and_preserves_files(completed_reports, change):
+    svc, rid, _ = completed_reports
+    run = svc.store.get(rid)
+    worktree = Path(run["worktree"])
+    report = worktree / "build/results.xml"
+    if change == "unknown":
+        (worktree / "build/personal.txt").write_text("preserve")
+    elif change == "report":
+        report.write_text('<testsuite><testcase name="changed" /></testsuite>')
+    elif change == "tracked":
+        (worktree / "main.py").write_text("uncommitted")
+    elif change == "symlink":
+        report.unlink()
+        report.symlink_to(worktree / "main.py")
+    else:
+        aid = run["test_result"]["execution"]["commands"][0]["junit_artifact_id"]
+        retained, _ = Results(svc.store).artifact(rid, aid)
+        retained.write_text("tampered")
+    before = report.read_bytes()
+    op = Commands(svc).execute(rid, "cleanup", run["version"], {"confirm": True})
+    assert op["status"] == "needs_input" and op["error"]
+    assert worktree.exists() and report.read_bytes() == before
+    assert not list(Path(run["directory"]).glob("cleanup-reports-*"))
+    # Fresh queries retain the error even without the browser's last operation ID.
+    snapshot = svc.queries.snapshot(rid)
+    assert snapshot["execution"]["cleanup_status"] == "needs_input"
+    assert snapshot["execution"]["cleanup_error"] == op["error"]
+    assert not snapshot["execution"]["worktree_removed"]
+
+
 class Reviewer(FakeAgent):
     def __init__(self, block=0, omit=False):
         super().__init__(block)

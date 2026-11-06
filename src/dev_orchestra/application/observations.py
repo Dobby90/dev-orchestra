@@ -19,9 +19,18 @@ def observe(store, run):
         "heartbeat_at": None,
         "cleanup": "unknown",
         "worktree_removed": bool(run.get("worktree_removed")),
+        "cleanup_status": None,
+        "cleanup_error": None,
     }
     with store.connection() as db:
         if db.execute("SELECT version FROM schema_version").fetchone()[0] >= 5:
+            cleanup = db.execute(
+                "SELECT status,error FROM operations WHERE run_id=? AND kind='cleanup' "
+                "ORDER BY rowid DESC LIMIT 1",
+                (run["id"],),
+            ).fetchone()
+            if cleanup:
+                execution.update(cleanup_status=cleanup["status"], cleanup_error=cleanup["error"])
             row = db.execute(
                 "SELECT * FROM jobs WHERE run_id=? ORDER BY rowid DESC LIMIT 1", (run["id"],)
             ).fetchone()

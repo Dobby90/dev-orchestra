@@ -1,4 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { createPortal } from "react-dom";
 import { api } from "../api/resources";
 import type { RunDetail } from "../api/types";
 import { ErrorNotice, Loading } from "./common";
@@ -6,10 +7,10 @@ import { Button } from "./ui/button";
 
 export function RunPushPanel({
   run,
-  onCleanup,
+  actionContainer,
 }: {
   run: RunDetail;
-  onCleanup: () => void;
+  actionContainer?: HTMLElement | null;
 }) {
   const client = useQueryClient();
   const query = useQuery({
@@ -42,6 +43,23 @@ export function RunPushPanel({
     p.result.remote_url === p.remote_url &&
     p.result.branch === p.branch &&
     p.result.sha === p.approved_sha;
+  const button = (
+    <Button
+      variant="ghost"
+      disabled={
+        push.isPending || !p.remote_url || run.handoff?.status !== "matching"
+      }
+      onClick={() => push.mutate()}
+    >
+      {push.isPending
+        ? "Push 진행 중…"
+        : success
+          ? "작업 브랜치 Push 재확인"
+          : p.result
+            ? "작업 브랜치 Push 재시도"
+            : "작업 브랜치 Push"}
+    </Button>
+  );
   return (
     <section className="panel panel-body" aria-label="작업 브랜치 Push">
       <h2>작업 브랜치 Push</h2>
@@ -56,20 +74,7 @@ export function RunPushPanel({
         버튼을 누르면 승인 SHA와 현재 작업 브랜치를 다시 확인하고 해당 브랜치만
         Push합니다.
       </p>
-      <Button
-        disabled={
-          push.isPending || !p.remote_url || run.handoff?.status !== "matching"
-        }
-        onClick={() => push.mutate()}
-      >
-        {push.isPending
-          ? "Push 진행 중…"
-          : success
-            ? "작업 브랜치 Push 재확인"
-            : p.result
-              ? "작업 브랜치 Push 재시도"
-              : "작업 브랜치 Push"}
-      </Button>
+      {actionContainer ? createPortal(button, actionContainer) : button}
       {push.error && (
         <ErrorNotice error={push.error} retry={() => query.refetch()} />
       )}
@@ -101,15 +106,7 @@ export function RunPushPanel({
           </p>
           {run.execution?.worktree_removed ? (
             <p>Worktree 정리가 완료되었습니다. 브랜치와 이력은 보존됩니다.</p>
-          ) : (
-            <Button
-              variant="secondary"
-              disabled={push.isPending}
-              onClick={onCleanup}
-            >
-              Worktree 정리
-            </Button>
-          )}
+          ) : null}
         </div>
       )}
     </section>

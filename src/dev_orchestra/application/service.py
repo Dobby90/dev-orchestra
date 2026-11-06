@@ -332,6 +332,9 @@ class RunService:
             if Path(run["worktree"]).exists():
                 if run.get("current_sha"):
                     Results(self.store).save_snapshot(run_id, run["current_sha"])
+                from dev_orchestra.application.worktree_cleanup import preserve_test_reports
+
+                preserve_test_reports(self.store, run)
                 # Already inside the short metadata lock: do not reacquire the
                 # non-reentrant serialized Git.remove wrapper.
                 Git(Path(run["repo"])).call("worktree", "remove", run["worktree"])

@@ -104,6 +104,55 @@ function setupDetail() {
   vi.spyOn(api, "steps").mockResolvedValue({ items: [] });
 }
 
+it("재진입 시 정리 실패를 표시하고 Push·정리 재시도·상태 조정을 같은 줄에 둔다", async () => {
+  setupDetail();
+  vi.mocked(api.run).mockResolvedValue({
+    ...detail,
+    state: "completed",
+    execution: {
+      worker_liveness: "stopped",
+      cleanup: "confirmed",
+      worktree_removed: false,
+      cleanup_status: "needs_input",
+      cleanup_error: "build/personal.txt 파일을 보존합니다.",
+    },
+    handoff: {
+      repository: "/tmp/repo",
+      branch: "feature/run",
+      status: "matching",
+      commands: [],
+      notice: "",
+    },
+  });
+  vi.spyOn(api, "pushPreview").mockResolvedValue({
+    remote: "origin",
+    remote_url: "https://example.invalid/repo.git",
+    settings_version: "v1",
+    branch: "feature/run",
+    approved_sha: "a".repeat(40),
+    result: null,
+  });
+  const request = vi.spyOn(api, "pushBranch");
+  wrap(
+    <Routes>
+      <Route path="/runs/:id" element={<RunDetailPage />} />
+    </Routes>,
+    "/runs/r1",
+  );
+  expect(await screen.findByRole("alert")).toHaveTextContent(
+    "build/personal.txt 파일을 보존합니다.",
+  );
+  const push = await screen.findByRole("button", { name: "작업 브랜치 Push" });
+  const row = push.closest(".inline-actions");
+  expect(row).toContainElement(
+    screen.getByRole("button", { name: "Worktree 정리 재시도" }),
+  );
+  expect(row).toContainElement(
+    screen.getByRole("button", { name: "상태 조정" }),
+  );
+  expect(request).not.toHaveBeenCalled();
+});
+
 it.each(["failed", "needs_input"] as const)(
   "%s 작업의 정리 결과가 반영되면 재개 버튼을 숨기고 새 작업 생성을 안내한다",
   async (state) => {

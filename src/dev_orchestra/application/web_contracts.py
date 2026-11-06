@@ -234,6 +234,8 @@ class ExecutionView(BaseModel):
     heartbeat_at: str | None = None
     cleanup: Literal["confirmed", "pending", "manual_required", "unknown"] = "unknown"
     worktree_removed: bool = False
+    cleanup_status: Literal["accepted", "applied", "needs_input"] | None = None
+    cleanup_error: str | None = None
 
 
 class ValidationView(BaseModel):

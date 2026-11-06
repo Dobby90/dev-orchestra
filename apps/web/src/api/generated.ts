@@ -1185,6 +1185,10 @@ export interface components {
              * @default false
              */
             worktree_removed: boolean;
+            /** Cleanup Status */
+            cleanup_status?: ("accepted" | "applied" | "needs_input") | null;
+            /** Cleanup Error */
+            cleanup_error?: string | null;
         };
         /** FailureView */
         FailureView: {

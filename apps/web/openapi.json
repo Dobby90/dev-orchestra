@@ -3656,6 +3656,33 @@
             "type": "boolean",
             "title": "Worktree Removed",
             "default": false
+          },
+          "cleanup_status": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "accepted",
+                  "applied",
+                  "needs_input"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Cleanup Status"
+          },
+          "cleanup_error": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Cleanup Error"
           }
         },
         "type": "object",

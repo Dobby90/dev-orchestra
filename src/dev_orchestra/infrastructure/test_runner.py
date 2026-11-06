@@ -159,6 +159,21 @@ def junit_paths(worktree, pattern, outputs):
     return sorted(paths)
 
 
+def junit_bundle(reports):
+    """Use the same bounded, redacted XML representation for retention and cleanup."""
+    if sum(p.stat().st_size for p in reports) > 8 * 1048576:
+        raise PipelineError("JUnit reports exceed safety limit")
+    tree = ET.Element("testsuites")
+    for report in reports:
+        parse_junit(report)
+        tree.append(ET.fromstring(report.read_text()))
+    for element in tree.iter():
+        element.attrib = {key: sanitize(value) for key, value in element.attrib.items()}
+        element.text = sanitize(element.text)
+        element.tail = sanitize(element.tail)
+    return ET.tostring(tree, encoding="unicode")
+
+
 class TestRunner:
     __test__ = False
 
@@ -335,26 +350,18 @@ class TestRunner:
                         "failures": [],
                         "failure_details": [],
                     }
-                    tree = ET.Element("testsuites")
                     for report in reports:
                         evidence = parse_junit(report)
                         for key in counts:
                             counts[key] += evidence[key]
-                        tree.append(ET.fromstring(report.read_text()))
                     result.update(
                         counts,
                         passed=rc == 0 and counts["failed"] == 0,
                         status="passed" if rc == 0 and counts["failed"] == 0 else "failed",
                     )
                     # Retain one redacted, valid XML bundle for this command attempt.
-                    for element in tree.iter():
-                        element.attrib = {
-                            key: sanitize(value) for key, value in element.attrib.items()
-                        }
-                        element.text = sanitize(element.text)
-                        element.tail = sanitize(element.tail)
                     copy = directory / f"{command_id}.junit.xml"
-                    write(copy, ET.tostring(tree, encoding="unicode"))
+                    write(copy, junit_bundle(reports))
                     result.update(junit_path=str(copy), junit_hash=digest(copy.read_bytes()))
             except StopRequested:
                 raise

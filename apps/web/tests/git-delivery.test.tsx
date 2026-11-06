@@ -68,8 +68,7 @@ it("승인 대상 확인 후 수동 Push하고 진행 중 중복 클릭을 막�
         resolve = r;
       }),
   );
-  const cleanup = vi.fn();
-  wrap(<RunPushPanel run={run} onCleanup={cleanup} />);
+  wrap(<RunPushPanel run={run} />);
   const button = await screen.findByRole("button", {
     name: "작업 브랜치 Push",
   });
@@ -91,8 +90,7 @@ it("승인 대상 확인 후 수동 Push하고 진행 중 중복 클릭을 막�
   });
   vi.mocked(api.pushPreview).mockResolvedValue(result("success"));
   await act(async () => resolve(result("success")));
-  fireEvent.click(await screen.findByRole("button", { name: "Worktree 정리" }));
-  expect(cleanup).toHaveBeenCalledTimes(1);
+  expect(screen.queryByRole("button", { name: "Worktree 정리" })).toBeNull();
   expect(request).toHaveBeenCalledTimes(1);
 });
 
@@ -101,14 +99,13 @@ it("Push 실패 원인과 재시도 버튼을 표시하고 정리를 자동 실�
   const request = vi
     .spyOn(api, "pushBranch")
     .mockResolvedValue(result("success"));
-  const cleanup = vi.fn();
-  wrap(<RunPushPanel run={run} onCleanup={cleanup} />);
+  wrap(<RunPushPanel run={run} />);
   expect(await screen.findByText("접근 권한을 확인하세요.")).toBeVisible();
   fireEvent.click(
     screen.getByRole("button", { name: "작업 브랜치 Push 재시도" }),
   );
   await waitFor(() => expect(request).toHaveBeenCalledTimes(1));
-  expect(cleanup).not.toHaveBeenCalled();
+  expect(screen.queryByRole("button", { name: "Worktree 정리" })).toBeNull();
 });
 
 it("승인 이후 변경된 브랜치는 Push 버튼을 비활성화한다", async () => {
@@ -116,7 +113,6 @@ it("승인 이후 변경된 브랜치는 Push 버튼을 비활성화한다", asy
   wrap(
     <RunPushPanel
       run={{ ...run, handoff: { ...run.handoff!, status: "changed" } }}
-      onCleanup={vi.fn()}
     />,
   );
   expect(
@@ -129,7 +125,6 @@ it("정리 후에도 Push 성공을 표시하고 정리 버튼은 제공하지 �
   wrap(
     <RunPushPanel
       run={{ ...run, execution: { ...run.execution!, worktree_removed: true } }}
-      onCleanup={vi.fn()}
     />,
   );
   expect(
