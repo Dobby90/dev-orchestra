@@ -6,6 +6,25 @@ from dev_orchestra.application.contracts import RunSummary
 from dev_orchestra.domain.models import PipelineError
 
 
+def delivery_status(run):
+    result = run.get("push_result") or {}
+    status = result.get("status")
+    if not status:
+        push_status = "not_pushed"
+    elif status == "running":
+        push_status = "running"
+    elif status == "success":
+        push_status = (
+            "success" if run.get("final_sha") and result.get("sha") == run["final_sha"] else "stale"
+        )
+    else:
+        push_status = "failed"
+    return {
+        "worktree_removed": bool(run.get("worktree_removed")),
+        "push_status": push_status,
+    }
+
+
 class RunQueryService:
     def __init__(self, store):
         self.store = store
@@ -20,6 +39,7 @@ class RunQueryService:
     def summary(self, run_id):
         run = self.get(run_id)
         values = {k: run[k] for k in RunSummary.model_fields if k in run}
+        values.update(delivery_status(run))
         values["current_role"] = run.get("next_role") if run.get("next_role") != "done" else None
         with self.store.connection() as db:
             values["completed_at"] = self._completed_at(db, run_id, run["state"])
@@ -56,6 +76,7 @@ class RunQueryService:
             )
             value = RunSummary.model_validate(
                 {k: v for k, v in data.items() if k in RunSummary.model_fields}
+                | delivery_status(data)
             ).model_dump(mode="json")
             value["event_cursor"] = db.execute(
                 "SELECT coalesce((SELECT seq FROM sqlite_sequence WHERE name='events'),0)"

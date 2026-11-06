@@ -5,7 +5,7 @@ from typing import Annotated, Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, SecretStr, model_validator
 
-from dev_orchestra.application.contracts import RunSummary
+from dev_orchestra.application.contracts import RunName, RunSummary
 from dev_orchestra.config import AgentOptions, AgentSettings, TestCommand, Tests
 from dev_orchestra.domain.models import State
 from dev_orchestra.infrastructure.agent_usage import AgentTelemetry, TokenUsage
@@ -105,6 +105,7 @@ class StoredSpec(Input):
 
 
 class Proposal(Input):
+    name: RunName
     test_scope: Literal["full", "affected"] = "full"
     project_id: str = Field(pattern=r"^prj-[0-9a-f]{32}$")
     spec: Annotated[TextSpec | StoredSpec, Field(discriminator="kind")]

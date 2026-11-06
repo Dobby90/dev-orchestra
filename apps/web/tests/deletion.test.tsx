@@ -9,6 +9,9 @@ import { ApiError } from "../src/api/client";
 import type { RunDetail } from "../src/api/types";
 
 const run: RunDetail = {
+  name: "r1",
+  worktree_removed: false,
+  push_status: "not_pushed",
   test_scope: "full",
   id: "run-1234567890abcdef",
   state: "cancelled",

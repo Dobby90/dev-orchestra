@@ -9,7 +9,11 @@ def test_scope_changes_invalidate_preview_and_idempotency_and_persist(web, monke
     monkeypatch.undo()
     client, svc, original_id, repo, _ = web
     p = project(client, svc, repo)
-    body = {"project_id": p["id"], "spec": {"kind": "text", "text": "feature"}}
+    body = {
+        "name": "테스트 작업",
+        "project_id": p["id"],
+        "spec": {"kind": "text", "text": "feature"},
+    }
     url = "/api/projects/" + p["id"] + "/run-previews"
     original = client.post(url, json=body)
     assert original.status_code == 200, original.text

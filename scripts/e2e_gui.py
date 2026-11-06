@@ -152,6 +152,7 @@ if req['role']=='developer' and calls.count('developer')==1:
             assert response.status_code == 201, response.text
             pid = response.json()["id"]
             proposal = {
+                "name": "덧셈 기능 검증",
                 "project_id": pid,
                 "spec": {
                     "kind": "text",

@@ -288,6 +288,7 @@ class BackendService:
             spec.write_text(self.spec_text(proposal.spec))
             data = service.prepare_run(
                 CreateRun(
+                    name=proposal.name,
                     repo=Path(p["repository_path"]),
                     spec=spec,
                     base=proposal.base_branch,

@@ -32,6 +32,9 @@ const p: Project = {
   schema_version: 1,
 };
 const detail: Schema["RunDetail"] = {
+  name: "r1",
+  worktree_removed: false,
+  push_status: "not_pushed",
   test_scope: "full",
   deletion_pending: false,
   test_change_pending: false,
@@ -444,6 +447,11 @@ describe("화면·위험 명령", () => {
       screen.getByLabelText("Feature 브랜치 (선택)"),
     ).toHaveAccessibleDescription(/custom\/tasks\//);
     await userEvent.type(screen.getByLabelText("PRD"), "작업 요구사항");
+    expect(screen.getByLabelText("작업명")).toBeRequired();
+    await userEvent.type(
+      screen.getByLabelText("작업명"),
+      "  로그인 화면 개선  ",
+    );
     await userEvent.click(
       screen.getByRole("button", { name: "PRD 작성 가이드" }),
     );
@@ -460,7 +468,10 @@ describe("화면·위험 명령", () => {
       await screen.findByRole("button", { name: "확인하고 작업 시작" }),
     ).toBeVisible();
     expect(api.preview).toHaveBeenCalledWith(
-      expect.objectContaining({ test_scope: "affected" }),
+      expect.objectContaining({
+        test_scope: "affected",
+        name: "로그인 화면 개선",
+      }),
     );
     expect(screen.getByRole("dialog", { name: "실행 미리보기" })).toBeVisible();
     await userEvent.keyboard("{Escape}");
@@ -534,6 +545,49 @@ it("작업 목록에 요청일시와 완료일시 및 미기록 표시를 제공
     document.querySelector(`time[datetime="${completed_at}"]`),
   ).toHaveTextContent(new Date(completed_at).toLocaleString("ko-KR"));
   expect(screen.getByRole("row", { name: /pending/ })).toHaveTextContent("—");
+});
+
+it("작업 목록에 작업명과 ID 및 Push·Worktree 상태를 표시한다", () => {
+  wrap(
+    <RunsTable
+      runs={[
+        {
+          ...detail,
+          name: "로그인 개선",
+          push_status: "success",
+          worktree_removed: true,
+        },
+        {
+          ...detail,
+          id: "legacy",
+          push_status: "not_pushed",
+          worktree_removed: false,
+        },
+      ]}
+    />,
+  );
+  const named = screen.getByRole("row", { name: /로그인 개선/ });
+  expect(named).toHaveTextContent("r1");
+  expect(named).toHaveTextContent("성공");
+  expect(named).toHaveTextContent("정리 완료");
+  const legacy = screen.getByRole("row", { name: /legacy/ });
+  expect(legacy).toHaveTextContent("미실행");
+  expect(legacy).toHaveTextContent("미정리");
+});
+
+it("작업 상세 제목에 작업명을 표시하고 ID도 유지한다", async () => {
+  setupDetail();
+  vi.mocked(api.run).mockResolvedValue({ ...detail, name: "로그인 개선" });
+  wrap(
+    <Routes>
+      <Route path="/runs/:id" element={<RunDetailPage />} />
+    </Routes>,
+    "/runs/r1",
+  );
+  expect(
+    await screen.findByRole("heading", { name: "로그인 개선" }),
+  ).toBeVisible();
+  expect(screen.getByText("작업 ID: r1")).toBeVisible();
 });
 
 it("작업 상세 상단에서 긴 Feature 브랜치를 별도 행에 표시한다", async () => {

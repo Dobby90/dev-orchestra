@@ -134,6 +134,7 @@ test("실제 로컬 API: 로그인 → 프로젝트 → 실행 → 재연결 →
   ).toBeVisible();
   await page.getByRole("link", { name: /GUI 임시 프로젝트/ }).click();
   await page.getByRole("link", { name: "이 프로젝트에서 실행" }).click();
+  await page.getByLabel("작업명", { exact: true }).fill("GUI 기능 검증");
   await page
     .getByLabel("PRD", { exact: true })
     .fill("기존 덧셈 기능을 테스트하고 리뷰해 주세요.");
@@ -639,6 +640,7 @@ test("CLI 시작·브라우저 종료·재접속·CLI 승인과 GUI 생성 교�
   ).toBeVisible();
   await reopened.getByRole("link", { name: /독립 교차 프로젝트/ }).click();
   await reopened.getByRole("link", { name: "이 프로젝트에서 실행" }).click();
+  await reopened.getByLabel("작업명", { exact: true }).fill("독립 교차 검증");
   await reopened
     .getByLabel("PRD", { exact: true })
     .fill("기존 덧셈을 다시 검증해 주세요.");

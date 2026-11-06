@@ -120,7 +120,7 @@ it("승인 이후 변경된 브랜치는 Push 버튼을 비활성화한다", asy
   ).toBeDisabled();
 });
 
-it("정리 후에도 Push 성공을 표시하고 정리 버튼은 제공하지 않는다", async () => {
+it("정리 후에도 Push 성공을 표시하고 Push와 정리 버튼은 제공하지 않는다", async () => {
   vi.spyOn(api, "pushPreview").mockResolvedValue(result("success"));
   wrap(
     <RunPushPanel
@@ -132,6 +132,7 @@ it("정리 후에도 Push 성공을 표시하고 정리 버튼은 제공하지 �
   ).toBeVisible();
   expect(screen.getByText("작업 브랜치 Push에 성공했습니다.")).toBeVisible();
   expect(screen.queryByRole("button", { name: "Worktree 정리" })).toBeNull();
+  expect(screen.queryByRole("button", { name: /Push/ })).toBeNull();
 });
 
 it("연결 조회 성공과 Push 권한을 구분하고 설정 편집 시 이전 결과를 숨긴다", async () => {

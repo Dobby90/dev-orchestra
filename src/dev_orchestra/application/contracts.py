@@ -1,9 +1,9 @@
 """Application contracts shared by adapters; no HTTP or CLI dependencies."""
 
 from pathlib import Path
-from typing import Literal
+from typing import Annotated, Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, StringConstraints, model_validator
 
 from dev_orchestra.domain.models import State
 
@@ -12,9 +12,13 @@ class Contract(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
 
+RunName = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=100)]
+
+
 class CreateRun(Contract):
     repo: Path
     spec: Path
+    name: RunName | None = None
     base: str | None = None
     max_fixes: int | None = Field(default=None, ge=0, strict=True)
     test_scope: Literal["full", "affected"] = "full"
@@ -29,6 +33,9 @@ class ApprovalCommand(Contract):
 class RunSummary(Contract):
     schema_version: Literal[1] = 1
     id: str
+    name: str = ""
+    worktree_removed: bool = False
+    push_status: Literal["not_pushed", "running", "success", "failed", "stale"] = "not_pushed"
     state: State
     version: int
     created_at: str | None = None
@@ -40,6 +47,13 @@ class RunSummary(Contract):
     iteration: int = 0
     current_role: str | None = None
     control: Literal["cancel", "pause"] | None = None
+
+    @model_validator(mode="before")
+    @classmethod
+    def legacy_name(cls, value):
+        if isinstance(value, dict) and not value.get("name"):
+            return {**value, "name": value.get("id", "")}
+        return value
 
 
 class RepositoryInfo(Contract):

@@ -209,7 +209,11 @@ def test_native_detection_and_old_policy_warning_are_available_through_api(web):
     p = project(client, svc, repo)
     response = client.post(
         f"/api/projects/{p['id']}/run-previews",
-        json={"project_id": p["id"], "spec": {"kind": "text", "text": "검증"}},
+        json={
+            "name": "테스트 작업",
+            "project_id": p["id"],
+            "spec": {"kind": "text", "text": "검증"},
+        },
     )
     assert response.status_code == 200, response.text
     assert any("JUnit 파일" in w for w in response.json()["validation_warnings"])

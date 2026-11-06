@@ -49,7 +49,11 @@ def test_settings_persist_new_runs_only_and_preserve_execution_policy(web, catal
     assert AgentSettingsService(svc.config).get()["settings"].model == "test-standard"
     assert svc.config.codex.model is None
     assert svc.store.get(original_id)["config"]["codex"]["model"] is None
-    proposal = {"project_id": p["id"], "spec": {"kind": "text", "text": "new task"}}
+    proposal = {
+        "name": "테스트 작업",
+        "project_id": p["id"],
+        "spec": {"kind": "text", "text": "new task"},
+    }
     preview = client.post(f"/api/projects/{p['id']}/run-previews", json=proposal).json()
     response = client.post(
         "/api/runs",
@@ -74,7 +78,11 @@ def test_settings_persist_new_runs_only_and_preserve_execution_policy(web, catal
 def test_settings_conflicts_validation_csrf_and_preview_staleness(web, catalog):
     c, svc, _, repo, _ = web
     p = project(c, svc, repo)
-    proposal = {"project_id": p["id"], "spec": {"kind": "text", "text": "task"}}
+    proposal = {
+        "name": "테스트 작업",
+        "project_id": p["id"],
+        "spec": {"kind": "text", "text": "task"},
+    }
     preview = c.post(f"/api/projects/{p['id']}/run-previews", json=proposal).json()
     current = c.get("/api/settings/agents").json()
     body = {

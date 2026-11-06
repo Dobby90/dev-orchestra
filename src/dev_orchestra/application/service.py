@@ -100,6 +100,7 @@ class RunService:
             "test_selection_contract": 2 if command.test_scope == "affected" else 1,
             "execution_contract": self.default_execution_contract(),
             "id": run_id,
+            "name": command.name or run_id,
             "repo": str(repo),
             "base": base,
             "base_sha": sha,

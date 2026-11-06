@@ -245,9 +245,12 @@ function RunDetailBody({ rid }: { rid: string }) {
         <ArrowLeft size={14} />
         작업 목록으로
       </Link>
-      <Heading eyebrow="WORKSPACE / RUN DETAIL" title={rid}>
+      <Heading eyebrow="WORKSPACE / RUN DETAIL" title={r.name || rid}>
         <Status state={r.state} large />
       </Heading>
+      {r.name && r.name !== rid && (
+        <p className="mono subtle">작업 ID: {rid}</p>
+      )}
       <div className="run-overview panel">
         <div>
           <span className="subtle">테스트 범위</span>

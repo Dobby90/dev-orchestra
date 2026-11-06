@@ -123,7 +123,11 @@ def test_default_branch_prefix_applies_to_cli_and_web_preview(web):
     assert p["branch_prefix"] == "feature/codex"
     response = c.post(
         f"/api/projects/{p['id']}/run-previews",
-        json={"project_id": p["id"], "spec": {"kind": "text", "text": "PRD"}},
+        json={
+            "name": "테스트 작업",
+            "project_id": p["id"],
+            "spec": {"kind": "text", "text": "PRD"},
+        },
     )
     assert response.status_code == 200, response.text
     preview = response.json()
@@ -187,10 +191,22 @@ def test_submission_atomic_idempotent_and_not_started(web):
     c, svc, _, repo, _ = web
     before = (repo / "main.py").read_bytes()
     p = project(c, svc, repo)
-    proposal = {"project_id": p["id"], "spec": {"kind": "text", "text": "인사말 구현"}}
+    proposal = {
+        "name": "  인사말 구현  ",
+        "project_id": p["id"],
+        "spec": {"kind": "text", "text": "인사말 구현"},
+    }
     preview = c.post(f"/api/projects/{p['id']}/run-previews", json=proposal)
     assert preview.status_code == 200, preview.text
     body = {**proposal, "preview_token": preview.json()["preview_token"]}
+    assert (
+        c.post(
+            "/api/runs",
+            json={**body, "name": "다른 작업"},
+            headers={"Idempotency-Key": "changed-name"},
+        ).status_code
+        == 409
+    )
     headers = {"Idempotency-Key": "request-one"}
     response = c.post("/api/runs", json=body, headers=headers)
     assert response.status_code == 202, response.text
@@ -210,6 +226,12 @@ def test_submission_atomic_idempotent_and_not_started(web):
         assert db.execute("SELECT count(*) FROM jobs").fetchone()[0] == 1
         assert db.execute("SELECT count(*) FROM operations").fetchone()[0] == 1
     detail = c.get("/api/runs/" + rid)
+    assert detail.json()["name"] == "인사말 구현"
+    assert svc.store.get(rid)["name"] == "인사말 구현"
+    assert (
+        next(r for r in c.get("/api/runs").json()["items"] if r["id"] == rid)["name"]
+        == "인사말 구현"
+    )
     assert detail.json()["event_cursor"] > 0
     assert detail.json()["current_role"] == "planner"
     assert "config" not in detail.json() and "spec" not in detail.json()
@@ -225,7 +247,11 @@ def test_submission_atomic_idempotent_and_not_started(web):
 def test_stale_preview_rejected(web):
     c, svc, _, repo, _ = web
     p = project(c, svc, repo)
-    proposal = {"project_id": p["id"], "spec": {"kind": "text", "text": "PRD"}}
+    proposal = {
+        "name": "테스트 작업",
+        "project_id": p["id"],
+        "spec": {"kind": "text", "text": "PRD"},
+    }
     token = c.post(f"/api/projects/{p['id']}/run-previews", json=proposal).json()["preview_token"]
     c.patch(
         "/api/projects/" + p["id"],
@@ -408,7 +434,11 @@ def test_session_survives_api_recreation(web):
 def test_submission_sql_failure_rolls_back(web, monkeypatch):
     c, svc, _, repo, _ = web
     p = project(c, svc, repo)
-    proposal = {"project_id": p["id"], "spec": {"kind": "text", "text": "PRD"}}
+    proposal = {
+        "name": "테스트 작업",
+        "project_id": p["id"],
+        "spec": {"kind": "text", "text": "PRD"},
+    }
     token = c.post(f"/api/projects/{p['id']}/run-previews", json=proposal).json()["preview_token"]
 
     def fail(*args):
@@ -524,7 +554,11 @@ def test_project_default_base_is_snapshotted(web):
             "policy": {"tests": svc.config.tests.model_dump(mode="json")},
         },
     ).json()
-    proposal = {"project_id": p["id"], "spec": {"kind": "text", "text": "PRD"}}
+    proposal = {
+        "name": "테스트 작업",
+        "project_id": p["id"],
+        "spec": {"kind": "text", "text": "PRD"},
+    }
     receipt = c.post(f"/api/projects/{p['id']}/run-previews", json=proposal).json()
     result = c.post(
         "/api/runs",

@@ -19,6 +19,7 @@ export function NewRunPage() {
   const [params] = useSearchParams(),
     navigate = useNavigate();
   const [project, setProject] = useState(params.get("project") ?? ""),
+    [name, setName] = useState(""),
     [text, setText] = useState(""),
     [mode, setMode] = useState<"text" | "file">("text"),
     [base, setBase] = useState(""),
@@ -79,6 +80,10 @@ export function NewRunPage() {
     event.preventDefault();
     if (!project) return;
     setLocalError("");
+    if (!name.trim()) {
+      setLocalError("작업명을 입력해 주세요.");
+      return;
+    }
     if (
       mode === "text" &&
       (!text.trim() || new TextEncoder().encode(text).length > 1048576)
@@ -91,6 +96,7 @@ export function NewRunPage() {
       return;
     }
     const proposal: Schema["Proposal"] = {
+      name: name.trim(),
       project_id: project,
       spec:
         mode === "text"
@@ -126,6 +132,16 @@ export function NewRunPage() {
           </h2>
           <form onSubmit={check} className="form-grid">
             <fieldset disabled={locked || preview.isPending}>
+              <label>
+                작업명
+                <input
+                  required
+                  maxLength={100}
+                  value={name}
+                  placeholder="예: 로그인 화면 개선"
+                  onChange={(e) => edit(() => setName(e.target.value))}
+                />
+              </label>
               <label>
                 프로젝트
                 <select
@@ -407,6 +423,8 @@ export function NewRunPage() {
           description="실행할 브랜치와 테스트 범위를 확인한 뒤 작업을 시작하세요."
         >
           <dl>
+            <dt>작업명</dt>
+            <dd>{preview.data.proposal.name}</dd>
             <dt>프로젝트</dt>
             <dd>{selected.data?.name}</dd>
             <dt>Feature 브랜치</dt>

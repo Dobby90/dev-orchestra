@@ -153,6 +153,10 @@ export function RunsTable({ runs }: { runs: Run[] }) {
           <tr>
             <th>작업 / 브랜치</th>
             <th>상태</th>
+            <th title="앱에 기록된 Push 결과입니다. 원본 저장소에서 직접 수행한 Push는 자동 반영되지 않습니다.">
+              Push
+            </th>
+            <th>Worktree</th>
             <th>현재 단계</th>
             <th>수정 회차</th>
             <th>요청일시</th>
@@ -167,8 +171,11 @@ export function RunsTable({ runs }: { runs: Run[] }) {
             <tr key={run.id}>
               <td>
                 <Link to={`/runs/${run.id}`} className="run-link">
-                  {run.id}
+                  {run.name || run.id}
                 </Link>
+                {run.name && run.name !== run.id && (
+                  <div className="mono subtle text-small">{run.id}</div>
+                )}
                 <div className="mono subtle text-small">
                   {run.branch ?? "브랜치 준비 중"}
                 </div>
@@ -180,6 +187,34 @@ export function RunsTable({ runs }: { runs: Run[] }) {
                     {run.control === "cancel" ? "취소 요청됨" : "중지 요청됨"}
                   </span>
                 )}
+              </td>
+              <td>
+                <span
+                  className={
+                    run.push_status === "success"
+                      ? "text-green"
+                      : run.push_status === "failed"
+                        ? "text-red"
+                        : "subtle"
+                  }
+                >
+                  {
+                    {
+                      not_pushed: "미실행",
+                      running: "진행 중",
+                      success: "성공",
+                      failed: "실패",
+                      stale: "재확인 필요",
+                    }[run.push_status ?? "not_pushed"]
+                  }
+                </span>
+              </td>
+              <td>
+                <span
+                  className={run.worktree_removed ? "text-green" : "subtle"}
+                >
+                  {run.worktree_removed ? "정리 완료" : "미정리"}
+                </span>
               </td>
               <td>
                 {run.current_role

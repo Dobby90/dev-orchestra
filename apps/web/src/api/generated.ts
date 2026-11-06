@@ -1508,6 +1508,8 @@ export interface components {
         };
         /** Proposal */
         Proposal: {
+            /** Name */
+            name: string;
             /**
              * Test Scope
              * @default full
@@ -1678,6 +1680,8 @@ export interface components {
         };
         /** RunCreate */
         RunCreate: {
+            /** Name */
+            name: string;
             /**
              * Test Scope
              * @default full
@@ -1724,6 +1728,22 @@ export interface components {
             schema_version: 1;
             /** Id */
             id: string;
+            /**
+             * Name
+             * @default
+             */
+            name: string;
+            /**
+             * Worktree Removed
+             * @default false
+             */
+            worktree_removed: boolean;
+            /**
+             * Push Status
+             * @default not_pushed
+             * @enum {string}
+             */
+            push_status: "not_pushed" | "running" | "success" | "failed" | "stale";
             state: components["schemas"]["State"];
             /** Version */
             version: number;
@@ -1821,6 +1841,22 @@ export interface components {
             schema_version: 1;
             /** Id */
             id: string;
+            /**
+             * Name
+             * @default
+             */
+            name: string;
+            /**
+             * Worktree Removed
+             * @default false
+             */
+            worktree_removed: boolean;
+            /**
+             * Push Status
+             * @default not_pushed
+             * @enum {string}
+             */
+            push_status: "not_pushed" | "running" | "success" | "failed" | "stale";
             state: components["schemas"]["State"];
             /** Version */
             version: number;

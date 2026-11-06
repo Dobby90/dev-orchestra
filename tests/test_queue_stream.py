@@ -832,7 +832,11 @@ def test_api_submit_dispatcher_and_indexed_logs(prepared):
         assert login.status_code == 201
         c.headers["X-CSRF-Token"] = login.json()["csrf_token"]
         p = project(c, svc, repo)
-        proposal = {"project_id": p["id"], "spec": {"kind": "text", "text": "조건 구현"}}
+        proposal = {
+            "name": "테스트 작업",
+            "project_id": p["id"],
+            "spec": {"kind": "text", "text": "조건 구현"},
+        }
         receipt = c.post(f"/api/projects/{p['id']}/run-previews", json=proposal)
         result = c.post(
             "/api/runs",

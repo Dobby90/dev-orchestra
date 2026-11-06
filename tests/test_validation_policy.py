@@ -163,7 +163,11 @@ def test_web_preview_and_submission_complete_old_project_vite_policy(web):
     )
     svc.config.tests.commands["build"] = Command(kind="check", argv=["npm", "run", "build"])
     p = project(client, svc, repo)
-    proposal = {"project_id": p["id"], "spec": {"kind": "text", "text": "PRD"}}
+    proposal = {
+        "name": "테스트 작업",
+        "project_id": p["id"],
+        "spec": {"kind": "text", "text": "PRD"},
+    }
     preview = client.post(f"/api/projects/{p['id']}/run-previews", json=proposal)
     assert preview.status_code == 200, preview.text
     assert not any(".vite-temp" in w for w in preview.json()["validation_warnings"])
@@ -504,7 +508,11 @@ def test_preview_warns_about_saved_pytest_policy_on_node_repository(web):
     p = project(client, svc, repo)
     response = client.post(
         f"/api/projects/{p['id']}/run-previews",
-        json={"project_id": p["id"], "spec": {"kind": "text", "text": "Node 기능 검증"}},
+        json={
+            "name": "테스트 작업",
+            "project_id": p["id"],
+            "spec": {"kind": "text", "text": "Node 기능 검증"},
+        },
     )
     assert response.status_code == 200, response.text
     warnings = response.json()["validation_warnings"]

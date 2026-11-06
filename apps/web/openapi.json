@@ -4562,6 +4562,12 @@
       },
       "Proposal": {
         "properties": {
+          "name": {
+            "type": "string",
+            "maxLength": 100,
+            "minLength": 1,
+            "title": "Name"
+          },
           "test_scope": {
             "type": "string",
             "enum": [
@@ -4651,6 +4657,7 @@
         "additionalProperties": false,
         "type": "object",
         "required": [
+          "name",
           "project_id",
           "spec"
         ],
@@ -5087,6 +5094,12 @@
       },
       "RunCreate": {
         "properties": {
+          "name": {
+            "type": "string",
+            "maxLength": 100,
+            "minLength": 1,
+            "title": "Name"
+          },
           "test_scope": {
             "type": "string",
             "enum": [
@@ -5181,6 +5194,7 @@
         "additionalProperties": false,
         "type": "object",
         "required": [
+          "name",
           "project_id",
           "spec",
           "preview_token"
@@ -5198,6 +5212,28 @@
           "id": {
             "type": "string",
             "title": "Id"
+          },
+          "name": {
+            "type": "string",
+            "title": "Name",
+            "default": ""
+          },
+          "worktree_removed": {
+            "type": "boolean",
+            "title": "Worktree Removed",
+            "default": false
+          },
+          "push_status": {
+            "type": "string",
+            "enum": [
+              "not_pushed",
+              "running",
+              "success",
+              "failed",
+              "stale"
+            ],
+            "title": "Push Status",
+            "default": "not_pushed"
           },
           "state": {
             "$ref": "#/components/schemas/State"
@@ -5516,6 +5552,28 @@
           "id": {
             "type": "string",
             "title": "Id"
+          },
+          "name": {
+            "type": "string",
+            "title": "Name",
+            "default": ""
+          },
+          "worktree_removed": {
+            "type": "boolean",
+            "title": "Worktree Removed",
+            "default": false
+          },
+          "push_status": {
+            "type": "string",
+            "enum": [
+              "not_pushed",
+              "running",
+              "success",
+              "failed",
+              "stale"
+            ],
+            "title": "Push Status",
+            "default": "not_pushed"
           },
           "state": {
             "$ref": "#/components/schemas/State"

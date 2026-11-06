@@ -71,10 +71,12 @@ export function RunPushPanel({
       <p className="mono path">대상 작업 브랜치: {p.branch}</p>
       <p className="mono path">최종 승인 SHA: {p.approved_sha}</p>
       <p className="help">
-        버튼을 누르면 승인 SHA와 현재 작업 브랜치를 다시 확인하고 해당 브랜치만
-        Push합니다.
+        {run.execution?.worktree_removed
+          ? "Worktree가 정리되었습니다. 추가 Push는 원본 저장소에서 직접 수행하세요."
+          : "버튼을 누르면 승인 SHA와 현재 작업 브랜치를 다시 확인하고 해당 브랜치만 Push합니다."}
       </p>
-      {actionContainer ? createPortal(button, actionContainer) : button}
+      {!run.execution?.worktree_removed &&
+        (actionContainer ? createPortal(button, actionContainer) : button)}
       {push.error && (
         <ErrorNotice error={push.error} retry={() => query.refetch()} />
       )}
