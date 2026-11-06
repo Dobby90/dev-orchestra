@@ -6,6 +6,7 @@ from pathlib import Path
 from dev_orchestra.application.test_changes import checksum
 from dev_orchestra.domain.execution import WORKSPACE_V2, execution_contract
 from dev_orchestra.domain.models import PipelineError
+from dev_orchestra.infrastructure.commit_messages import format_branch_commit
 from dev_orchestra.infrastructure.files import contained, digest, write
 from dev_orchestra.infrastructure.git import Git
 from dev_orchestra.infrastructure.process_owner import ensure_stopped
@@ -140,6 +141,14 @@ def verify_intent(data, intent, git, parent, *, pending=False):
         key: intent[key] for key in ["request_id", "expected_sha", "files", "message", "summary"]
     }
     marker = f"DevOrchestra-Checkpoint: {data['run_id']}:{data['step_id']}:{intent['request_id']}"
+    message_format = intent.get("commit_message_format", 1)
+    if message_format not in {1, 2}:
+        raise PipelineError("unsupported workspace commit message format")
+    message = (
+        format_branch_commit(intent["message"], data["branch"])
+        if message_format == 2
+        else intent["message"].strip()
+    )
     if (
         intent["parent"] != parent
         or intent["expected_sha"] != parent
@@ -151,7 +160,7 @@ def verify_intent(data, intent, git, parent, *, pending=False):
             name not in data["files"] or data["files"][name]["hash"] != sha
             for name, sha in intent["files"].items()
         )
-        or intent["commit_message"] != intent["message"].strip() + "\n\n" + marker
+        or intent["commit_message"] != message + "\n\n" + marker
         or any(
             intent[key] != data[key]
             for key in [

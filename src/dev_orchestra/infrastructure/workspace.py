@@ -22,7 +22,7 @@ from dev_orchestra.domain.models import (
     TestChange,
     WorkspaceResult,
 )
-from dev_orchestra.infrastructure.commit_messages import describe_commit, validate_commit_message
+from dev_orchestra.infrastructure.commit_messages import describe_commit, format_branch_commit
 from dev_orchestra.infrastructure.files import contained, digest, write
 from dev_orchestra.infrastructure.git import Git
 from dev_orchestra.infrastructure.process import redact, sanitize
@@ -389,7 +389,7 @@ class WorkspaceSession:
             self.acknowledge(intent)
             self.guard()
             return {"sha": intent["sha"], "parent": intent["parent"], "tree": intent["tree"]}
-        validate_commit_message(message)
+        formatted_message = format_branch_commit(message, self.data["branch"])
         self.guard()
         if expected_sha != self.data["current_sha"]:
             raise PipelineError("checkpoint expected HEAD mismatch")
@@ -404,7 +404,7 @@ class WorkspaceSession:
                 raise PipelineError("unrecognized checkpoint file")
         tree = self.git.stage_selected(list(files))
         commit_message = (
-            message.strip()
+            formatted_message
             + "\n\nDevOrchestra-Checkpoint: "
             + self.run_id
             + ":"
@@ -428,6 +428,7 @@ class WorkspaceSession:
             },
             "policy_hash_version": self.data.get("policy_hash_version", 1),
             "request_hash": checksum(args),
+            "commit_message_format": 2,
             "parent": expected_sha,
             "tree": tree,
             "commit_message": commit_message,

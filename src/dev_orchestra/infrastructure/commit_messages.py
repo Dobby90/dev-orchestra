@@ -17,6 +17,19 @@ def validate_commit_message(message):
         raise PipelineError("commit requires a concrete Korean subject without sensitive content")
 
 
+def format_branch_commit(message, branch):
+    message = message.strip()
+    suffix = branch.removeprefix("feature/ai/")
+    prefix = f"[{suffix}] " if branch.startswith("feature/ai/") and suffix else ""
+    if prefix and message.startswith(prefix):
+        message = message.removeprefix(prefix)
+    # Validate the description itself so a prefix cannot hide a generic subject.
+    validate_commit_message(message)
+    message = prefix + message
+    validate_commit_message(message)
+    return message
+
+
 def describe_commit(message, summary, paths):
     # Old stored responses and host clients may omit the new description field.
     # Keep those usable without reusing execution metadata as the subject.
