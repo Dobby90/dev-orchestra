@@ -15,6 +15,7 @@ import {
 } from "@tanstack/react-query";
 import {
   AudioLines,
+  ChevronLeft,
   ChevronRight,
   FolderGit2,
   LayoutDashboard,
@@ -94,6 +95,13 @@ export function createQueryClient() {
 }
 function Shell() {
   const [menu, setMenu] = useState(false);
+  const [collapsed, setCollapsed] = useState(() => {
+    try {
+      return localStorage.getItem("devorchestra-sidebar-collapsed") === "true";
+    } catch {
+      return false;
+    }
+  });
   const [light, setLight] = useState(() => {
     try {
       return localStorage.getItem("devorchestra-theme") === "light";
@@ -124,8 +132,17 @@ function Shell() {
       /* Theme persistence is optional. */
     }
   }
+  function toggleSidebar() {
+    const next = !collapsed;
+    setCollapsed(next);
+    try {
+      localStorage.setItem("devorchestra-sidebar-collapsed", String(next));
+    } catch {
+      /* Sidebar persistence is optional. */
+    }
+  }
   return (
-    <div className="app-shell">
+    <div className={`app-shell${collapsed ? " sidebar-collapsed" : ""}`}>
       <a href="#main" className="skip-link">
         본문으로 건너뛰기
       </a>
@@ -141,11 +158,20 @@ function Shell() {
         className={`sidebar ${menu ? "sidebar-open" : ""}`}
         aria-label="주 메뉴"
       >
-        <Link to="/" className="brand">
+        <button
+          className="icon-button sidebar-toggle"
+          aria-label={collapsed ? "메뉴 펼치기" : "메뉴 접기"}
+          aria-expanded={!collapsed}
+          aria-controls="workspace-nav"
+          onClick={toggleSidebar}
+        >
+          {collapsed ? <ChevronRight size={16} /> : <ChevronLeft size={16} />}
+        </button>
+        <Link to="/" className="brand" aria-label="DevOrchestra">
           <span className="brand-mark">
             <AudioLines size={21} />
           </span>
-          DevOrchestra
+          <span className="sidebar-text">DevOrchestra</span>
         </Link>
         <div className="workspace-selector">
           <span className="workspace-avatar">L</span>
@@ -166,10 +192,13 @@ function Shell() {
               end={item.to === "/"}
               to={item.to}
               key={item.to}
+              className="sidebar-item"
+              aria-label={item.label}
+              data-tooltip={item.label}
               onClick={() => setMenu(false)}
             >
               <item.icon size={17} />
-              {item.label}
+              <span className="sidebar-text">{item.label}</span>
             </NavLink>
           ))}
         </nav>
@@ -183,11 +212,14 @@ function Shell() {
           </div>
           <Button
             variant="ghost"
+            className="sidebar-item"
+            aria-label="로그아웃"
+            data-tooltip="로그아웃"
             onClick={() => logout.mutate()}
             disabled={logout.isPending}
           >
             <LogOut size={16} />
-            로그아웃
+            <span className="sidebar-text">로그아웃</span>
           </Button>
         </div>
       </aside>
