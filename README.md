@@ -56,6 +56,8 @@ uv sync --frozen --extra web
 ./start.sh --allow-root ~/projects
 ```
 
+새 DB는 서비스 기동 전에 `devorchestra database-upgrade --workspace`로 스키마 6을 명시적으로 활성화하세요. 별도 YAML 설정을 쓰면 같은 `--config`를 지정하세요.
+
 `start.sh`는 `.venv`를 사용해 GUI를 빌드하고 SQLite를 준비한 뒤 GUI·API·Dispatcher를 백그라운드로 시작합니다. 별도 DB 서버는 필요하지 않습니다. 출력된 `http://127.0.0.1:8000` 주소로 접속하고 일회용 코드를 입력하세요. 브라우저는 자동으로 열지 않습니다. Dispatcher를 시작하면 기존 대기 작업도 실행할 수 있습니다.
 
 | 옵션 | 동작 |
@@ -141,6 +143,8 @@ UI에서 저장한 설정은 DB 옆의 `.agents.json` 확장자 파일에 보관
 `--config`·`--database`는 하위 명령 앞에 지정합니다. 아래 예시는 모든 명령에서 같은 설정을 사용합니다.
 
 ```sh
+# 최초 실행 전 모든 DB writer를 종료하고 스키마 6을 명시적으로 활성화합니다.
+devorchestra --config config.yaml database-upgrade --workspace
 devorchestra --config config.yaml doctor
 devorchestra --config config.yaml run --repo ~/projects/example --spec PRD.md --base main --max-fix-attempts 3
 # CLI 종료 후에도 실행하려면 run에 --detach를 지정합니다.
@@ -165,6 +169,20 @@ devorchestra --config config.yaml cleanup RUN_ID
 | 명령·입력 오류 | `1` |
 | 포그라운드 `run`·`resume`의 실행 실패 또는 사용자 개입 필요 | `2` |
 
+### 테스트 범위 선택
+
+새 작업에서 **전체 테스트** 또는 **변경 영향 범위 테스트**를 선택합니다. CLI는 `run --test-scope full` 또는 `run --test-scope affected`를 사용합니다. 기본값과 범위 정보가 없는 기존 Run은 전체 검사입니다. 선택은 생성 시 저장되며 재개 답변으로 바뀌지 않습니다.
+
+새 Run의 영향 범위 검사는 모델이 기준 SHA부터 현재 후보까지의 누적 diff, 변경 코드의 호출부·의존 관계, 기존 테스트와 인수 조건을 분석해 자동 선택합니다. 사용자가 테스트 파일을 직접 선택하거나 `tests.affected` 매핑을 작성할 필요는 없습니다. 관련 테스트가 없으면 Tester가 허용된 테스트 경로에 추가합니다. 수정 후에도 누적 변경과 이전 실패를 다시 확인합니다.
+
+모델은 등록된 `tests.commands` 중 실행할 명령과 구체적인 테스트 파일·선택 이유를 제안합니다. 호스트가 이를 검증하고 pytest, Node `--test`, Playwright, Vitest의 파일 인자로 변환해 실행합니다. 단순한 npm 스크립트도 지원하며 기존 전체 대상 경로는 선택한 파일로 교체합니다. 파일은 명령의 `working_directory` 기준 상대 경로입니다. 복합 스크립트나 지원하지 않는 러너는 해당 명령 전체를 선택하고 구체적인 확대 사유를 기록합니다. 임의 셸 명령이나 보고서 설정 변경은 허용하지 않습니다.
+
+`tests.affected`는 선택 사항이며 `required_commands`와 `dependencies`, 모든 `kind=check` 명령은 계속 필수로 적용합니다. 필수 회귀 명령은 파일 필터로 축소할 수 없습니다. 정책 없음·미매핑 파일·인수 조건 매핑 누락만으로 전체 검사로 바꾸지 않습니다. 전체 명령이 필요한 광범위한 영향은 모델이 이유를 제시하고 호스트가 실행합니다. 테스트 0건·전부 건너뛰기·JUnit 누락은 성공이 아닙니다.
+
+실행 결과는 요청·실제 범위, 실행·미실행 명령, 선택 파일과 이유, 실제 실행 인자·건수·소요 시간을 제공합니다. Reviewer가 같은 후보의 검증 범위와 회귀 누락을 독립적으로 확인합니다. 선택 근거와 실제 실행 결과는 SHA·revision·정책 체크섬에 연결됩니다. 기존 Run은 생성 당시의 매핑 기반 계약과 자동 확대 동작을 유지하며 재개만으로 새 계약으로 전환하지 않습니다.
+
+스키마 6에서 명시적으로 활성화한 직접 편집 계약에서는 Tester가 테스트 경로만 호스트 도구로 편집하고, 후보를 확정한 뒤 실제 테스트 결과와 근거 ID를 확인합니다. Reviewer는 누적 변경과 직접 영향을 받는 코드, 동일 SHA의 검증 범위 및 미해결 이슈를 독립적으로 확인합니다.
+
 ## 워크플로와 승인
 
 ```text
@@ -179,11 +197,15 @@ queued → preparing → planning → waiting_plan_approval → developing → t
 
 재개할 때 입력한 답변은 기존 지시와 함께 누적되고, 해당 질문과 연결해 모든 역할에 전달됩니다. 답변한 질문은 화면에서 해제되며, 플래닝 중 작성한 잠정 계획도 다음 시도에 전달합니다. 플래너는 확정된 사항을 다시 확인하지 않고 구현을 막는 미해결 사항만 질문합니다. 변경 전에 덮어써진 과거 답변은 자동 복원되지 않으므로 필요한 합의는 다시 입력하세요.
 
-모델 응답은 역할별 스키마로 제한합니다. Developer·Fixer가 변경할 코드가 없다면 `no_change_reason`에 이유를 반환해야 합니다. 잘못된 응답 형식, 인수 조건·명령 연결 누락, 적용할 수 없는 패치는 같은 SHA에서 해당 역할만 다시 작성합니다. `workflow.response_retries`는 단계별 응답 복구 횟수이며 기본값 1, 허용 범위 0~2입니다. 제품 코드의 자동 수정 한도 `max_fix_attempts`와 별도이고 실패 시도도 사용량에 포함됩니다. 필드가 없는 기존 Run은 기본값을 사용하며 완료된 기획·체크포인트를 유지합니다.
+모델 응답은 역할별 스키마로 제한합니다. Developer·Fixer가 변경할 코드가 없다면 `no_change_reason`에 이유를 반환해야 합니다. 잘못된 응답 형식, 인수 조건·명령 연결 누락, 구계약의 적용할 수 없는 패치는 같은 SHA에서 해당 역할만 다시 작성합니다. `workflow.response_retries`는 단계별 응답 복구 횟수이며 기본값 1, 허용 범위 0~2입니다. 제품 코드의 자동 수정 한도 `max_fix_attempts`와 별도이고 실패 시도도 사용량에 포함됩니다. 필드가 없는 기존 Run은 기본값을 사용하며 완료된 기획·체크포인트를 유지합니다.
 
-복구에는 구체적인 검증 오류와 필요시 추적 중인 대상 파일의 제한된 현재 문맥을 전달합니다. Worktree 변경, 허용 경로 위반, 프로세스·실행 오류는 이 자동 복구로 우회하지 않습니다. 복구 한도 초과는 `needs_input`으로 보존하고, 중단된 재시도를 다시 시작할 때도 추가 호출 전에 개입을 요청합니다. 답변 없는 단순 재개로 같은 단계의 복구 한도를 초기화하지 않습니다. 명시적으로 새 답변을 제공하면 새로운 입력으로 한도를 계산하며, 기존 기획 승인 규칙은 유지합니다. 기존 테스트 변경 근거·전체 테스트·독립 리뷰·최종 승인은 그대로 필요합니다.
+복구에는 구체적인 검증 오류와 필요시 추적 중인 대상 파일의 제한된 현재 문맥을 전달합니다. Worktree 변경, 허용 경로 위반, 프로세스·실행 오류는 이 자동 복구로 우회하지 않습니다. 복구 한도 초과는 `needs_input`으로 보존하고, 중단된 재시도를 다시 시작할 때도 추가 호출 전에 개입을 요청합니다. 답변 없는 단순 재개로 같은 단계의 복구 한도를 초기화하지 않습니다. 명시적으로 새 답변을 제공하면 새로운 입력으로 한도를 계산하며, 기존 기획 승인 규칙은 유지합니다. 기존 테스트 변경 근거·생성 시 고정한 테스트 정책·독립 리뷰·최종 승인은 그대로 필요합니다.
 
-각 역할은 새 읽기 전용 Codex 세션에서 구조화된 결과를 반환합니다. 호스트가 unified diff를 검증·적용합니다. 요구사항 변경으로 기존 테스트의 기대값을 수정하거나 검사를 추가해야 하면, 에이전트는 변경 사유와 인수 조건 ID를 `test_changes`로 함께 반환합니다. 호스트는 파일별 변경 근거·패치·테스트 명령·인수 조건 커버리지를 적용 전에 검증하고 중간 승인 없이 자동 진행합니다. 테스트 변경을 이유로 `needs_input`에 진입하지 않으며 전체 설정 테스트와 독립 리뷰를 거쳐 최종 승인만 받습니다.
+실행 계약은 `workspace-v2`만 지원합니다. Developer/Fixer/Tester는 제한된 호스트 도구로 실제 파일을 편집하며, 호스트가 파일별 정책·요구사항 근거를 검증하고 커밋합니다. Planner/Reviewer는 읽기 전용입니다. 패치는 호스트가 실제 Git 변경에서 수집하는 표시·검증 근거이며, 모델 응답의 패치를 적용하지 않습니다. 기존 `patch-v1` 또는 계약 식별자가 없는 Run은 자동 전환하지 않고 실행을 차단합니다. 이력과 산출물을 보존하고 새 Run을 생성하세요.
+
+명시적으로 활성화한 `workspace-v2`는 중단된 역할의 실제 파일·중간 커밋·응답·테스트 근거를 보존합니다. 종료와 실행 소유권을 확인하고 파일 해시·브랜치·커밋 이력·정책·요구사항이 기록과 일치하면 같은 역할과 시도에서 이어갑니다. Developer/Fixer는 저장된 명시적 Codex 세션 ID로 재개하며, 세션이 없거나 손상되면 검증된 파일과 완료 작업 요약을 새 세션에 전달합니다. Reviewer는 독립된 읽기 전용 세션을 유지합니다.
+
+파일 편집이나 테스트가 끝난 뒤 응답 형식만 잘못됐다면 편집·커밋·테스트 실행을 잠그고 메타데이터만 보완합니다. 동일 후보와 정책에 연결된 유효한 테스트 결과를 재사용하며 중간 커밋이나 재개로 복구 한도를 초기화하지 않습니다. 실패·복구 호출도 사용량에 합산합니다. 외부 편집·체크섬·소유권 불일치는 파일을 보존한 채 `needs_input`으로 차단합니다. 미완료 편집이나 커밋을 보존한 상태에서는 추가 요구사항으로 기존 작업을 다시 해석하지 않으므로, 답변 없이 이어가거나 변경된 요구사항으로 새 Run을 생성해야 합니다. 표시용으로 마스킹한 diff를 코드 복원에 사용하지 않습니다.
 
 기존 테스트 변경 근거는 Run ID·입력 SHA·revision·패치 체크섬에 연결해 보존하고 다음 역할에도 전달합니다. 독립 리뷰는 변경된 기대값이 요구사항에 맞는지와 회귀 검사 삭제·skip·검증 약화 여부를 확인합니다. GUI의 **기존 테스트 변경 내역**과 최종 보고서에서 사유·인수 조건을 확인하고 전체 diff와 테스트·리뷰 결과를 검토한 뒤 최종 승인하세요. 변경 근거가 누락되거나 손상되면 적용·최종 승인을 차단합니다.
 
@@ -200,7 +222,7 @@ devorchestra --config config.yaml resume RUN_ID --detach
 
 승인은 현재 HEAD·작업 트리·테스트·리뷰·체크포인트와 검증 산출물의 무결성이 모두 확인된 후보에만 적용합니다. 리뷰 V2의 이슈 해결에는 같은 후보 SHA·revision의 새 테스트와 명시적 재검증 근거가 필요하며, 이전 리뷰에서 빠졌다고 자동 해결하지 않습니다. 차단 이슈는 사용자 분류로 우회할 수 없습니다.
 
-웹용 스키마 5에서는 승인 대기 중 수정 요청과 승인 보류를 CLI에서도 사용할 수 있습니다.
+웹용 스키마 5·6에서는 승인 대기 중 수정 요청과 승인 보류를 CLI에서도 사용할 수 있습니다.
 
 ```sh
 devorchestra --config config.yaml request-changes RUN_ID --instructions changes.md --detach
@@ -209,7 +231,19 @@ devorchestra --config config.yaml defer RUN_ID --reason "추가 확인 후 승�
 
 수정 요청은 새 revision에서 Fix·Test·Review를 다시 수행하며 변경이 없는 Fix도 새 검증을 거칩니다. 수정 한도는 유지하고 필요하면 `--new-max-fix-attempts`로 상향합니다. 승인은 특정 SHA의 이력이며, 이후 변경된 승인 결과는 `status`에서 사용자 개입이 필요한 상태로 표시합니다.
 
-`cleanup`은 Worktree만 정리하고 브랜치·커밋·보고서·SQLite 이력을 보존합니다. 미커밋 변경이 있는 Worktree를 강제로 삭제하지 않습니다. 보존된 Diff·JUnit·보고서는 Worktree 정리 후에도 조회할 수 있습니다.
+최종 승인은 원본과 Worktree의 Git common directory·저장소 정체성, 실제 작업 브랜치와 최종 후보 SHA를 확인합니다. CLI 승인 결과·GUI 상세·보고서에서 원본 프로젝트, 실제 브랜치명, 최종 승인 SHA와 로컬 조회 명령을 확인할 수 있습니다. 원격 저장소나 Git 인증은 필요하지 않습니다. 원본 checkout의 브랜치·미커밋 변경은 유지하며 Merge는 사용자가 직접 수행합니다. 완료 후 브랜치가 변경되면 과거 승인 SHA와 현재 브랜치 SHA를 구분해 표시하고 자동 복구하지 않습니다.
+
+```sh
+git -C ~/projects/example branch --list -- 'devorchestra/RUN_ID'
+git -C ~/projects/example log -5 --oneline refs/heads/devorchestra/RUN_ID --
+git -C ~/projects/example diff BASE_SHA refs/heads/devorchestra/RUN_ID --
+```
+
+실제 브랜치명과 `BASE_SHA`는 해당 Run의 안내 값을 사용하세요. Worktree에서 체크아웃 중인 브랜치는 원본 폴더에서 동시에 전환할 수 없습니다. 정리 전에도 위 명령으로 조회할 수 있으며, 원본 폴더에서 전환하려면 Worktree를 정리한 뒤 자신의 미커밋 변경을 확인하고 직접 전환하세요. 자동 stash·reset·checkout은 수행하지 않습니다.
+
+GUI의 기존 타임라인은 역할·회차·시도·입출력 SHA와 작업 단위 커밋·마지막 복구 지점을 표시합니다. 중간 커밋 저장은 테스트·리뷰 통과와 별개입니다. 재개 안내는 같은 역할 이어가기와 결과 요약 보완을 구분하며 실제 재개 시 호스트가 근거를 다시 검증합니다. 전체·동일 저장소 용량 및 공유 테스트 자원 대기 사유와 현재 점유 수를 표시합니다. 종료가 확인되지 않은 자식 프로세스의 점유도 용량에 포함합니다.
+
+`cleanup`은 Worktree만 정리하고 브랜치·커밋·보고서·SQLite 이력을 보존합니다. 미커밋 변경이 있는 Worktree를 강제로 삭제하지 않습니다. 보존된 Diff·JUnit·보고서는 Worktree 정리 후에도 조회할 수 있습니다. 정리는 작업 폴더·그 안의 의존성 및 출력 공간을 줄이며 공통 Git 객체·보존 로그·캐시 전체를 지우지 않습니다.
 
 CLI·GUI 어느 쪽에서 정리해도 해당 작업은 재개할 수 없습니다. 계속 개발하려면 새 Run을 생성하세요. 제거 후 상태 기록이 중단됐을 때는 `cleanup`을 다시 실행해 기록을 완료할 수 있습니다.
 
@@ -233,11 +267,11 @@ devorchestra --config config.yaml revise-plan RUN_ID --plan-hash PLAN_HASH --rea
 
 ## API·Dispatcher와 GUI 개발
 
-CLI 기본 DB는 스키마 2를 사용하며 웹·큐는 스키마 5가 필요합니다. API 시작만으로 기존 DB를 자동 업그레이드하지 않습니다. 아래 명령은 같은 `config.yaml`을 공유합니다.
+DB 초기화는 스키마 2를 사용하며, 새 Run 생성·실행은 명시적으로 활성화한 스키마 6에서만 지원합니다. 스키마 5는 기존 웹·큐 이력 조회를 위해 유지합니다. API 시작만으로 기존 DB를 자동 업그레이드하지 않습니다. 아래 명령은 같은 `config.yaml`을 공유합니다.
 
 ```sh
 # 최초 웹 사용 또는 구버전 DB 업그레이드 시 실행합니다.
-devorchestra --config config.yaml database-upgrade
+devorchestra --config config.yaml database-upgrade --workspace
 
 # API와 GUI 개발 서버는 각각 별도 터미널에서 실행합니다.
 devorchestra --config config.yaml api-start --allow-root ~/projects
@@ -248,15 +282,59 @@ npm ci
 npm run dev:web
 ```
 
-마이그레이션 전에 API·웹 서비스·Dispatcher·Run Worker 등 DB writer를 중지하세요. 실행 중 Worker·미확인 프로세스·잠금이 있으면 거부하며, 스키마 2·3·4의 SQLite 백업과 증거 참조 manifest를 DB 옆에 보존한 뒤 트랜잭션으로 업그레이드합니다. 구버전 실행 파일과 혼용하지 말고 복원도 모든 writer가 종료된 상태에서 수행하세요.
+마이그레이션 전에 API·웹 서비스·Dispatcher·Run Worker 등 DB writer를 중지하세요. 실행 중 Worker·미확인 프로세스·잠금이 있으면 거부하며, 스키마 2·3·4·5의 SQLite 백업과 증거 참조 manifest를 DB 옆에 보존한 뒤 트랜잭션으로 업그레이드합니다. 구버전 실행 파일과 혼용하지 말고 복원도 모든 writer가 종료된 상태에서 수행하세요.
 
 API 기본 주소는 `http://127.0.0.1:8000`, Vite GUI는 `http://127.0.0.1:5173`입니다. `localhost`로 바꾸지 마세요. API 포트를 바꿨다면 `DEVORCHESTRA_API_PORT=8001 npm run dev:web`처럼 지정합니다. API는 loopback에만 바인딩하고 세션·정확한 Origin/Host·쓰기 CSRF를 검사합니다. 프로젝트는 `--allow-root` 아래 Git 저장소만 등록할 수 있으며 등록 해제는 원본 저장소를 삭제하지 않습니다.
 
 API는 작업을 `queued`로 접수하고 독립 Dispatcher가 실행합니다. Dispatcher가 없으면 `queued_reason=dispatcher_offline`, 다른 작업이 실행 중이면 `waiting_capacity`를 반환합니다. `worker status`로 확인하고 `worker stop`으로 새 작업 실행을 중지할 수 있습니다. Dispatcher 종료와 API·SSE 연결 종료는 실행 중 Run 취소를 의미하지 않습니다. 미등록 CLI 작업은 GUI에서 조회 전용입니다.
 
+동시 실행 한도는 DB 전체와 Git 공통 저장소별로 각각 기본 1입니다. 명시적으로 늘리면 서로 다른 저장소뿐 아니라 같은 저장소의 독립 브랜치·Worktree도 병렬로 진행합니다. 한 Run 안의 역할 순서와 승인·수정 반복은 유지합니다.
+
+```sh
+# DB 전체 2개, 해당 저장소에서 최대 2개를 허용합니다.
+devorchestra --config config.yaml worker capacity --total 2 --repo ~/projects/example --repository 2
+# 현재 설정을 조회합니다.
+devorchestra --config config.yaml worker capacity --repo ~/projects/example
+```
+
+한도는 1~32이며 축소해도 실행 중 작업을 종료하지 않습니다. `claimed` 작업도 큐 용량에 포함합니다. CLI의 특정 Run 시작도 같은 선점 검사를 사용하며, 용량이 찬 경우 foreground는 대기하고 `--detach`는 큐에 남긴 뒤 Dispatcher를 기동합니다. 승인·입력 대기에서는 자식 프로세스 종료 확인 후 슬롯을 반환합니다.
+
+DB 정책과 슬롯은 DB 경로 옆 `.capacity/` 디렉터리에, 저장소 정책과 슬롯은 Git common directory의 `devorchestra-capacity-v1/`에 보존합니다. linked Worktree와 다른 DB도 같은 저장소 한도를 공유하므로 설정 변경은 그 저장소를 쓰는 모든 새 Worker에 적용됩니다. 실행 중 이 파일이나 잠금 파일을 삭제하지 마세요. 구버전 Worker가 잡는 기존 배타 잠금은 호환 게이트로 유지하여 새 Worker와 동시에 실행되지 않으며, 병렬 실행은 같은 새 규약을 사용하는 Worker끼리만 허용합니다. 병렬 용량 설정만으로 DB 스키마나 기존 Run의 실행 계약을 변경하지 않습니다.
+
+Git의 Worktree 생성·제거·커밋과 승인 기록은 짧은 저장소 메타데이터 잠금으로 조정합니다. 긴 모델·테스트 호출은 이 잠금을 잡지 않습니다. loopback 테스트는 같은 호스트·사용자의 공통 슬롯으로 직렬화하고, npm 캐시 쓰기와 Playwright 설치도 자원별로 조정합니다. Java 실행 캐시·임시 디렉터리는 기존 Run별 격리를 유지합니다. 브랜치 분리 자체가 CPU·메모리나 외부 서비스를 격리하지는 않으므로 프로젝트 자원에 맞춰 한도를 설정하세요.
+
+공통 자원에는 Worker PID·생성 시각과 Run 소유 기록을 먼저 남깁니다. Worker가 비정상 종료하면 실행 잠금과 guardian의 자식 종료 근거를 확인한 뒤에만 자원을 재사용하며, 종료가 확인되지 않으면 보존·차단합니다. PID나 heartbeat 만료만으로 실행권을 넘기지 않습니다. 잠금 순서는 유지보수 → Run 실행 → 구버전 호환 게이트 → DB 슬롯 → 저장소 슬롯 → 짧은 메타데이터/공유 자원 잠금입니다. DB 트랜잭션을 유지한 채 모델·테스트·슬롯 반환을 기다리지 않습니다.
+
 SSE는 영속 event ID로 재연결·재생하며 GUI는 연결 단절 중 이력을 주기적으로 조회합니다. 로그 화면은 가상 목록과 최대 1,000개 구간·1 MiB 보관 한도를 사용합니다. 화면 로그 저장은 현재 보관 구간이며 전체 로그는 별도 다운로드를 사용합니다. 인증된 `/api/openapi.json`·`/api/docs`는 OpenAPI JSON을 제공하고 외부 CDN의 Swagger UI는 사용하지 않습니다. 화면과 프론트엔드 세부 사항은 [웹 앱 안내](apps/web/README.md)를 참고하세요.
 
 Dispatcher는 큐 선점 후 파일 수·시간 예산 안에서 로그를 색인합니다. 종료 로그의 처리 완료와 순회 위치는 Run 디렉터리에 기록하며, 완료된 이력은 매 회차 전체 로그를 열지 않고 순서대로 재확인합니다. 종료 후 추가·교체·축소된 로그는 완료 후 최소 30초가 지난 재확인 차례에 반영되므로 이력 수와 미처리량에 따라 반영이 늦어질 수 있습니다.
+
+### 직접 편집 활성화와 구버전 경계
+
+새 Run 생성과 실행에는 스키마 6이 필요합니다. 기본 설치와 일반 `database-upgrade`는 스키마 6을 자동 활성화하지 않습니다. API·웹 서비스·Dispatcher·Run Worker를 모두 종료한 뒤 다음 명령으로 명시적으로 전환합니다.
+
+```sh
+devorchestra --config config.yaml database-upgrade --workspace
+```
+
+이 명령은 스키마 2·3·4·5의 백업과 근거 manifest를 보존하고 트랜잭션으로 스키마 6에 전환합니다. 스키마 6은 스키마 5의 테이블을 재사용하는 실행 호환성 경계입니다. 이전 실행 파일은 알 수 없는 DB 스키마로 거부하므로, 직접 편집한 파일을 구계약으로 실행하지 않습니다. API·Dispatcher·Worker의 잠금과 미확인 자식 프로세스가 있으면 전환을 거부합니다. 스키마 6을 일반 업그레이드 명령으로 낮추지 않습니다.
+
+전환 뒤 CLI·웹에서 생성한 **새 Run**은 `workspace-v2`를 사용합니다. 기존 Run의 계약·설정·SHA·revision·승인 근거는 유지하며 자동 전환하지 않습니다. 구계약 Run의 실행은 지원하지 않으므로 새 Run을 생성하세요. Developer/Fixer는 읽기 전용 셸과 제한된 호스트 편집 도구로 실제 파일을 수정하고 작업 단위 커밋을 요청합니다. Tester는 `tests.write_paths` 안에서 테스트를 보완하고 호스트의 실제 실행 결과를 확인합니다. Planner/Reviewer는 읽기 전용이며 기존 기획 승인·수정 루프·최종 승인 순서를 유지합니다. OS 격리 검증이 불가능하면 새 계약의 실행을 차단합니다.
+
+롤백이 필요하면 모든 writer를 종료하고 전환 전 DB 백업과 그 DB가 참조하는 실행 디렉터리를 함께 보존·복원하세요. 전환 뒤 새 Run과 직접 편집 파일은 별도로 보존해야 합니다. DB 버전 숫자만 낮추거나 미커밋 작업을 자동 reset·clean하지 마세요. 운영 DB는 개발 검증에 사용하지 않습니다. 실제 모델의 품질·사용량 비교는 별도 승인된 실험에서 확인해야 합니다.
+
+### 실패·복구를 포함한 비교 계측
+
+다음 명령은 보존된 Run을 읽어 JSON을 출력하며 모델·테스트를 실행하지 않습니다.
+
+```sh
+.venv/bin/python scripts/measure_run.py --database /absolute/path/to/state.db \
+  --run-id RUN_ID --version-label candidate --scenario recovery
+```
+
+비교 대상 버전에도 같은 계측을 적용하고 PRD·기준 코드·모델·추론 강도·검증 정책을 고정합니다. `--version-label`에는 비교 버전의 태그/커밋, `--scenario`에는 정상 완료 `normal` 또는 중단·응답 오류 복구 `recovery`를 지정합니다. 출력은 인수 조건을 포함한 조건 해시와 요청/실제 테스트 범위·필수 명령 집합별 비교 키, 역할별 시도·실패 상태·시각·호출 시간, 최초/후속 프롬프트의 UTF-8 크기, 호스트 도구 호출·입출력 크기, 실제 테스트 호출의 완료/중단 상태·명령별 시간을 제공합니다. 스키마 2는 기존 단계 이벤트에서 시각을 읽고, 마지막 재개부터 해당 단계 완료까지의 시간도 제공합니다. 단계 경과 시간에는 중단 대기가 포함되므로 호출·명령 실행 시간과 구분해 비교합니다. 도구 크기는 호스트 도구 객체를 UTF-8 JSON으로 직렬화한 크기이며 전체 프로토콜 전송량·모델 토큰 수와 동일하지 않습니다. 전체 컨텍스트·내부 추론 크기는 측정하지 않습니다. 모델·추론 설정이 `null`이면 실제 선택을 별도로 확인해야 하며 비교 키만으로 동일한 실행 조건을 보장하지 않습니다.
+
+실패·복구 호출을 제외하지 않으며 입력(캐시 포함)·캐시 입력·캐시 제외 입력·출력을 구분합니다. 캐시는 입력의 일부이므로 다시 더하지 않습니다. 구버전·누락 계측과 미확인 사용량은 `null`/`unknown`으로 남깁니다. 호출 수는 관측된 호출이며 누락된 호출을 0회로 확정하지 않습니다. 테스트 재요청 수와 실제 호출 기록을 대조해 재사용 여부를 확인하고, 코드 재작성의 필요성은 변경 이력과 함께 검토합니다. 같은 범위끼리의 개선과 전체→영향 범위 선택에 따른 검사량 변화는 분리합니다. 완료·동일 품질 근거가 확보된 결과끼리 실패 비용까지 포함해 비교하고, 토큰을 구독 잔여량·금액으로 환산하지 않습니다. 수동 세션 전환보다 효율적이라는 결론이나 절감률은 측정 전 확정하지 않습니다.
 
 ## 정적 GUI와 배포
 
@@ -269,7 +347,7 @@ uv build
 빌드 도구는 `apps/web/dist/`를 `src/dev_orchestra/_web/`로 복사하고 체크섬 manifest를 생성합니다. GUI가 포함된 wheel을 설치한 환경에서는 Node 없이 Python의 `web` extra로 실행할 수 있습니다. 소스 저장소의 `start.sh`는 매번 빌드하므로 Node가 필요하고, 설치된 패키지는 다음 통합 명령을 사용합니다.
 
 ```sh
-devorchestra --config config.yaml database-upgrade
+devorchestra --config config.yaml database-upgrade --workspace
 devorchestra --config config.yaml web start --detach --allow-root ~/projects --port 8000
 devorchestra --config config.yaml web-session
 devorchestra --config config.yaml web status

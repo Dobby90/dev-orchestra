@@ -121,6 +121,24 @@ function StepRow({
           </p>
           <code>입력 SHA: {step.input_sha}</code>
           <code>출력 SHA: {step.output_sha ?? "미상"}</code>
+          {!!step.commits?.length && (
+            <div>
+              <p>작업 단위 커밋 · 저장 완료 (테스트·리뷰 통과와 별도)</p>
+              <ul>
+                {step.commits.map((commit) => (
+                  <li key={commit.sha}>
+                    <code>{commit.sha}</code> {commit.summary}
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
+          {step.checkpoint_sha && (
+            <code>마지막 복구 지점: {step.checkpoint_sha}</code>
+          )}
+          {step.recovery && (
+            <p>보존된 변경 {step.preserved_changes}개 · 재개 시 근거 검증</p>
+          )}
         </details>
       </div>
     </li>

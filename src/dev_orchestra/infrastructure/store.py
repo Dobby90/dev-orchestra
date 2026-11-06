@@ -32,7 +32,7 @@ class Store:
             ).fetchone()
             if exists:
                 versions = [r[0] for r in db.execute("SELECT version FROM schema_version")]
-                if versions in ([3], [4], [5]):
+                if versions in ([3], [4], [5], [6]):
                     return
                 if versions not in ([1], [2]):
                     raise PipelineError("unsupported database schema version")
@@ -276,6 +276,16 @@ class Store:
             )
             return cursor.lastrowid, attempt
 
+    def resume_step(self, step):
+        with self.connection() as db:
+            row = db.execute("SELECT * FROM steps WHERE id=?", (step,)).fetchone()
+            if not row or row["status"] == "completed":
+                raise PipelineError("cannot reopen a completed or missing stage")
+            db.execute("UPDATE steps SET status='running',output_sha=NULL WHERE id=?", (step,))
+            if db.execute("SELECT version FROM schema_version").fetchone()[0] >= 5:
+                db.execute("UPDATE steps SET finished_at=NULL WHERE id=?", (step,))
+            self._event(db, row["run_id"], "step_resumed", {"step_id": step, "role": row["role"]})
+
     def finish_step(self, step, sha, data, status="completed"):
         with self.connection() as db:
             owner = db.execute("SELECT run_id FROM steps WHERE id=?", (step,)).fetchone()
@@ -365,3 +375,25 @@ class Store:
                 "UPDATE steps SET status='interrupted',data=? WHERE run_id=? AND status='running'",
                 (json.dumps({"error": reason, "finished_at": now()}), run_id),
             )
+
+
+class ReadOnlyStore(Store):
+    """Observe an existing database without initialization, upgrade or write authority."""
+
+    def __init__(self, path: Path):
+        self.path = path
+        self._transaction = ContextVar("readonly_transaction", default=None)
+        with self.connection() as db:
+            versions = [row[0] for row in db.execute("SELECT version FROM schema_version")]
+            if versions not in ([2], [3], [4], [5], [6]):
+                raise PipelineError("unsupported database schema version")
+
+    @contextmanager
+    def connection(self):
+        with lock(self.path.with_suffix(".maintenance.lock"), shared=True):
+            db = sqlite3.connect(self.path.resolve().as_uri() + "?mode=ro", uri=True, timeout=10)
+            db.row_factory = sqlite3.Row
+            try:
+                yield db
+            finally:
+                db.close()

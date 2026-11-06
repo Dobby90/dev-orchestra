@@ -7,10 +7,10 @@ from contextlib import nullcontext
 from pathlib import Path
 
 from dev_orchestra.agents.contracts import ResponseError, validate_role
-from dev_orchestra.agents.feedback import source_context
-from dev_orchestra.agents.policy import TestChangesRequired, apply_patch, validate_patch
 from dev_orchestra.application.test_changes import TestChangeService
+from dev_orchestra.application.workspace_recovery import WorkspaceBlocked
 from dev_orchestra.config import Config
+from dev_orchestra.domain.execution import execution_contract, writes_workspace
 from dev_orchestra.domain.models import AgentRequest, PipelineError, StopRequested
 from dev_orchestra.infrastructure.evidence import checkpoints, verified_candidate
 from dev_orchestra.infrastructure.files import contained, digest, write
@@ -70,18 +70,21 @@ class Runner:
                 return self.store.get(run_id)["control"]
 
             try:
-                with (
-                    lock(self.store.path.with_suffix(".worker.lock"), wait=True, stop=stop),
-                    lock(
-                        Git(Path(run["repo"])).common() / "devorchestra.lock", wait=True, stop=stop
-                    ),
-                ):
+                from dev_orchestra.infrastructure.coordination import execution_capacity
+
+                with execution_capacity(self.store.path, run, stop):
                     ensure_stopped(directory)
                     if claim:
                         from dev_orchestra.application.queue import QueueService
 
                         QueueService(self.store).running(*claim)
                         self.validate_registered_repository(run)
+                    execution_contract(run)
+                    with self.store.connection() as db:
+                        if db.execute("SELECT version FROM schema_version").fetchone()[0] != 6:
+                            raise PipelineError(
+                                "workspace-v2 requires schema 6; run database-upgrade --workspace"
+                            )
                     if hasattr(self.tests, "check_policy"):
                         self.tests.check_policy(Config.model_validate(run["config"]).tests)
                     if hasattr(self.agent, "check"):
@@ -96,6 +99,8 @@ class Runner:
                     self.store.update(run_id, "needs_input", error=str(cleanup_error))
                 else:
                     self.store.update(run_id, "cancelled" if str(error) == "cancel" else "paused")
+            except WorkspaceBlocked as error:
+                self.store.update(run_id, "needs_input", error=redact(str(error)))
             except Exception as error:
                 self.store.update(run_id, "failed", error=redact(str(error)))
             finally:
@@ -130,20 +135,42 @@ class Runner:
 
     def _execute(self, run_id):
         run = self.store.get(run_id)
+        execution_contract(run)
         if run["control"]:
             raise StopRequested(run["control"])
         config = Config.model_validate(run["config"])
         checkpoints(self.store, run)
         directory, worktree = Path(run["directory"]), Path(run["worktree"])
         original = Git(Path(run["repo"]))
+        if run.get("workspace_checkpoint") and not worktree.exists():
+            raise WorkspaceBlocked("recorded workspace is missing; refusing to recreate it")
         # Each repository mutation has an intent in the run record before it is attempted.
         if not worktree.exists():
             self.store.update(run_id, "preparing")
             original.create(worktree, run["branch"], run["base_sha"])
         git = Git(worktree, config.tests.output_paths)
         if git.call("branch", "--show-current") != run["branch"]:
+            if run.get("workspace_checkpoint"):
+                raise WorkspaceBlocked("recorded workspace branch changed; files preserved")
             raise PipelineError("worktree branch changed externally")
-        if git.dirty():
+        resumed_workspace = None
+        if run.get("workspace_checkpoint"):
+            from dev_orchestra.application.workspace_recovery import recover_workspace
+
+            try:
+                from dev_orchestra.infrastructure.coordination import metadata
+
+                with metadata(Path(run["repo"])):
+                    resumed_workspace = recover_workspace(self.store, run)
+                run = self.store.get(run_id)
+            except (PipelineError, ValueError, OSError, KeyError) as error:
+                self.store.update(
+                    run_id,
+                    "needs_input",
+                    error="workspace recovery blocked; files preserved: " + redact(str(error)),
+                )
+                return
+        if git.dirty() and not resumed_workspace:
             self.store.update(
                 run_id,
                 "needs_input",
@@ -189,7 +216,9 @@ class Runner:
                         directory / "preflight",
                         lambda: self.store.get(run_id)["control"],
                     )
-                    if git.dirty():
+                    if resumed_workspace:
+                        resumed_workspace.guard()
+                    elif git.dirty():
                         raise PipelineError(
                             "dependency preparation created untracked source files; changes preserved"
                         )
@@ -239,16 +268,55 @@ class Runner:
                             error="response repair budget exhausted or interrupted; inspect before continuing",
                         )
                         return
-                step_id, attempt = self.store.start_step(
-                    run_id,
-                    role,
-                    iteration,
-                    (run.get("test_change_application") or {}).get("input_sha", sha),
-                )
-                step_dir = (
-                    directory / "iterations" / f"{iteration:03}" / role / f"attempt-{attempt:03}"
-                )
+                if resumed_workspace:
+                    saved = resumed_workspace.data
+                    step_id = saved["step_id"]
+                    step = next(s for s in self.store.steps(run_id) if s["id"] == step_id)
+                    attempt = step["attempt"]
+                    step_dir = resumed_workspace.path.parent
+                    sha = saved["input_sha"]
+                else:
+                    if role in {
+                        "developer",
+                        "fixer",
+                        "tester",
+                    }:
+                        for previous in self.store.steps(run_id):
+                            if (
+                                previous["role"] == role
+                                and previous["iteration"] == iteration
+                                and previous.get("revision", 0) == run.get("revision", 0)
+                                and previous["status"] != "completed"
+                                and not previous["data"].get("artifact")
+                                and previous["id"] not in run.get("workspace_released_steps", [])
+                            ):
+                                old = (
+                                    directory
+                                    / "iterations"
+                                    / f"{iteration:03}"
+                                    / role
+                                    / f"attempt-{previous['attempt']:03}"
+                                    / "workspace-session.json"
+                                )
+                                if old.exists():
+                                    raise WorkspaceBlocked(
+                                        "legacy workspace checkpoint has no trusted snapshot; files preserved"
+                                    )
+                    step_id, attempt = self.store.start_step(
+                        run_id,
+                        role,
+                        iteration,
+                        (run.get("test_change_application") or {}).get("input_sha", sha),
+                    )
+                    step_dir = (
+                        directory
+                        / "iterations"
+                        / f"{iteration:03}"
+                        / role
+                        / f"attempt-{attempt:03}"
+                    )
                 context = {
+                    "execution_contract": execution_contract(run),
                     "prd": run["spec"],
                     "answers": run.get("answers", ""),
                     "clarifications": run.get("clarifications", []),
@@ -256,6 +324,8 @@ class Runner:
                     "review_contract": run.get("review_contract", 1),
                     "base_sha": run["base_sha"],
                     "test_paths": config.tests.write_paths,
+                    "test_scope": run.get("test_scope", "full"),
+                    "automatic_test_selection": run.get("test_selection_contract") == 2,
                     "test_commands": {k: v.model_dump() for k, v in config.tests.commands.items()},
                     "approved_test_changes": run.get("test_change_approvals", []),
                     "test_change_records": run.get("test_change_records", []),
@@ -285,81 +355,135 @@ class Runner:
                     input_sha=sha,
                     context=context,
                 )
+                from dev_orchestra.application.test_selection import select_tests
+
+                selection = (
+                    select_tests(run, worktree, git.sha())
+                    if role == "tester" and run.get("test_selection_contract")
+                    else None
+                )
+                if selection:
+                    request.context["test_selection"] = selection
+                if role == "fixer" and run.get("review_contract") == 2:
+                    from dev_orchestra.application.reviews import Reviews
+
+                    request.context["open_issues"] = Reviews(self.store).open(run_id)
+                from dev_orchestra.agents.context import role_context
+
+                role_context(request)
                 approval, record = None, None
+                workspace, workspace_commits, workspace_execution = None, [], None
+                if writes_workspace(request):
+                    from dev_orchestra.infrastructure.workspace import WorkspaceSession
+
+                    if not hasattr(self.agent, "run_workspace"):
+                        raise PipelineError("agent adapter does not support workspace contract")
+                    workspace = resumed_workspace or WorkspaceSession.create(
+                        self.store, run, request, step_id, step_dir
+                    )
+                    resumed_workspace = None
+                    workspace._test_runner = self.tests
                 test_changes = TestChangeService(self.store)
-                if run.get("test_change_application"):
-                    result, record, approval = test_changes.applied_result(run)
-                elif run.get("test_change_proposal"):
-                    if run["test_change_proposal"].get("approval"):
-                        result, approval = test_changes.approved_result(run)
+                if run.get("test_change_proposal"):
+                    raise PipelineError("historical test change proposals cannot be executed")
+                feedback = run.get("response_feedback")
+                if feedback and feedback.get("key") == repair_key:
+                    self.store.update(run_id, response_retry_inflight=repair_key)
+                    request.context["response_feedback"] = feedback
+                request.context["response_contract"] = {
+                    "input_sha": sha,
+                    "criterion_ids": [c["id"] for c in run.get("criteria", [])],
+                    "command_ids": list(config.tests.commands),
+                }
+                if workspace:
+                    request.context["response_contract"]["edit_tool"] = "workspace.edit_file"
+                    if role == "tester":
+                        request.context["response_contract"]["run_tests_tool"] = (
+                            "workspace.run_tests"
+                        )
+                        request.context["response_contract"]["command_ids"] = (
+                            selection["included"] if selection else list(config.tests.commands)
+                        )
                     else:
-                        _, result = test_changes.load(run)
-                    if sha != run["test_change_proposal"]["input_sha"]:
-                        raise PipelineError("saved test change input SHA changed")
-                else:
-                    feedback = run.get("response_feedback")
-                    if feedback and feedback.get("key") == repair_key:
-                        self.store.update(run_id, response_retry_inflight=repair_key)
-                        request.context["response_feedback"] = feedback
-                    request.context["response_contract"] = {
-                        "input_sha": sha,
-                        "criterion_ids": [c["id"] for c in run.get("criteria", [])],
-                        "command_ids": list(config.tests.commands),
-                        "patch_format": "Git unified diff with ---/+++ and @@ hunks; never *** markers",
-                    }
-                    result = None
-                    try:
+                        request.context["response_contract"]["checkpoint_tool"] = (
+                            "workspace.checkpoint_commit"
+                        )
+                if role == "tester" and run.get("test_selection_contract") == 2:
+                    request.context["response_contract"].pop("command_ids", None)
+                    request.context["response_contract"]["available_command_ids"] = list(
+                        config.tests.commands
+                    )
+                result = None
+                try:
+                    if workspace:
+                        result, workspace_sha, workspace_commits, workspace_execution = (
+                            self.run_workspace_stage(
+                                request,
+                                step_dir,
+                                workspace,
+                                config,
+                            )
+                        )
+                        if workspace_execution:
+                            selection = workspace_execution["selection"]
+                    elif (
+                        role == "reviewer"
+                        and run.get("test_selection_contract")
+                        and hasattr(self.agent, "run_readonly")
+                    ):
+                        from dev_orchestra.infrastructure.workspace import ReviewEvidenceSession
+
+                        readonly = ReviewEvidenceSession.create(self.store, run, step_id, step_dir)
+                        request.context["test_evidence_id"] = readonly.data["evidence_id"]
+                        result = self.agent.run_readonly(
+                            request,
+                            step_dir,
+                            readonly,
+                            lambda: self.store.get(run_id)["control"],
+                        )
+                    else:
                         result = self.agent.run(
                             request, step_dir, lambda: self.store.get(run_id)["control"]
                         )
-                        if git.sha() != sha or git.dirty():
-                            raise PipelineError("read-only agent changed the worktree")
-                        validate_role(role, result)
-                        if not result.questions:
-                            if role == "tester":
-                                self.validate_test_result(run, result, config)
-                            try:
-                                validate_patch(
-                                    worktree, result.patch, role, config.tests.write_paths
-                                )
-                            except TestChangesRequired as protected:
-                                test_changes.explanations(run, result, protected.paths)
-                    except ResponseError as error:
-                        if git.sha() != sha or git.dirty():
-                            raise PipelineError(
-                                "candidate changed during response repair"
-                            ) from error
-                        feedback = {
-                            "key": repair_key,
-                            "input_sha": sha,
-                            "error": redact(str(error))[:4000],
-                            "current_files": sanitize(source_context(worktree, result.patch))
-                            if result
-                            else [],
-                        }
-                        with self.store.transaction():
-                            self.store.finish_step(
-                                step_id, sha, {"error": feedback["error"]}, status="failed"
-                            )
-                            self.store.update(
-                                run_id,
-                                response_feedback=feedback,
-                                response_retry_inflight=None,
-                                response_failures={
-                                    **run.get("response_failures", {}),
-                                    repair_key: failures + 1,
-                                },
-                            )
-                        if failures >= config.workflow.response_retries:
-                            self.store.update(
-                                run_id,
-                                "needs_input",
-                                error="response repair budget exhausted: " + feedback["error"],
-                            )
-                            return
-                        continue
-                    self.store.update(run_id, response_feedback=None, response_retry_inflight=None)
-                if git.sha() != sha or git.dirty():
+                    if not workspace and (git.sha() != sha or git.dirty()):
+                        raise PipelineError("read-only agent changed the worktree")
+                    validate_role(role, result)
+                except ResponseError as error:
+                    if workspace:
+                        raise PipelineError(
+                            "workspace response invalid; confirmed commits and edits preserved"
+                        ) from error
+                    if git.sha() != sha or git.dirty():
+                        raise PipelineError("candidate changed during response repair") from error
+                    feedback = {
+                        "key": repair_key,
+                        "input_sha": sha,
+                        "error": redact(str(error))[:4000],
+                        "current_files": [],
+                    }
+                    with self.store.transaction():
+                        self.store.finish_step(
+                            step_id, sha, {"error": feedback["error"]}, status="failed"
+                        )
+                        self.store.update(
+                            run_id,
+                            response_feedback=feedback,
+                            response_retry_inflight=None,
+                            response_failures={
+                                **run.get("response_failures", {}),
+                                repair_key: failures + 1,
+                            },
+                        )
+                    if failures >= config.workflow.response_retries:
+                        self.store.update(
+                            run_id,
+                            "needs_input",
+                            error="response repair budget exhausted: " + feedback["error"],
+                        )
+                        return
+                    continue
+                self.store.update(run_id, response_feedback=None, response_retry_inflight=None)
+                if not workspace and (git.sha() != sha or git.dirty()):
                     raise PipelineError("read-only agent changed the worktree")
                 if result.questions:
                     changes = {"questions": result.questions}
@@ -388,26 +512,22 @@ class Runner:
                             raise PipelineError("review finding has invalid source location")
                         if not issue.evidence.strip():
                             raise PipelineError("review finding requires evidence")
-                if role == "tester":
-                    self.validate_test_result(run, result, config)
-                if not run.get("test_change_application"):
-                    try:
-                        patched_paths = apply_patch(
-                            worktree, result.patch, role, config.tests.write_paths
+                if workspace:
+                    workspace.guard()
+                    out_sha = workspace_sha
+                    patched_paths = list(
+                        filter(
+                            None, git.call("diff", "--name-only", "-z", sha, out_sha).split("\0")
                         )
-                    except TestChangesRequired as error:
-                        record = test_changes.prepare(run, result, error.paths)
-                        patched_paths = apply_patch(
-                            worktree,
-                            result.patch,
-                            role,
-                            config.tests.write_paths,
-                            approved_patch_hash=approval["patch_hash"] if approval else None,
-                            validated_patch_hash=record["patch_hash"],
-                        )
-                    out_sha = git.commit(
-                        f"자동 개발: {run_id} {role} 회차 {iteration} 단계 {step_id}"
                     )
+                    if run.get("test_change_application"):
+                        _, record, approval = test_changes.applied_result(run)
+                    elif result.test_changes:
+                        record = test_changes.prepare(
+                            run | {"current_sha": workspace.data["input_sha"]},
+                            result,
+                            [change.file for change in result.test_changes],
+                        )
                 else:
                     out_sha, patched_paths = sha, []
                 if patched_paths:
@@ -457,14 +577,23 @@ class Runner:
                 else:
                     self.store.update(run_id, current_sha=out_sha)
                 payload = result.model_dump() | {"sha": out_sha, "revision": run.get("revision", 0)}
+                if workspace:
+                    payload["workspace_commits"] = workspace_commits
                 if approval:
                     payload["test_change_approval"] = approval
                 if record:
                     payload["test_change_record"] = record
                 if role == "tester":
-                    payload["execution"] = self.tests.run(
-                        worktree, config.tests, step_dir, lambda: self.store.get(run_id)["control"]
-                    )
+                    if workspace_execution:
+                        payload["execution"] = workspace_execution["execution"]
+                        payload["test_evidence_reference"] = workspace.data["test_evidence"]
+                    else:
+                        raise PipelineError("tester requires host workspace evidence")
+                    if selection:
+                        payload["test_selection"] = selection
+                        from dev_orchestra.application.test_selection import verify_selection
+
+                        verify_selection(run, payload)
                     if git.dirty() or git.sha() != out_sha:
                         raise PipelineError(
                             "test execution modified tracked source or created untracked files"
@@ -480,7 +609,8 @@ class Runner:
                     "timeout",
                 }
                 atomic_result = (
-                    bool(record)
+                    bool(workspace)
+                    or bool(record)
                     or results.enabled()
                     and (
                         role == "tester" or (role == "reviewer" and run.get("review_contract") == 2)
@@ -509,6 +639,8 @@ class Runner:
                         self.store.finish_step(step_id, out_sha, evidence)
                     if record:
                         self.store.update(run_id, test_change_application=None)
+                    if workspace:
+                        self.store.update(run_id, workspace_checkpoint=None)
                 write(directory / FILES[role], payload)
                 if failed_test:
                     failures = [
@@ -529,15 +661,132 @@ class Runner:
             if self.store.get(run_id)["state"] in {"needs_input", "waiting_plan_approval"}:
                 return
 
+    def run_workspace_stage(self, request, directory, session, config):
+        from dev_orchestra.agents.contracts import ResponseError
+
+        while True:
+            session.reload()
+            session.guard()
+            data = session.data
+            try:
+                if data.get("response") is not None:
+                    response = session.saved_response()
+                else:
+                    if data.get("repair_pending"):
+                        if data.get("repair_calls", 0) >= config.workflow.response_retries:
+                            raise WorkspaceBlocked(
+                                "workspace response repair budget exhausted; checkpoint preserved"
+                            )
+                        data["repair_calls"] = data.get("repair_calls", 0) + 1
+                        session.save()
+                    if request.role == "tester":
+                        request.context["test_selection"] = session.test_policy()
+                        policy = request.context["test_selection"]
+                        if policy.get("selection_hash") or policy.get("selector_version") != 2:
+                            request.context["response_contract"]["command_ids"] = policy["included"]
+                        else:
+                            request.context["response_contract"].pop("command_ids", None)
+                            request.context["response_contract"]["available_command_ids"] = list(
+                                config.tests.commands
+                            )
+                    request.context["workspace_resume"] = {
+                        "continuing": data.get("continuing", False),
+                        "metadata_only": data.get("metadata_only", False),
+                        "candidate_sha": session.git.sha(),
+                        "completed_units": [c["summary"][:1000] for c in data["commits"][-5:]],
+                        "preserved_files": {
+                            name: value
+                            for name, value in data["files"].items()
+                            if value != data["initial"].get(name)
+                        },
+                        "remaining": data.get(
+                            "response_error",
+                            "Continue only the unfinished work on the preserved files.",
+                        ),
+                        "test_evidence": data.get("test_evidence"),
+                    }
+                    response = self.agent.run_workspace(
+                        request,
+                        directory,
+                        session,
+                        lambda: self.store.get(request.run_id)["control"],
+                    )
+                    session.capture_response(response)
+                result, sha, commits = session.finish(response)
+                validate_role(request.role, result)
+                execution = None
+                if request.role == "tester" and not result.questions:
+                    execution = session.load_test_result(response)
+                    self.validate_test_result(
+                        self.store.get(request.run_id), result, config, execution["selection"]
+                    )
+                return result, sha, commits, execution
+            except ResponseError as error:
+                try:
+                    session.reload()
+                    session.guard()
+                except PipelineError as boundary:
+                    raise WorkspaceBlocked(str(boundary)) from boundary
+                session.data.update(
+                    response=None,
+                    metadata_only=(
+                        request.role != "tester"
+                        or bool(session.data.get("test_evidence"))
+                        and not session.changed_files()
+                        and session.read_test_payload()["sha"] == session.git.sha()
+                    ),
+                    repair_pending=True,
+                    continuing=True,
+                    response_error=redact(str(error))[:4000],
+                )
+                session.save()
+                # Completed work stays locked; a Tester without evidence can still run tests.
+                continue
+            except StopRequested:
+                raise
+            except PipelineError:
+                try:
+                    session.reload()
+                    session.guard()
+                except PipelineError as boundary:
+                    raise WorkspaceBlocked(str(boundary)) from boundary
+                raise
+
     @staticmethod
-    def validate_test_result(run, result, config):
-        ids = set(config.tests.commands)
-        if set(result.command_ids) != ids or len(result.command_ids) != len(ids):
+    def validate_test_result(run, result, config, selection=None):
+        if run.get("test_selection_contract") == 2 and not (selection or {}).get("selection_hash"):
+            plan_ids = [item.command_id for item in result.test_plan]
+            if (
+                not plan_ids
+                or len(plan_ids) != len(set(plan_ids))
+                or not set(plan_ids) <= set(config.tests.commands)
+                or any(not item.reason.strip() for item in result.test_plan)
+            ):
+                raise ResponseError(
+                    "automatic tester requires a unique configured test_plan with reasons"
+                )
+            ids = {item.command_id for item in result.test_plan}
+            ids |= {key for key, cmd in config.tests.commands.items() if cmd.kind == "check"}
+            if config.tests.affected:
+                ids |= set(config.tests.affected.required_commands)
+                while True:
+                    expanded = ids | {
+                        key
+                        for key, deps in config.tests.affected.dependencies.items()
+                        if set(deps) & ids
+                    }
+                    if expanded == ids:
+                        break
+                    ids = expanded
+        else:
+            ids = set(selection["included"]) if selection else set(config.tests.commands)
+        reported_ids = ids
+        if set(result.command_ids) != reported_ids or len(result.command_ids) != len(reported_ids):
             raise ResponseError(
-                f"tester command_ids mismatch: expected={sorted(ids)}, received={result.command_ids}"
+                f"tester command_ids mismatch: expected={sorted(reported_ids)}, received={result.command_ids}"
             )
         criteria = {c["id"] for c in run["criteria"]}
-        test_ids = {k for k, v in config.tests.commands.items() if v.kind == "test"}
+        test_ids = {k for k, v in config.tests.commands.items() if v.kind == "test" and k in ids}
         coverage = {c.criterion_id: c.command_ids for c in result.coverage}
         if (
             len(result.coverage) != len(criteria)
@@ -551,6 +800,17 @@ class Runner:
                 f"allowed_commands={sorted(ids)}, received_commands={coverage}; "
                 "include each criterion exactly once with at least one configured test command"
             )
+        if (
+            selection
+            and selection.get("selector_version") == 1
+            and selection["actual_scope"] == "affected"
+        ):
+            mapping = config.tests.affected.criterion_commands
+            if any(
+                not set(commands) & set(mapping[key]) & test_ids
+                for key, commands in coverage.items()
+            ):
+                raise ResponseError("coverage must reference the host criterion-to-test mapping")
 
     def advance(self, run_id, role, payload, config):
         run = self.store.get(run_id)
@@ -621,6 +881,7 @@ class Runner:
                 "base",
                 "base_sha",
                 "current_sha",
+                "final_sha",
                 "state",
                 "iteration",
                 "revision",
@@ -628,22 +889,46 @@ class Runner:
                 "questions",
             ]
         }
-        content = "# DevOrchestra report\n\n" + "\n".join(
+        from dev_orchestra.application.reporting import result_markdown
+
+        content = result_markdown(self.store, run, steps)
+        content += "\n## 승인·인계 정보\n\n" + "\n".join(
             f"- **{k}**: {v}" for k, v in summary.items()
         )
-        content += "\n\n## Requirements\n\n" + run["spec"]
-        if run.get("directives"):
-            content += "\n\n## User change requests\n\n" + "\n\n".join(run["directives"])
+        from dev_orchestra.application.handoff import handoff_markdown
+
+        content += handoff_markdown(run)
+        content += "\n\n리뷰 범위: Run 누적 변경과 직접 영향을 받는 코드·호출부·기존 미해결 이슈.\n"
+        content += "\n\n## 테스트 범위\n\n요청 범위: " + run.get("test_scope", "full")
+        selection = (run.get("test_result") or {}).get("test_selection")
+        if selection:
+            content += "\n\n실제 범위: " + selection["actual_scope"]
+            content += "\n\n실행 명령: " + ", ".join(selection["included"])
+            content += "\n\n미실행 명령: " + (", ".join(selection["excluded"]) or "없음")
+            content += "\n\n" + "\n".join(selection["reasons"])
+            content += "\n\n" + "\n".join(
+                key + ": " + value for key, value in selection.get("command_reasons", {}).items()
+            )
         if run.get("test_change_records"):
             content += "\n\n## 기존 테스트 변경\n\n최종 승인 전에 전체 Diff와 다음 변경 근거를 확인하세요.\n\n"
             for record in run["test_change_records"]:
                 for change in record["changes"]:
                     content += f"- `{change['file']}` ({', '.join(change['criterion_ids'])}): {change['reason']}\n"
-        content += "\n\n## Implementation and verification history\n\n"
+        content += "\n\n## 부록: 원문 요구사항\n\n" + run["spec"]
+        if run.get("directives"):
+            content += "\n\n## 부록: 사용자 수정 요청\n\n" + "\n\n".join(run["directives"])
+        content += "\n\n## 부록: 구현·검증 이력\n\n"
         for step in steps:
             content += f"- {step['role']} iteration={step['iteration']} attempt={step['attempt']} {step['status']} SHA={step['output_sha']}\n"
+            from dev_orchestra.application.progress import role_progress
+
+            progress = role_progress(self.store, run, step)
+            for commit in progress["commits"]:
+                content += f"  - 작업 단위 커밋 `{commit['sha']}`: {commit['summary']} (저장 완료, 검증 통과와 별도)\n"
+            if progress["checkpoint_sha"]:
+                content += f"  - 마지막 복구 지점 `{progress['checkpoint_sha']}` · 보존 변경 {progress['preserved_changes']}개 · 재개 방식 {progress['recovery']}\n"
         content += (
-            "\n## Test and review results\n\n```json\n"
+            "\n## 부록: 원본 테스트·리뷰 결과\n\n```json\n"
             + json.dumps(
                 {"tests": run.get("test_result"), "review": run.get("review_result")},
                 indent=2,
@@ -651,14 +936,9 @@ class Runner:
             )
             + "\n```\n"
         )
-        if Path(run["worktree"]).exists():
-            try:
-                content += "\n## Changed files\n\n" + Git(Path(run["worktree"])).call(
-                    "diff", "--name-only", f"{run['base_sha']}...HEAD"
-                )
-            except PipelineError:
-                pass
-        content += "\n\n## Remaining risks\n\nReview findings and missing/failed verification above remain actionable. Automatic review cannot prove absence of defects.\n\nHuman approval is required; no push or merge is performed.\n"
+        content += (
+            "\n\n자동 리뷰는 결함 부재를 보장하지 않습니다. Push·Merge는 자동 수행하지 않습니다.\n"
+        )
         content = redact(content)
         write(Path(run["directory"]) / "metadata.json", summary)
         write(Path(run["directory"]) / "final-report.md", content)

@@ -14,6 +14,7 @@ const run = {
   iteration: 1,
 } as RunDetail;
 const step: Schema["StepView"] = {
+  preserved_changes: 0,
   id: 42,
   run_id: "r",
   role: "tester",
@@ -159,4 +160,29 @@ it("접힌 현재 회차를 펼쳐 이동하고 이후 갱신에는 위치를 �
   await waitFor(() => expect(scroll).toHaveBeenCalledTimes(1));
   view.rerender(node());
   expect(scroll).toHaveBeenCalledTimes(1);
+});
+
+it("중간 커밋과 복구 지점을 검증 통과와 구분해 단계 상세에 표시한다", () => {
+  wrap(
+    <WorkflowTimeline
+      run={run}
+      items={[
+        {
+          ...step,
+          role: "developer",
+          commits: [{ sha: "checkpoint-sha", summary: "작업 저장" }],
+          checkpoint_sha: "checkpoint-sha",
+          preserved_changes: 2,
+          recovery: "same_role",
+        },
+      ]}
+      onSelect={vi.fn()}
+    />,
+  );
+  fireEvent.click(screen.getByText("시간·SHA 상세"));
+  expect(
+    screen.getByText(/저장 완료 \(테스트·리뷰 통과와 별도\)/),
+  ).toBeVisible();
+  expect(screen.getByText("마지막 복구 지점: checkpoint-sha")).toBeVisible();
+  expect(screen.getByText(/보존된 변경 2개/)).toBeVisible();
 });

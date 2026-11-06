@@ -98,10 +98,32 @@ class TestCommand(Model):
         return self
 
 
+class AffectedTests(Model):
+    inputs: dict[str, list[str]] = Field(default_factory=dict)
+    dependencies: dict[str, list[str]] = Field(default_factory=dict)
+    required_commands: list[str] = Field(default_factory=list)
+    criterion_commands: dict[str, list[str]] = Field(default_factory=dict)
+    global_paths: list[str] = Field(
+        default_factory=lambda: [
+            "pyproject.toml",
+            "*lock*",
+            "**/*lock*",
+            "package.json",
+            "**/package.json",
+            "*config*",
+            "**/*config*",
+            "**/migrations/**",
+            "**/auth/**",
+            "**/security/**",
+        ]
+    )
+
+
 class Tests(Model):
     commands: dict[str, TestCommand] = Field(default_factory=dict)
     write_paths: list[str] = Field(default_factory=lambda: ["tests"])
     output_paths: list[str] = Field(default_factory=lambda: [".pytest_cache", "build", "target"])
+    affected: AffectedTests | None = None
 
     @model_validator(mode="after")
     def validate_tests(self):
@@ -120,6 +142,18 @@ class Tests(Model):
         reports = [c.junit_report for c in self.commands.values() if c.junit_report]
         if len(reports) != len(set(reports)):
             raise ValueError("test commands must use distinct JUnit report paths")
+        if self.affected:
+            policy = self.affected
+            ids = set(self.commands)
+            references = (
+                set(policy.inputs) | set(policy.dependencies) | set(policy.required_commands)
+            )
+            references.update(x for values in policy.dependencies.values() for x in values)
+            references.update(x for values in policy.criterion_commands.values() for x in values)
+            if not references <= ids:
+                raise ValueError("affected policy references unknown command IDs")
+            for pattern in [*policy.global_paths, *[p for v in policy.inputs.values() for p in v]]:
+                relative_path(pattern)
         return self
 
 

@@ -91,7 +91,14 @@ def prepare_npm_cache(worktree, locked, directory, stop):
     cache.mkdir(parents=True, exist_ok=True)
     if any(p.is_symlink() for p in [cache, *cache.parents]):
         raise PipelineError("npm cache symlinks denied")
-    with tempfile.TemporaryDirectory(prefix="devorchestra-npm-cache-") as temp:
+    from dev_orchestra.infrastructure.coordination import host_root, slot
+    from dev_orchestra.infrastructure.process import execution_directory, execution_scope
+
+    with (
+        slot(host_root() / "npm-cache", execution_directory() or directory, stop, limit=1),
+        execution_scope(execution_directory() or directory),
+        tempfile.TemporaryDirectory(prefix="devorchestra-npm-cache-") as temp,
+    ):
         scratch = Path(temp).resolve()
         env = environment() | {
             "HOME": str(scratch),

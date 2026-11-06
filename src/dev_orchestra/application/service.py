@@ -7,10 +7,13 @@ from dev_orchestra.application.approvals import ApprovalService
 from dev_orchestra.application.contracts import CreateRun, RepositoryInfo
 from dev_orchestra.application.events import EventService
 from dev_orchestra.application.execution import ExecutionService
+from dev_orchestra.application.handoff import repository_identity, verify_branch
 from dev_orchestra.application.queries import RunQueryService
 from dev_orchestra.application.recovery import RecoveryService
 from dev_orchestra.config import Config
+from dev_orchestra.domain.execution import WORKSPACE_V2
 from dev_orchestra.domain.models import PipelineError
+from dev_orchestra.infrastructure.coordination import metadata
 from dev_orchestra.infrastructure.evidence import checkpoints
 from dev_orchestra.infrastructure.files import digest, write
 from dev_orchestra.infrastructure.git import Git
@@ -30,8 +33,19 @@ class RunService:
         self.recovery = RecoveryService(self.store, self.refresh_report)
         self.execution = ExecutionService(self.store, self.status)
 
-    def create(self, repo: Path, spec: Path, base=None, max_fixes=None):
-        command = CreateRun(repo=repo, spec=spec, base=base, max_fixes=max_fixes)
+    def default_execution_contract(self):
+        with self.store.connection() as db:
+            version = db.execute("SELECT version FROM schema_version").fetchone()[0]
+        if version != 6:
+            raise PipelineError(
+                "workspace-v2 requires schema 6; stop services and run database-upgrade --workspace"
+            )
+        return WORKSPACE_V2
+
+    def create(self, repo: Path, spec: Path, base=None, max_fixes=None, test_scope="full"):
+        command = CreateRun(
+            repo=repo, spec=spec, base=base, max_fixes=max_fixes, test_scope=test_scope
+        )
         return self.create_run(command)
 
     def create_run(self, command: CreateRun):
@@ -81,6 +95,10 @@ class RunService:
             if path.resolve().is_relative_to(root.resolve()):
                 raise PipelineError("storage and worktrees must be outside the target repository")
         data = {
+            "repository_identity": repository_identity(repo),
+            "test_scope": command.test_scope,
+            "test_selection_contract": 2 if command.test_scope == "affected" else 1,
+            "execution_contract": self.default_execution_contract(),
             "id": run_id,
             "repo": str(repo),
             "base": base,
@@ -123,7 +141,25 @@ class RunService:
             raise PipelineError("discard the saved test change proposal before adding instructions")
         ensure_stopped(Path(run["directory"]))
         checkpoints(self.store, run)
-        changes = {}
+        release_checkpoint = False
+        if run.get("workspace_checkpoint"):
+            from dev_orchestra.application.workspace_recovery import inspect_workspace
+
+            session, _ = inspect_workspace(self.store, run)
+            if answers and answers.strip():
+                if session.data["commits"] or session.data["files"] != session.data["initial"]:
+                    raise PipelineError(
+                        "unfinished workspace requirements are bound to its checkpoint; preserve files and create a new Run for changed requirements"
+                    )
+                release_checkpoint = True
+        changes = {"workspace_checkpoint": None} if release_checkpoint else {}
+        if release_checkpoint:
+            # Retire only the inspected, unedited attempt. Its files remain as
+            # history; unrelated untrusted sessions must still block recovery.
+            changes["workspace_released_steps"] = [
+                *run.get("workspace_released_steps", []),
+                session.data["step_id"],
+            ]
         if answers is not None and answers.strip():
             previous = run.get("answers", "")
             changes["answers"] = "\n\n".join(part for part in [previous, answers] if part)
@@ -274,7 +310,11 @@ class RunService:
     def cleanup(self, run_id, expected_version=None, *, operation=None):
         run = self.store.get(run_id)
         directory = Path(run["directory"])
-        with lock(directory / "execution.lock"), execution_scope(directory):
+        with (
+            lock(directory / "execution.lock"),
+            execution_scope(directory),
+            metadata(Path(run["repo"]), directory),
+        ):
             run = self.store.get(run_id)
             # An operation may have committed removal before its caller crashed.
             applied = run.get("worktree_removed") and (
@@ -285,12 +325,16 @@ class RunService:
             if run["state"] not in {"completed", "cancelled", "failed", "needs_input"}:
                 raise PipelineError("active run cannot be cleaned up")
             ensure_stopped(directory)
+            if run["state"] == "completed":
+                verify_branch(run, run["final_sha"], worktree=Path(run["worktree"]).exists())
             from dev_orchestra.application.results import Results
 
             if Path(run["worktree"]).exists():
                 if run.get("current_sha"):
                     Results(self.store).save_snapshot(run_id, run["current_sha"])
-                Git(Path(run["repo"])).remove(Path(run["worktree"]))
+                # Already inside the short metadata lock: do not reacquire the
+                # non-reentrant serialized Git.remove wrapper.
+                Git(Path(run["repo"])).call("worktree", "remove", run["worktree"])
             with self.store.transaction() as db:
                 if not run.get("worktree_removed") or run.get("cleanup_requested"):
                     self.store.update(

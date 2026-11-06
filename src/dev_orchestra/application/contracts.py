@@ -17,6 +17,7 @@ class CreateRun(Contract):
     spec: Path
     base: str | None = None
     max_fixes: int | None = Field(default=None, ge=0, strict=True)
+    test_scope: Literal["full", "affected"] = "full"
 
 
 class ApprovalCommand(Contract):
@@ -30,6 +31,8 @@ class RunSummary(Contract):
     id: str
     state: State
     version: int
+    created_at: str | None = None
+    completed_at: str | None = None
     branch: str | None = None
     base_sha: str | None = None
     current_sha: str | None = None

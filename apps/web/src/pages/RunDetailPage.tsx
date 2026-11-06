@@ -37,6 +37,7 @@ import { LogViewer } from "../components/LogViewer";
 import { AgentUsagePanel } from "../components/AgentUsagePanel";
 import { WorkflowTimeline } from "../components/WorkflowTimeline";
 import { DeleteRunButton } from "../components/DeleteRunButton";
+import { RunHandoffPanel } from "../components/RunHandoffPanel";
 import { TestChangePanel } from "../components/TestChangePanel";
 import { useRunEvents } from "../hooks/events";
 type Action =
@@ -246,15 +247,12 @@ function RunDetailBody({ rid }: { rid: string }) {
       </Heading>
       <div className="run-overview panel">
         <div>
-          <span className="subtle">Feature 브랜치</span>
-          <strong className="mono">
-            <GitBranch size={14} />
-            {r.branch ?? "준비 중"}
+          <span className="subtle">테스트 범위</span>
+          <strong>
+            {r.test_scope === "affected"
+              ? "변경 영향 범위 테스트"
+              : "전체 테스트"}
           </strong>
-        </div>
-        <div>
-          <span className="subtle">기준 브랜치</span>
-          <strong>{r.base_branch ?? "기록 없음"}</strong>
         </div>
         <div>
           <span className="subtle">수정 회차</span>
@@ -269,6 +267,17 @@ function RunDetailBody({ rid }: { rid: string }) {
               ? new Date(r.created_at).toLocaleString("ko-KR")
               : "기록 없음"}
           </strong>
+        </div>
+        <div className="run-branch">
+          <span className="subtle">Feature 브랜치</span>
+          <strong className="mono">
+            <GitBranch size={14} />
+            <span>{r.branch ?? "준비 중"}</span>
+          </strong>
+        </div>
+        <div className="run-branch">
+          <span className="subtle">기준 브랜치</span>
+          <strong>{r.base_branch ?? "기록 없음"}</strong>
         </div>
       </div>
       <div className="run-actions">
@@ -489,6 +498,7 @@ function RunDetailBody({ rid }: { rid: string }) {
           {operation.data.error && ` · ${operation.data.error}`}
         </p>
       )}
+      <RunHandoffPanel run={r} />
       <section className="panel timeline-panel">
         <div className="panel-heading">
           <h2>워크플로 타임라인</h2>
@@ -683,7 +693,8 @@ function RunDetailBody({ rid }: { rid: string }) {
             {action?.kind === "cleanup" && (
               <p className="notice">
                 격리된 Worktree를 제거하고 브랜치·보존된 결과와 변경 이력은
-                유지합니다.
+                유지합니다. 정리 후 이 작업은 재개할 수 없습니다. 공통 Git
+                객체·로그·캐시 전체를 삭제하지 않습니다.
               </p>
             )}
             {action?.kind === "request-changes" ? (

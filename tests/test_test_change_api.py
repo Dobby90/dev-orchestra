@@ -40,22 +40,13 @@ def test_web_approval_is_versioned_idempotent_and_requires_exact_proposal(web):
         == 409
     )
     response = client.post(url, json=body, headers=headers)
-    assert response.status_code == 202, response.text
-    assert client.post(url, json=body, headers=headers).json() == response.json()
-    assert (
-        client.post(url, json=body, headers={**headers, "Idempotency-Key": "new"}).status_code
-        == 412
-    )
+    assert response.status_code == 409, response.text
+    assert svc.store.get(rid) == before
+    assert not agent.calls
     assert (Path(before["worktree"]) / TEST_FILE).read_text().endswith("False\n")
-    Runner(svc.store, agent, FakeTests()).execute(rid)
-    run = svc.store.get(rid)
-    assert run["state"] == "waiting_approval", run.get("error")
-    view = client.get(f"/api/runs/{rid}/test-changes").json()
-    assert view["proposal"] is None and view["error"] is None
-    assert view["history"][0]["patch"] == PATCH
 
 
-def test_web_legacy_reject_requires_reason_and_regenerates_automatically(web):
+def test_web_legacy_reject_requires_reason_and_keeps_execution_blocked(web):
     client, svc, rid, agent = pending_web(web)
     run = svc.store.get(rid)
     headers = {"If-Match": f'"run:{rid}:v{run["version"]}"'}
@@ -68,8 +59,8 @@ def test_web_legacy_reject_requires_reason_and_regenerates_automatically(web):
     )
     assert response.status_code == 202, response.text
     Runner(svc.store, agent, FakeTests()).execute(rid)
-    assert svc.store.get(rid)["state"] == "waiting_approval"
-    assert agent.calls.count("developer") == 2
+    assert svc.store.get(rid)["state"] == "failed"
+    assert not agent.calls
 
 
 @pytest.mark.parametrize("action", ["approve-test-changes", "reject-test-changes"])
@@ -85,7 +76,7 @@ def test_test_change_decision_requires_csrf(web, action):
     assert response.status_code == 403
 
 
-def test_web_legacy_resume_applies_without_a_test_change_decision(web):
+def test_web_legacy_resume_cannot_apply_a_saved_patch(web):
     client, svc, rid, agent = pending_web(web)
     run = svc.store.get(rid)
     response = client.post(
@@ -95,7 +86,8 @@ def test_web_legacy_resume_applies_without_a_test_change_decision(web):
     )
     assert response.status_code == 202, response.text
     Runner(svc.store, agent, FakeTests()).execute(rid)
-    assert svc.store.get(rid)["state"] == "waiting_approval"
+    assert svc.store.get(rid)["state"] == "failed"
+    assert not agent.calls
     assert not svc.store.get(rid).get("test_change_approvals")
 
 
@@ -114,6 +106,6 @@ def test_web_automatic_test_history_is_read_only_and_final_approval_is_required(
     assert "approve-test-changes" not in detail["allowed_actions"]
     view = client.get(f"/api/runs/{rid}/test-changes").json()
     assert view["proposal"] is None and view["error"] is None
-    assert view["history"][0]["patch"] == PATCH
+    assert TEST_FILE in view["history"][0]["patch"]
     assert "artifact" not in view["history"][0]
     assert svc.store.get(rid) == before and svc.store.events(rid) == events

@@ -7,6 +7,7 @@ import { TestChangePanel } from "../src/components/TestChangePanel";
 import type { RunDetail, Schema } from "../src/api/types";
 
 const run: RunDetail = {
+  test_scope: "full",
   schema_version: 1,
   id: "r1",
   state: "waiting_approval",

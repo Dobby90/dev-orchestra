@@ -2366,6 +2366,57 @@
   },
   "components": {
     "schemas": {
+      "AffectedTests": {
+        "properties": {
+          "inputs": {
+            "additionalProperties": {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "type": "object",
+            "title": "Inputs"
+          },
+          "dependencies": {
+            "additionalProperties": {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "type": "object",
+            "title": "Dependencies"
+          },
+          "required_commands": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Required Commands"
+          },
+          "criterion_commands": {
+            "additionalProperties": {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "type": "object",
+            "title": "Criterion Commands"
+          },
+          "global_paths": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Global Paths"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "title": "AffectedTests"
+      },
       "AgentAttemptView": {
         "properties": {
           "model": {
@@ -2681,6 +2732,49 @@
         ],
         "title": "BranchPage"
       },
+      "CapacityView": {
+        "properties": {
+          "active": {
+            "type": "integer",
+            "title": "Active",
+            "default": 0
+          },
+          "total": {
+            "type": "integer",
+            "title": "Total",
+            "default": 1
+          },
+          "repository_active": {
+            "type": "integer",
+            "title": "Repository Active",
+            "default": 0
+          },
+          "repository_limit": {
+            "type": "integer",
+            "title": "Repository Limit",
+            "default": 1
+          },
+          "wait_reason": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "total_capacity",
+                  "repository_capacity",
+                  "shared_resource",
+                  "unknown"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Wait Reason"
+          }
+        },
+        "type": "object",
+        "title": "CapacityView"
+      },
       "ChangeInput": {
         "properties": {
           "expected_sha": {
@@ -2847,6 +2941,24 @@
           "history"
         ],
         "title": "ChangesView"
+      },
+      "CheckpointCommitView": {
+        "properties": {
+          "sha": {
+            "type": "string",
+            "title": "Sha"
+          },
+          "summary": {
+            "type": "string",
+            "title": "Summary"
+          }
+        },
+        "type": "object",
+        "required": [
+          "sha",
+          "summary"
+        ],
+        "title": "CheckpointCommitView"
       },
       "CleanupInput": {
         "properties": {
@@ -3400,6 +3512,80 @@
         "type": "object",
         "title": "HTTPValidationError"
       },
+      "LocalHandoffView": {
+        "properties": {
+          "repository": {
+            "type": "string",
+            "title": "Repository"
+          },
+          "branch": {
+            "type": "string",
+            "title": "Branch"
+          },
+          "approved_sha": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Approved Sha"
+          },
+          "candidate_sha": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Candidate Sha"
+          },
+          "current_branch_sha": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Current Branch Sha"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "pending",
+              "matching",
+              "changed"
+            ],
+            "title": "Status"
+          },
+          "commands": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Commands"
+          },
+          "notice": {
+            "type": "string",
+            "title": "Notice"
+          }
+        },
+        "type": "object",
+        "required": [
+          "repository",
+          "branch",
+          "status",
+          "commands",
+          "notice"
+        ],
+        "title": "LocalHandoffView"
+      },
       "LogPage": {
         "properties": {
           "items": {
@@ -3705,6 +3891,20 @@
       },
       "PreviewView": {
         "properties": {
+          "test_scope": {
+            "type": "string",
+            "enum": [
+              "full",
+              "affected"
+            ],
+            "title": "Test Scope",
+            "default": "full"
+          },
+          "test_scope_notice": {
+            "type": "string",
+            "title": "Test Scope Notice",
+            "default": ""
+          },
           "run_id": {
             "type": "string",
             "title": "Run Id"
@@ -3941,6 +4141,15 @@
       },
       "Proposal": {
         "properties": {
+          "test_scope": {
+            "type": "string",
+            "enum": [
+              "full",
+              "affected"
+            ],
+            "title": "Test Scope",
+            "default": "full"
+          },
           "project_id": {
             "type": "string",
             "pattern": "^prj-[0-9a-f]{32}$",
@@ -4327,6 +4536,15 @@
       },
       "RunCreate": {
         "properties": {
+          "test_scope": {
+            "type": "string",
+            "enum": [
+              "full",
+              "affected"
+            ],
+            "title": "Test Scope",
+            "default": "full"
+          },
           "project_id": {
             "type": "string",
             "pattern": "^prj-[0-9a-f]{32}$",
@@ -4437,6 +4655,28 @@
             "type": "integer",
             "title": "Version"
           },
+          "created_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Created At"
+          },
+          "completed_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Completed At"
+          },
           "branch": {
             "anyOf": [
               {
@@ -4511,6 +4751,38 @@
               }
             ],
             "title": "Control"
+          },
+          "handoff": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/LocalHandoffView"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "capacity": {
+            "$ref": "#/components/schemas/CapacityView"
+          },
+          "workspace_progress": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/WorkspaceProgressView"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "test_scope": {
+            "type": "string",
+            "enum": [
+              "full",
+              "affected"
+            ],
+            "title": "Test Scope",
+            "default": "full"
           },
           "plan": {
             "anyOf": [
@@ -4593,17 +4865,6 @@
             ],
             "title": "Base Branch"
           },
-          "created_at": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Created At"
-          },
           "max_fix_attempts": {
             "anyOf": [
               {
@@ -4650,10 +4911,10 @@
           "id",
           "state",
           "version",
+          "created_at",
           "event_cursor",
           "project_id",
           "base_branch",
-          "created_at",
           "max_fix_attempts",
           "questions",
           "error"
@@ -4711,6 +4972,28 @@
           "version": {
             "type": "integer",
             "title": "Version"
+          },
+          "created_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Created At"
+          },
+          "completed_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Completed At"
           },
           "branch": {
             "anyOf": [
@@ -5012,6 +5295,45 @@
       },
       "StepView": {
         "properties": {
+          "commits": {
+            "items": {
+              "$ref": "#/components/schemas/CheckpointCommitView"
+            },
+            "type": "array",
+            "title": "Commits"
+          },
+          "preserved_changes": {
+            "type": "integer",
+            "title": "Preserved Changes",
+            "default": 0
+          },
+          "checkpoint_sha": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Checkpoint Sha"
+          },
+          "recovery": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "same_role",
+                  "metadata",
+                  "unavailable"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Recovery"
+          },
           "id": {
             "type": "integer",
             "title": "Id"
@@ -5440,6 +5762,16 @@
       },
       "TestResultView": {
         "properties": {
+          "selection": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/TestSelectionView"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "status": {
             "type": "string",
             "enum": [
@@ -5586,6 +5918,127 @@
         ],
         "title": "TestResultView"
       },
+      "TestSelectionView": {
+        "properties": {
+          "command_reasons": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "type": "object",
+            "title": "Command Reasons"
+          },
+          "input_error": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Input Error"
+          },
+          "selector_version": {
+            "type": "integer",
+            "title": "Selector Version"
+          },
+          "requested_scope": {
+            "type": "string",
+            "enum": [
+              "full",
+              "affected"
+            ],
+            "title": "Requested Scope"
+          },
+          "actual_scope": {
+            "type": "string",
+            "enum": [
+              "full",
+              "affected"
+            ],
+            "title": "Actual Scope"
+          },
+          "expanded": {
+            "type": "boolean",
+            "title": "Expanded"
+          },
+          "reasons": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Reasons"
+          },
+          "included": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Included"
+          },
+          "excluded": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Excluded"
+          },
+          "changed_files": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Changed Files"
+          },
+          "base_sha": {
+            "type": "string",
+            "title": "Base Sha"
+          },
+          "candidate_sha": {
+            "type": "string",
+            "title": "Candidate Sha"
+          },
+          "revision": {
+            "type": "integer",
+            "title": "Revision"
+          },
+          "policy_hash": {
+            "type": "string",
+            "title": "Policy Hash"
+          },
+          "criteria_hash": {
+            "type": "string",
+            "title": "Criteria Hash"
+          },
+          "commands_hash": {
+            "type": "string",
+            "title": "Commands Hash"
+          },
+          "selection_hash": {
+            "type": "string",
+            "title": "Selection Hash"
+          }
+        },
+        "type": "object",
+        "required": [
+          "selector_version",
+          "requested_scope",
+          "actual_scope",
+          "expanded",
+          "reasons",
+          "included",
+          "excluded",
+          "changed_files",
+          "base_sha",
+          "candidate_sha",
+          "revision",
+          "policy_hash",
+          "criteria_hash",
+          "commands_hash",
+          "selection_hash"
+        ],
+        "title": "TestSelectionView"
+      },
       "Tests": {
         "properties": {
           "commands": {
@@ -5608,6 +6061,16 @@
             },
             "type": "array",
             "title": "Output Paths"
+          },
+          "affected": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/AffectedTests"
+              },
+              {
+                "type": "null"
+              }
+            ]
           }
         },
         "additionalProperties": false,
@@ -5881,6 +6344,51 @@
         },
         "type": "object",
         "title": "ValidationView"
+      },
+      "WorkspaceProgressView": {
+        "properties": {
+          "commits": {
+            "items": {
+              "$ref": "#/components/schemas/CheckpointCommitView"
+            },
+            "type": "array",
+            "title": "Commits"
+          },
+          "preserved_changes": {
+            "type": "integer",
+            "title": "Preserved Changes",
+            "default": 0
+          },
+          "checkpoint_sha": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Checkpoint Sha"
+          },
+          "recovery": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "same_role",
+                  "metadata",
+                  "unavailable"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Recovery"
+          }
+        },
+        "type": "object",
+        "title": "WorkspaceProgressView"
       }
     }
   }

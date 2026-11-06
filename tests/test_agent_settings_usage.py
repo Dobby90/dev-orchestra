@@ -127,7 +127,8 @@ def test_settings_conflicts_validation_csrf_and_preview_staleness(web, catalog):
 
 
 @pytest.mark.parametrize("rc,invalid", [(0, False), (3, False), (0, True)])
-def test_adapter_options_and_usage_survive_failed_result(tmp_path, rc, invalid):
+@pytest.mark.parametrize("continuing", [False, True])
+def test_adapter_options_and_usage_survive_failed_result(tmp_path, rc, invalid, continuing):
     script = tmp_path / "codex-stub"
     script.write_text(f"""#!{sys.executable}
 import json,sys
@@ -152,7 +153,12 @@ sys.exit({rc})
         )
     )
     request = AgentRequest(
-        run_id="r", role="reviewer", worktree=str(tmp_path), iteration=0, input_sha="a", context={}
+        run_id="r",
+        role="reviewer",
+        worktree=str(tmp_path),
+        iteration=0,
+        input_sha="a",
+        context={"workspace_resume": {"continuing": continuing}},
     )
     directory = tmp_path / "attempt"
     if rc or invalid:
@@ -165,6 +171,11 @@ sys.exit({rc})
     assert data["usage"]["cached_input_tokens"] == 70
     assert data["usage"]["input_tokens"] == 100
     assert data["usage_status"] == ("partial" if rc else "reported")
+    metrics = json.loads((directory / "input-metrics.json").read_text())
+    assert metrics["prompt_bytes"] > 0
+    assert metrics["continuation"] is continuing
+    assert not metrics["conversation_resumed"]  # Lost conversations can still be follow-up work.
+    assert "private" not in json.dumps(metrics)
 
 
 def test_usage_retries_unknown_and_read_only_replay(web):

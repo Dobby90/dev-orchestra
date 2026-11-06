@@ -9,7 +9,7 @@ Node 22.12 이상과 npm, Python의 `web` extra가 필요합니다. 저장소 �
 ```sh
 npm ci
 UV_CACHE_DIR="$PWD/.uv-cache" .tools/uv sync --frozen --extra web
-.venv/bin/devorchestra --config config.yaml database-upgrade
+.venv/bin/devorchestra --config config.yaml database-upgrade --workspace
 ```
 
 같은 설정 파일로 각 서비스를 별도 터미널에서 시작합니다.
@@ -45,7 +45,7 @@ npm run dev:web
 ```sh
 .venv/bin/python scripts/build_web.py
 # 기존 API·Dispatcher·웹 서비스·Run Worker를 종료한 상태에서 실행
-.venv/bin/devorchestra --config config.yaml database-upgrade
+.venv/bin/devorchestra --config config.yaml database-upgrade --workspace
 .venv/bin/devorchestra --config config.yaml web start --detach --allow-root /Users/me/projects --port 8000
 .venv/bin/devorchestra --config config.yaml web-session
 .venv/bin/devorchestra --config config.yaml web status
@@ -54,7 +54,7 @@ npm run dev:web
 
 이 방식은 `http://127.0.0.1:8000`에서 API와 GUI를 함께 제공합니다. `src/dev_orchestra/_web`는 생성물이며 Git에서 제외합니다. 빌드 후 `uv build`로 만든 wheel에는 체크섬 manifest와 GUI 파일을 포함하므로 설치 환경에 Node가 필요하지 않습니다. GUI 파일이 없는 CLI 전용 배포도 지원합니다. 임의 파일이나 API의 404를 SPA 화면으로 반환하지 않습니다.
 
-일반 종료는 소유한 API·Dispatcher만 종료하고 실행 중 Run Worker를 유지합니다. 기존 Dispatcher를 재사용하면 종료하지 않습니다. `web stop --cancel-active`는 같은 DB의 미완료 작업 취소를 명시적으로 요청합니다. 중복 시작·포트 충돌은 기존 프로세스를 종료하지 않고 실패합니다. 업그레이드는 모든 writer를 중지한 상태에서 schema 2/3/4→5 백업·마이그레이션을 수행하며 구버전 실행 파일과 혼용하지 마세요.
+일반 종료는 소유한 API·Dispatcher만 종료하고 실행 중 Run Worker를 유지합니다. 기존 Dispatcher를 재사용하면 종료하지 않습니다. `web stop --cancel-active`는 같은 DB의 미완료 작업 취소를 명시적으로 요청합니다. 중복 시작·포트 충돌은 기존 프로세스를 종료하지 않고 실패합니다. 업그레이드는 모든 writer를 중지한 상태에서 schema 2/3/4/5→6 백업·마이그레이션을 수행하며 구버전 실행 파일과 혼용하지 마세요.
 
 ## 검증 및 타입 갱신
 

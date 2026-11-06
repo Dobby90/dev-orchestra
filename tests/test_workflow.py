@@ -28,6 +28,37 @@ class FakeAgent:
                 command_ids=["unit"],
                 coverage=[Coverage(criterion_id="AC1", command_ids=["unit"])],
             )
+        if req.role == "reviewer" and req.context.get("review_contract") == 2:
+            from dev_orchestra.domain.models import ReviewAssessment, ReviewResultV2
+
+            issues = (
+                [
+                    Issue(
+                        id="I1",
+                        severity="high",
+                        file="main.py",
+                        line=1,
+                        description="bug",
+                        evidence="main.py returns wrong value",
+                        suggestion="fix value",
+                    )
+                ]
+                if req.iteration < self.block
+                else []
+            )
+            return ReviewResultV2(
+                summary="review",
+                issues=issues,
+                assessments=[
+                    ReviewAssessment(
+                        issue_id=item["issue_id"],
+                        candidate_sha=req.input_sha,
+                        status="unresolved" if issues else "resolved",
+                        evidence="현재 후보 코드 확인",
+                    )
+                    for item in req.context.get("open_issues", [])
+                ],
+            )
         if req.role == "reviewer" and req.iteration < self.block:
             return AgentResult(
                 summary="bug",
@@ -45,20 +76,79 @@ class FakeAgent:
             )
         return AgentResult(summary="ok")
 
+    def run_workspace(self, req, directory, session, stop):
+        from dev_orchestra.domain.models import WorkspaceResult, WorkspaceTestResult
+
+        result = self.run(req, directory, stop)
+        if result.questions:
+            return WorkspaceResult(summary=result.summary, questions=result.questions)
+        if result.patch:
+            raise AssertionError("fake agents must edit through workspace tools")
+        if req.role == "tester":
+            value = (
+                session.test_summary(session.read_test_payload())
+                if session.data.get("metadata_only")
+                else session.run_tests(session.test_policy()["included"])
+            )
+            return WorkspaceTestResult(
+                summary=result.summary,
+                test_evidence_id=value["evidence_id"],
+                command_ids=result.command_ids,
+                coverage=result.coverage,
+            )
+        return WorkspaceResult(
+            summary=result.summary, no_change_reason="기존 코드가 요구사항을 충족합니다"
+        )
+
 
 class FakeTests:
-    def run(self, *args):
-        return {"passed": True, "commands": [{"exit_code": 0, "total": 1}]}
+    def run(self, worktree, config, directory, stop=lambda: None):
+        return {
+            "passed": True,
+            "status": "passed",
+            "commands": [
+                {
+                    "command_id": key,
+                    "kind": command.kind,
+                    "argv": command.argv,
+                    "exit_code": 0,
+                    "total": 1,
+                    "passed": True,
+                    "status": "passed",
+                }
+                for key, command in config.commands.items()
+            ],
+        }
 
 
-@pytest.fixture
-def service(tmp_path, monkeypatch):
+class WorkerRunner(Runner):
+    """Run in-process adapters through the schema-6 Worker's queue ownership lifecycle."""
+
+    def execute(self, run_id, claim=None):
+        from dev_orchestra.application.queue import QueueService
+
+        queue = QueueService(self.store)
+        run = self.store.get(run_id)
+        if claim is None and queue.enabled() and run["state"] == "queued" and not run["control"]:
+            job = queue.reserve(run_id)
+            assert job is not None, "test Worker requires an available queue slot"
+            claim = (job["id"], job["claim_token"])
+        try:
+            return super().execute(run_id, claim=claim)
+        finally:
+            if claim:
+                queue.finish(*claim)
+
+
+def make_service(tmp_path, monkeypatch, *, workspace=True):
     # Existing workflow cases also verify compatibility with pre-gate Run snapshots.
     prepare = RunService.prepare_run
 
     def legacy_snapshot(self, *args, **kwargs):
         data = prepare(self, *args, **kwargs)
         data.pop("plan_approval_required", None)
+        data.pop("test_selection_contract", None)
+        data.pop("test_scope", None)
         return data
 
     monkeypatch.setattr(RunService, "prepare_run", legacy_snapshot)
@@ -87,8 +177,26 @@ def service(tmp_path, monkeypatch):
         }
     )
     svc = RunService(cfg)
-    run_id = svc.create(repo, spec)
+    from dev_orchestra.infrastructure.migrations import upgrade
+
+    if workspace:
+        upgrade(svc.store.path, workspace=True)
+        run_id = svc.create(repo, spec)
+    else:
+        with monkeypatch.context() as patch:
+            patch.setattr(RunService, "default_execution_contract", lambda self: "patch-v1")
+            run_id = svc.create(repo, spec)
     return svc, run_id, repo
+
+
+@pytest.fixture
+def service(tmp_path, monkeypatch):
+    return make_service(tmp_path, monkeypatch)
+
+
+@pytest.fixture
+def legacy_service(tmp_path, monkeypatch):
+    return make_service(tmp_path, monkeypatch, workspace=False)
 
 
 def test_success_and_approval(service):
@@ -197,10 +305,13 @@ def test_test_failure_causes_fix_loop(service):
 
         def run(self, *args):
             self.count += 1
-            return {
-                "passed": self.count > 1,
-                "commands": [{"exit_code": int(self.count == 1), "total": 1}],
-            }
+            value = super().run(*args)
+            value["passed"] = self.count > 1
+            value["status"] = "passed" if value["passed"] else "failed"
+            value["commands"][0].update(
+                exit_code=int(self.count == 1), passed=value["passed"], status=value["status"]
+            )
+            return value
 
     agent = FakeAgent()
     Runner(svc.store, agent, Tests()).execute(run_id)
@@ -211,30 +322,34 @@ def test_test_failure_causes_fix_loop(service):
 def test_unavailable_evidence_identifies_each_failed_command_and_preserves_artifact(service):
     svc, rid, _ = service
 
+    config = svc.store.get(rid)["config"]
+    config["tests"]["commands"]["browser"] = {
+        "argv": ["playwright", "test"],
+        "junit_report": "build/browser.xml",
+    }
+    svc.store.update(rid, config=config)
+
+    class Agent(FakeAgent):
+        def run(self, req, *args):
+            result = super().run(req, *args)
+            if req.role == "tester":
+                result.command_ids = ["unit", "browser"]
+            return result
+
     class MissingReport(FakeTests):
         def run(self, *args):
-            return {
-                "passed": False,
-                "status": "parse_error",
-                "commands": [
-                    {
-                        "command_id": "unit",
-                        "status": "failed",
-                        "passed": False,
-                        "exit_code": 1,
-                        "total": 43,
-                    },
-                    {
-                        "command_id": "browser",
-                        "status": "parse_error",
-                        "passed": False,
-                        "exit_code": 127,
-                        "error": "no report files; playwright: command not found",
-                    },
-                ],
-            }
+            value = super().run(*args)
+            value.update(passed=False, status="parse_error")
+            value["commands"][0].update(status="failed", passed=False, exit_code=1, total=43)
+            value["commands"][1].update(
+                status="parse_error",
+                passed=False,
+                exit_code=127,
+                error="no report files; playwright: command not found",
+            )
+            return value
 
-    agent = FakeAgent()
+    agent = Agent()
     Runner(svc.store, agent, MissingReport()).execute(rid)
     run = svc.store.get(rid)
     assert run["state"] == "needs_input" and run["next_role"] == "tester"
@@ -286,6 +401,9 @@ def test_planner_clarifications_survive_multiple_resumes(service, tmp_path):
     for number in [1, 2]:
         answer = tmp_path / f"answer-{number}.txt"
         answer.write_text(f"Answer {number}")
+        # Direct Runner tests also acknowledge the Worker's queue completion.
+        with svc.store.connection() as db:
+            db.execute("UPDATE jobs SET state='finished' WHERE run_id=?", (run_id,))
         svc.resume(run_id, answer)
         assert svc.store.get(run_id)["questions"] == []
         runner.execute(run_id)
@@ -316,6 +434,8 @@ def test_resume_preserves_decisions_for_every_role(service, tmp_path, role):
     assert svc.store.get(run_id)["questions"] == ["Scope?"]
     assert svc.store.get(run_id)["answers"] == "Previous decision"
     svc.store.update(run_id, "needs_input")
+    with svc.store.connection() as db:
+        db.execute("UPDATE jobs SET state='finished' WHERE run_id=?", (run_id,))
     answer = tmp_path / "answer.txt"
     answer.write_text("Yes")
     svc.resume(run_id, answer)

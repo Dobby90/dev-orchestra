@@ -120,7 +120,7 @@ export function DashboardPage() {
               작업 목록
             </h2>
             <p className="subtle text-small">
-              CLI와 GUI의 작업이 같은 상태 저장소에서 표시됩니다.
+              요청일시가 최신인 순서로 표시합니다.
             </p>
           </div>
           <select

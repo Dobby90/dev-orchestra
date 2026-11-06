@@ -141,6 +141,7 @@ class Results:
         complete = bool(commands) and all("duration_seconds" in c for c in commands)
         base.update(
             status=status,
+            selection=payload.get("test_selection"),
             commands=commands,
             legacy_incomplete=not complete,
             duration_seconds=execution.get("duration_seconds"),

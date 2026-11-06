@@ -22,6 +22,12 @@ def checkpoints(store, run):
             payload = json.loads(artifact.read_text())
             if payload["sha"] != step["output_sha"]:
                 raise PipelineError("checkpoint SHA mismatch")
+            if payload.get("test_evidence_reference"):
+                from dev_orchestra.application.test_selection import verify_tool_evidence
+
+                verify_tool_evidence(run, step, payload)
+            if "workspace_commits" in payload:
+                verify_workspace_commits(run, step, payload)
             approval = payload.get("test_change_approval")
             if approval:
                 if (
@@ -61,6 +67,52 @@ def checkpoints(store, run):
         raise PipelineError("missing or invalid checkpoint evidence") from error
 
 
+def verify_workspace_commits(run, step, payload):
+    """Checkpoint commits are stage evidence, never test/review success evidence."""
+    from dev_orchestra.application.test_changes import checksum
+    from dev_orchestra.domain.execution import WORKSPACE_V2, execution_contract
+    from dev_orchestra.infrastructure.workspace import workspace_policy_hash
+
+    if execution_contract(run) != WORKSPACE_V2 or step["role"] not in {
+        "developer",
+        "fixer",
+        "tester",
+    }:
+        raise PipelineError("unexpected workspace commit evidence")
+    parent, seen = step["input_sha"], set()
+    for commit in payload["workspace_commits"]:
+        args = {
+            key: commit[key]
+            for key in ["request_id", "expected_sha", "files", "message", "summary"]
+        }
+        if (
+            commit["parent"] != parent
+            or commit["expected_sha"] != parent
+            or commit["request_id"] in seen
+            or not commit["files"]
+            or commit["request_hash"] != checksum(args)
+            or any(
+                commit[key] != value
+                for key, value in {
+                    "run_id": run["id"],
+                    "role": step["role"],
+                    "iteration": step["iteration"],
+                    "revision": payload.get("revision", 0),
+                    "step_id": step["id"],
+                    "input_sha": step["input_sha"],
+                    "policy_hash": workspace_policy_hash(run)
+                    if commit.get("policy_hash_version") == 2
+                    else checksum(run["config"]),
+                }.items()
+            )
+        ):
+            raise PipelineError("workspace commit chain or ownership mismatch")
+        seen.add(commit["request_id"])
+        parent = commit["sha"]
+    if parent != step["output_sha"]:
+        raise PipelineError("workspace stage output does not match checkpoint chain")
+
+
 def verified_candidate(store, run, sha):
     latest = checkpoints(store, run)
     tests, review = latest.get("tester"), latest.get("reviewer")
@@ -68,6 +120,9 @@ def verified_candidate(store, run, sha):
         raise PipelineError("candidate SHA has not passed tests and independent review")
     if run.get("test_result") != tests or run.get("review_result") != review:
         raise PipelineError("cached evidence differs from checkpoint artifacts")
+    from dev_orchestra.application.test_selection import verify_selection
+
+    verify_selection(run, tests)
     if not tests["execution"]["passed"]:
         raise PipelineError("candidate tests failed")
     blocking = run["config"]["review"]["blocking_severities"]

@@ -331,9 +331,14 @@ def test_checks_cannot_replace_test_coverage(service):
 
     Runner(svc.store, BuildOnlyCoverage(), FakeTests()).execute(rid)
     run = svc.store.get(rid)
-    assert run["state"] == "needs_input" and "coverage" in run["error"]
+    from dev_orchestra.application.workspace_recovery import inspect_workspace
+
+    assert run["state"] == "needs_input" and "repair budget exhausted" in run["error"]
+    session, _ = inspect_workspace(svc.store, run)
+    assert "coverage" in session.data["response_error"]
+    assert session.data["repair_calls"] == cfg.workflow.response_retries
     attempts = [step for step in svc.store.steps(rid) if step["role"] == "tester"]
-    assert len(attempts) == 2 and all(step["status"] == "failed" for step in attempts)
+    assert len(attempts) == 1 and attempts[0]["status"] == "interrupted"
     assert not run.get("test_result")
 
 

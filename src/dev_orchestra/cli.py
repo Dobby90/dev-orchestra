@@ -4,6 +4,7 @@ import functools
 import json
 import time
 from pathlib import Path
+from typing import Literal
 
 import typer
 from pydantic import ValidationError
@@ -51,9 +52,10 @@ def run(
     base: str | None = None,
     max_fix_attempts: int | None = typer.Option(None, min=0),
     detach: bool = False,
+    test_scope: Literal["full", "affected"] = typer.Option("full", "--test-scope"),
 ):
     service = ctx.obj
-    run_id = service.create(repo, spec, base, max_fix_attempts)
+    run_id = service.create(repo, spec, base, max_fix_attempts, test_scope=test_scope)
     typer.echo(run_id)
     service.start(run_id, detached=detach)
     if not detach:
@@ -163,7 +165,9 @@ def pause(ctx: typer.Context, run_id: str):
 @guarded
 def approve(ctx: typer.Context, run_id: str):
     ctx.obj.approve(run_id)
-    typer.echo("Approved; no push or merge performed")
+    from dev_orchestra.application.handoff import handoff_markdown
+
+    typer.echo(handoff_markdown(ctx.obj.queries.get(run_id)))
 
 
 @app.command()
@@ -250,10 +254,13 @@ def doctor(ctx: typer.Context):
 
 @app.command("database-upgrade")
 @guarded
-def database_upgrade(ctx: typer.Context):
+def database_upgrade(
+    ctx: typer.Context,
+    workspace: bool = typer.Option(False, "--workspace", help="Enable direct editing for new Runs"),
+):
     from dev_orchestra.infrastructure.migrations import upgrade
 
-    backup = upgrade(ctx.obj.store.path)
+    backup = upgrade(ctx.obj.store.path, workspace=workspace)
     typer.echo(str(backup) if backup else "Database schema is current")
 
 
@@ -263,7 +270,7 @@ def web_session(ctx: typer.Context):
     from dev_orchestra.api.security import bootstrap
 
     with ctx.obj.store.connection() as db:
-        if db.execute("SELECT version FROM schema_version").fetchone()[0] != 5:
+        if db.execute("SELECT version FROM schema_version").fetchone()[0] not in {5, 6}:
             raise PipelineError("run database-upgrade first")
     typer.echo(bootstrap(ctx.obj.store))
 
@@ -291,6 +298,20 @@ def api_start(
 
 worker_app = typer.Typer(help="Independent local queue Dispatcher")
 app.add_typer(worker_app, name="worker")
+
+
+@worker_app.command("capacity")
+@guarded
+def worker_capacity(
+    ctx: typer.Context,
+    total: int | None = typer.Option(None, min=1, max=32),
+    repo: Path | None = None,
+    repository: int | None = typer.Option(None, min=1, max=32),
+):
+    """DB 전체 및 Git 공통 저장소의 동시 실행 한도를 조회·설정합니다."""
+    from dev_orchestra.infrastructure.coordination import configure_capacity
+
+    typer.echo(json.dumps(configure_capacity(ctx.obj.store.path, total, repo, repository)))
 
 
 @worker_app.command("start")

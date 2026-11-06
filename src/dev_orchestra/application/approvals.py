@@ -5,12 +5,15 @@ from pathlib import Path
 
 from dev_orchestra.application.contracts import ApprovalCommand
 from dev_orchestra.application.errors import ApplicationError
+from dev_orchestra.application.handoff import verify_branch
 from dev_orchestra.config import Config
 from dev_orchestra.domain.models import PipelineError
+from dev_orchestra.infrastructure.coordination import metadata
 from dev_orchestra.infrastructure.evidence import verified_candidate
 from dev_orchestra.infrastructure.files import digest
 from dev_orchestra.infrastructure.git import Git
 from dev_orchestra.infrastructure.locking import lock
+from dev_orchestra.infrastructure.process_owner import ensure_stopped
 
 
 class ApprovalService:
@@ -22,8 +25,12 @@ class ApprovalService:
 
     def approve(self, run_id, expected_version=None, expected_sha=None):
         run = self.store.get(run_id)
-        with lock(Path(run["directory"]) / "execution.lock"):
+        with (
+            lock(Path(run["directory"]) / "execution.lock"),
+            metadata(Path(run["repo"]), Path(run["directory"])),
+        ):
             run = self.store.get(run_id)
+            ensure_stopped(Path(run["directory"]))
             sha, evidence = self.verify_locked(run_id, expected_version, expected_sha)
             self.store.approve(run_id, sha, evidence, expected_version=run["version"])
 
@@ -45,7 +52,9 @@ class ApprovalService:
         if run.get("next_role") != "done" or not run["test_result"]["execution"]["passed"]:
             raise PipelineError("missing successful validation evidence")
         sha = git.sha()
+        verify_branch(run, sha)
         verified_candidate(self.store, run, sha)
+        verify_branch(run, sha)
         if git.sha() != sha or git.dirty():
             raise PipelineError("candidate changed during approval")
         return sha, digest(json.dumps(run["test_result"], sort_keys=True).encode())

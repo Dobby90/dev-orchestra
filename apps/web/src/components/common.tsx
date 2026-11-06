@@ -155,6 +155,8 @@ export function RunsTable({ runs }: { runs: Run[] }) {
             <th>상태</th>
             <th>현재 단계</th>
             <th>수정 회차</th>
+            <th>요청일시</th>
+            <th>완료일시</th>
             <th>
               <span className="sr-only">상세</span>
             </th>
@@ -185,6 +187,24 @@ export function RunsTable({ runs }: { runs: Run[] }) {
                   : "—"}
               </td>
               <td className="mono">{run.iteration}</td>
+              <td className="run-timestamp">
+                {run.created_at ? (
+                  <time dateTime={run.created_at}>
+                    {new Date(run.created_at).toLocaleString("ko-KR")}
+                  </time>
+                ) : (
+                  "—"
+                )}
+              </td>
+              <td className="run-timestamp">
+                {run.completed_at ? (
+                  <time dateTime={run.completed_at}>
+                    {new Date(run.completed_at).toLocaleString("ko-KR")}
+                  </time>
+                ) : (
+                  "—"
+                )}
+              </td>
               <td>
                 <Link aria-label={`${run.id} 상세 보기`} to={`/runs/${run.id}`}>
                   <ArrowUpRight size={18} />

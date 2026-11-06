@@ -105,6 +105,7 @@ class StoredSpec(Input):
 
 
 class Proposal(Input):
+    test_scope: Literal["full", "affected"] = "full"
     project_id: str = Field(pattern=r"^prj-[0-9a-f]{32}$")
     spec: Annotated[TextSpec | StoredSpec, Field(discriminator="kind")]
     base_branch: str | None = None
@@ -245,7 +246,44 @@ class ValidationView(BaseModel):
     reason: str | None = None
 
 
+class LocalHandoffView(BaseModel):
+    repository: str
+    branch: str
+    approved_sha: str | None = None
+    candidate_sha: str | None = None
+    current_branch_sha: str | None = None
+    status: Literal["pending", "matching", "changed"]
+    commands: list[str]
+    notice: str
+
+
+class CapacityView(BaseModel):
+    active: int = 0
+    total: int = 1
+    repository_active: int = 0
+    repository_limit: int = 1
+    wait_reason: (
+        Literal["total_capacity", "repository_capacity", "shared_resource", "unknown"] | None
+    ) = None
+
+
+class CheckpointCommitView(BaseModel):
+    sha: str
+    summary: str
+
+
+class WorkspaceProgressView(BaseModel):
+    commits: list[CheckpointCommitView] = Field(default_factory=list)
+    preserved_changes: int = 0
+    checkpoint_sha: str | None = None
+    recovery: Literal["same_role", "metadata", "unavailable"] | None = None
+
+
 class RunDetail(RunSummary):
+    handoff: LocalHandoffView | None = None
+    capacity: CapacityView = Field(default_factory=CapacityView)
+    workspace_progress: WorkspaceProgressView | None = None
+    test_scope: Literal["full", "affected"] = "full"
     plan: str | None = None
     criteria: list[dict[str, str]] = Field(default_factory=list)
     plan_hash: str | None = None
@@ -286,6 +324,8 @@ class SpecContent(BaseModel):
 
 
 class PreviewView(BaseModel):
+    test_scope: Literal["full", "affected"] = "full"
+    test_scope_notice: str = ""
     run_id: str
     branch: str
     base_sha: str
@@ -298,7 +338,7 @@ class PreviewView(BaseModel):
     validation_warnings: list[str] = Field(default_factory=list)
 
 
-class StepView(BaseModel):
+class StepView(WorkspaceProgressView):
     id: int
     run_id: str
     role: str
@@ -428,7 +468,28 @@ class CommandView(BaseModel):
     error: str | None = None
 
 
+class TestSelectionView(BaseModel):
+    command_reasons: dict[str, str] = Field(default_factory=dict)
+    input_error: str | None = None
+    selector_version: int
+    requested_scope: Literal["full", "affected"]
+    actual_scope: Literal["full", "affected"]
+    expanded: bool
+    reasons: list[str]
+    included: list[str]
+    excluded: list[str]
+    changed_files: list[str]
+    base_sha: str
+    candidate_sha: str
+    revision: int
+    policy_hash: str
+    criteria_hash: str
+    commands_hash: str
+    selection_hash: str
+
+
 class TestResultView(BaseModel):
+    selection: TestSelectionView | None = None
     status: Literal[
         "not_run", "running", "passed", "failed", "unavailable", "parse_error", "timeout", "unknown"
     ]

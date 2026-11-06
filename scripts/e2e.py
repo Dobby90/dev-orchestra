@@ -10,6 +10,7 @@ from dev_orchestra.application.service import RunService
 from dev_orchestra.config import Config
 from dev_orchestra.infrastructure.codex import CodexClient
 from dev_orchestra.infrastructure.git import Git
+from dev_orchestra.infrastructure.migrations import upgrade
 from dev_orchestra.infrastructure.test_runner import TestRunner
 from dev_orchestra.orchestration.runner import Runner
 
@@ -58,6 +59,7 @@ def main():
     client.check()
     TestRunner().check(repo)
     service = RunService(config)
+    upgrade(service.store.path, workspace=True)
     run_id = service.create(repo, spec)
     print(json.dumps({"directory": str(root), "run_id": run_id}), flush=True)
     Runner(service.store, client, TestRunner()).execute(run_id)

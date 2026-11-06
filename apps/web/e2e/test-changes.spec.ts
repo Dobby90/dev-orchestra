@@ -63,7 +63,8 @@ import json,sys
 from pathlib import Path
 from dev_orchestra.application.service import RunService
 from dev_orchestra.config import load_config
-from dev_orchestra.domain.models import AgentResult,Criterion,TestChange,Coverage,ReviewResultV2
+from dev_orchestra.domain.models import AgentResult,Criterion,Coverage,ReviewResultV2,WorkspaceResult,WorkspaceTestResult
+from dev_orchestra.infrastructure.files import digest
 from dev_orchestra.infrastructure.test_runner import TestRunner
 from dev_orchestra.orchestration.runner import Runner
 repo=Path(sys.argv[2]);spec=repo.parent/'test-change-prd.md';spec.write_text('덧셈의 0 입력 회귀 검사를 추가하세요.')
@@ -74,8 +75,13 @@ class Agent:
   if request.role=='planner':return AgentResult(summary='계획',plan='0 입력 회귀 검사 추가',criteria=[Criterion(id='AC1',description='덧셈의 0 입력 검증')])
   if request.role=='tester':return AgentResult(summary='전체 테스트',command_ids=['unit'],coverage=[Coverage(criterion_id='AC1',command_ids=['unit'])])
   if request.role=='reviewer':return ReviewResultV2(summary='기존 검사를 보존하는 요구사항 기반 확장 확인')
-  patch='--- a/tests/test_main.py\\n+++ b/tests/test_main.py\\n@@ -1,3 +1,4 @@\\n from main import add\\n def test_add():\\n     assert add(2, 3) == 5\\n+    assert add(0, 0) == 0\\n'
-  return AgentResult(summary='기존 테스트 확장',patch=patch,test_changes=[TestChange(file='tests/test_main.py',criterion_ids=['AC1'],reason='기존 덧셈 검사를 보존하고 0 입력 경계값 검사를 추가합니다.')])
+ def run_workspace(self,request,directory,session,stop):
+  if request.role=='tester':
+   value=session.run_tests(session.test_policy()['included'])
+   return WorkspaceTestResult(summary='실제 검증',test_evidence_id=value['evidence_id'],command_ids=value['selection']['included'],coverage=[Coverage(criterion_id='AC1',command_ids=['unit'])])
+  target=session.root/'tests/test_main.py'
+  session.edit_file('tests/test_main.py',digest(target.read_bytes()),target.read_text()+'    assert add(0, 0) == 0\\n',test_change={'file':'tests/test_main.py','criterion_ids':['AC1'],'reason':'기존 덧셈 검사를 보존하고 0 입력 경계값 검사를 추가합니다.'})
+  return WorkspaceResult(summary='기존 테스트 확장')
 Runner(svc.store,Agent(),TestRunner()).execute(rid)
 from dev_orchestra.application.plan_approval import binding,decide
 run=svc.store.get(rid);assert run['state']=='waiting_plan_approval',run.get('error')

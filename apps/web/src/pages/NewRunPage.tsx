@@ -6,7 +6,6 @@ import {
   ArrowRight,
   Check,
   FileText,
-  GitBranch,
   ShieldCheck,
 } from "lucide-react";
 import { api } from "../api/resources";
@@ -14,6 +13,7 @@ import { ApiError } from "../api/client";
 import type { Schema } from "../api/types";
 import { Heading, ErrorNotice } from "../components/common";
 import { Button } from "../components/ui/button";
+import { Modal } from "../components/ui/dialog";
 import { PrdGuide } from "../components/PrdGuide";
 export function NewRunPage() {
   const [params] = useSearchParams(),
@@ -25,6 +25,8 @@ export function NewRunPage() {
     [branch, setBranch] = useState(""),
     [instructions, setInstructions] = useState(""),
     [budget, setBudget] = useState(""),
+    [testScope, setTestScope] = useState<"full" | "affected">("affected"),
+    [previewOpen, setPreviewOpen] = useState(false),
     [localError, setLocalError] = useState("");
   const projects = useInfiniteQuery({
     queryKey: ["projects", "choices"],
@@ -49,6 +51,7 @@ export function NewRunPage() {
       receipt: await api.preview(proposal),
       key: crypto.randomUUID(),
     }),
+    onSuccess: () => setPreviewOpen(true),
   });
   const submit = useMutation({
     mutationFn: () =>
@@ -94,6 +97,7 @@ export function NewRunPage() {
           ? { kind: "text", text }
           : { kind: "stored", spec_id: upload.data!.id },
       additional_instructions: instructions,
+      test_scope: testScope,
       run_tests: true,
       run_review: true,
       ...(base ? { base_branch: base } : {}),
@@ -269,6 +273,25 @@ export function NewRunPage() {
                 />
               </label>
               <label>
+                테스트 범위
+                <select
+                  value={testScope}
+                  onChange={(e) =>
+                    edit(() =>
+                      setTestScope(e.target.value as "full" | "affected"),
+                    )
+                  }
+                >
+                  <option value="affected">변경 영향 범위 테스트</option>
+                  <option value="full">전체 테스트</option>
+                </select>
+              </label>
+              <p className="help">
+                생성 후에는 범위를 변경할 수 없습니다. 모델이 변경 코드와 관련
+                테스트를 분석해 자동 선택합니다. 필요한 경우 관련 모듈로 범위를
+                확대하고 이유를 기록합니다.
+              </p>
+              <label>
                 자동 수정 최대 횟수
                 <input
                   type="number"
@@ -372,68 +395,75 @@ export function NewRunPage() {
               작업이 계속됩니다.
             </p>
           </section>
-          {preview.data && (
-            <section className="panel panel-body preview-card">
-              <p className="eyebrow">READY TO SUBMIT</p>
-              <h2>
-                <GitBranch size={18} />
-                실행 미리보기
-              </h2>
-              <dl>
-                <dt>프로젝트</dt>
-                <dd>{selected.data?.name}</dd>
-                <dt>Feature 브랜치</dt>
-                <dd className="mono">{preview.data.receipt.branch}</dd>
-                <dt>기준 커밋</dt>
-                <dd className="mono path">{preview.data.receipt.base_sha}</dd>
-                <dt>최대 수정 횟수</dt>
-                <dd>
-                  {preview.data.proposal.max_fix_attempts ??
-                    selected.data?.policy.max_fix_attempts ??
-                    3}
-                  회
-                </dd>
-                <dt>유효 시각</dt>
-                <dd>
-                  {new Date(
-                    preview.data.receipt.expires * 1000,
-                  ).toLocaleTimeString("ko-KR")}
-                </dd>
-              </dl>
-              {(preview.data.receipt.validation_warnings ?? []).map(
-                (warning, index) => (
-                  <p className="notice" key={index}>
-                    {warning}
-                  </p>
-                ),
-              )}
-              <p className="help">
-                접수 후 작업 큐에서 실행 순서를 기다립니다.
-              </p>
-              {submit.error && <ErrorNotice error={submit.error} />}
-              <Button
-                disabled={submit.isPending}
-                onClick={() => {
-                  if (!submit.isPending) submit.mutate();
-                }}
-              >
-                {submit.isPending
-                  ? "접수 중…"
-                  : uncertain
-                    ? "동일 요청으로 접수 확인"
-                    : "확인하고 작업 시작"}
-                <ArrowRight size={16} />
-              </Button>
-              {uncertain && (
-                <p role="status" className="help">
-                  응답을 받지 못해 접수 여부가 확정되지 않았습니다. 같은 요청
-                  키로 안전하게 확인합니다.
-                </p>
-              )}
-            </section>
-          )}
         </aside>
       </div>
+      {preview.data && (
+        <Modal
+          open={previewOpen}
+          onOpenChange={(open) => {
+            if (!locked) setPreviewOpen(open);
+          }}
+          title="실행 미리보기"
+          description="실행할 브랜치와 테스트 범위를 확인한 뒤 작업을 시작하세요."
+        >
+          <dl>
+            <dt>프로젝트</dt>
+            <dd>{selected.data?.name}</dd>
+            <dt>Feature 브랜치</dt>
+            <dd className="mono path">{preview.data.receipt.branch}</dd>
+            <dt>기준 커밋</dt>
+            <dd className="mono path">{preview.data.receipt.base_sha}</dd>
+            <dt>테스트 범위</dt>
+            <dd>
+              {preview.data.proposal.test_scope === "affected"
+                ? "변경 영향 범위 테스트"
+                : "전체 테스트"}
+            </dd>
+            <dt>최대 수정 횟수</dt>
+            <dd>
+              {preview.data.proposal.max_fix_attempts ??
+                selected.data?.policy.max_fix_attempts ??
+                3}
+              회
+            </dd>
+            <dt>유효 시각</dt>
+            <dd>
+              {new Date(preview.data.receipt.expires * 1000).toLocaleTimeString(
+                "ko-KR",
+              )}
+            </dd>
+          </dl>
+          <p className="help">{preview.data.receipt.test_scope_notice}</p>
+          {(preview.data.receipt.validation_warnings ?? []).map(
+            (warning, index) => (
+              <p className="notice" key={index}>
+                {warning}
+              </p>
+            ),
+          )}
+          <p className="help">접수 후 작업 큐에서 실행 순서를 기다립니다.</p>
+          {submit.error && <ErrorNotice error={submit.error} />}
+          <Button
+            disabled={submit.isPending}
+            onClick={() => {
+              if (!submit.isPending) submit.mutate();
+            }}
+          >
+            {submit.isPending
+              ? "접수 중…"
+              : uncertain
+                ? "동일 요청으로 접수 확인"
+                : "확인하고 작업 시작"}
+            <ArrowRight size={16} />
+          </Button>
+          {uncertain && (
+            <p role="status" className="help">
+              응답을 받지 못해 접수 여부가 확정되지 않았습니다. 같은 요청 키로
+              안전하게 확인합니다.
+            </p>
+          )}
+        </Modal>
+      )}
     </>
   );
 }

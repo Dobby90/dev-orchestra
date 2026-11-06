@@ -54,7 +54,14 @@ class TestChange(Model):
     reason: str = Field(min_length=1)
 
 
+class TestTarget(Model):
+    command_id: str
+    files: list[str] = Field(default_factory=list)
+    reason: str = Field(min_length=1)
+
+
 class AgentResult(Model):
+    commit_message: str = ""
     summary: str
     questions: list[str] = Field(default_factory=list)
     plan: str = ""
@@ -62,6 +69,7 @@ class AgentResult(Model):
     patch: str = ""
     command_ids: list[str] = Field(default_factory=list)
     coverage: list[Coverage] = Field(default_factory=list)
+    test_plan: list[TestTarget] = Field(default_factory=list)
     issues: list[Issue] = Field(default_factory=list)
     test_changes: list[TestChange] = Field(default_factory=list)
 
@@ -73,6 +81,19 @@ class AgentRequest(Model):
     iteration: int
     input_sha: str
     context: dict
+
+
+class WorkspaceResult(Model):
+    commit_message: str = ""
+    summary: str = Field(min_length=1)
+    questions: list[str] = Field(default_factory=list)
+    no_change_reason: str = ""
+
+
+class WorkspaceTestResult(WorkspaceResult):
+    command_ids: list[str] = Field(default_factory=list)
+    coverage: list[Coverage] = Field(default_factory=list)
+    test_evidence_id: str = ""
 
 
 class PipelineError(RuntimeError):

@@ -14,7 +14,7 @@ import { LoginPage } from "../src/pages/LoginPage";
 import { NewRunPage } from "../src/pages/NewRunPage";
 import { RunDetailPage } from "../src/pages/RunDetailPage";
 import { Routes, Route } from "react-router-dom";
-import { Status, states } from "../src/components/common";
+import { RunsTable, Status, states } from "../src/components/common";
 import { api } from "../src/api/resources";
 import type { Project, Schema, State } from "../src/api/types";
 import { ProjectForm, initialPolicy } from "../src/components/ProjectForm";
@@ -32,6 +32,7 @@ const p: Project = {
   schema_version: 1,
 };
 const detail: Schema["RunDetail"] = {
+  test_scope: "full",
   deletion_pending: false,
   test_change_pending: false,
   test_change_count: 0,
@@ -361,7 +362,7 @@ describe("화면·위험 명령", () => {
       screen.getByRole("button", { name: "정책 JSON 작성 가이드" }),
     ).toHaveFocus();
   });
-  it("입력 변경 시 이전 미리보기를 무효화한다", async () => {
+  it("변경 영향 범위를 기본 선택하고 레이어 미리보기를 닫은 뒤 입력을 변경하면 무효화한다", async () => {
     vi.spyOn(api, "projects").mockResolvedValue({
       items: [p],
       has_more: false,
@@ -370,6 +371,8 @@ describe("화면·위험 명령", () => {
     vi.spyOn(api, "project").mockResolvedValue(p);
     vi.spyOn(api, "branches").mockResolvedValue({ items: ["main"] });
     vi.spyOn(api, "preview").mockResolvedValue({
+      test_scope: "full",
+      test_scope_notice: "영향 판단 실패 시 전체 검사",
       run_id: "r1",
       branch: "feature/x",
       base_sha: "b".repeat(40),
@@ -398,13 +401,19 @@ describe("화면·위험 명령", () => {
     await userEvent.keyboard("{Escape}");
     expect(screen.getByLabelText("PRD")).toHaveValue("작업 요구사항");
     expect(api.preview).not.toHaveBeenCalled();
+    expect(screen.getByLabelText("테스트 범위")).toHaveValue("affected");
     await userEvent.click(screen.getByRole("button", { name: "실행 전 확인" }));
     expect(
       await screen.findByRole("button", { name: "확인하고 작업 시작" }),
     ).toBeVisible();
-    fireEvent.change(screen.getByLabelText("PRD"), {
-      target: { value: "새 요구사항" },
-    });
+    expect(api.preview).toHaveBeenCalledWith(
+      expect.objectContaining({ test_scope: "affected" }),
+    );
+    expect(screen.getByRole("dialog", { name: "실행 미리보기" })).toBeVisible();
+    await userEvent.keyboard("{Escape}");
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    expect(screen.getByLabelText("PRD")).toHaveValue("작업 요구사항");
+    await userEvent.selectOptions(screen.getByLabelText("테스트 범위"), "full");
     expect(
       screen.queryByRole("button", { name: "확인하고 작업 시작" }),
     ).not.toBeInTheDocument();
@@ -444,4 +453,48 @@ it("기획안과 인수 조건을 확인하고 해당 기획 버전으로 개발
       expect.any(String),
     ),
   );
+});
+
+it("작업 목록에 요청일시와 완료일시 및 미기록 표시를 제공한다", () => {
+  const created_at = "2026-11-04T10:00:00Z";
+  const completed_at = "2026-11-05T11:00:00Z";
+  wrap(
+    <RunsTable
+      runs={[
+        {
+          ...detail,
+          id: "finished",
+          state: "completed",
+          created_at,
+          completed_at,
+        },
+        { ...detail, id: "pending", created_at: null, completed_at: null },
+      ]}
+    />,
+  );
+  expect(screen.getByRole("columnheader", { name: "요청일시" })).toBeVisible();
+  expect(screen.getByRole("columnheader", { name: "완료일시" })).toBeVisible();
+  expect(
+    document.querySelector(`time[datetime="${created_at}"]`),
+  ).toHaveTextContent(new Date(created_at).toLocaleString("ko-KR"));
+  expect(
+    document.querySelector(`time[datetime="${completed_at}"]`),
+  ).toHaveTextContent(new Date(completed_at).toLocaleString("ko-KR"));
+  expect(screen.getByRole("row", { name: /pending/ })).toHaveTextContent("—");
+});
+
+it("작업 상세 상단에서 긴 Feature 브랜치를 별도 행에 표시한다", async () => {
+  setupDetail();
+  const branch = `feature/${"long-task-name-".repeat(20)}`;
+  vi.mocked(api.run).mockResolvedValue({ ...detail, branch });
+  wrap(
+    <Routes>
+      <Route path="/runs/:id" element={<RunDetailPage />} />
+    </Routes>,
+    "/runs/r1",
+  );
+  const value = await screen.findByText(branch);
+  expect(value.closest(".run-branch")).not.toBeNull();
+  expect(value).toBeVisible();
+  expect(screen.getByText("기준 브랜치").closest(".run-branch")).not.toBeNull();
 });

@@ -57,21 +57,29 @@ import json,re,subprocess,sys
 from pathlib import Path
 real={codex!r}
 ledger=Path({str(root / "calls.json")!r})
-if '--help' in sys.argv:raise SystemExit(subprocess.call([real,*sys.argv[1:]]))
+if '--help' in sys.argv or 'sandbox' in sys.argv:raise SystemExit(subprocess.call([real,*sys.argv[1:]]))
 data=sys.stdin.read()
-req=json.loads(data.split('UNTRUSTED TASK DATA:\\n',1)[1])
+marker='UNTRUSTED TASK DATA:\\n' if 'UNTRUSTED TASK DATA:\\n' in data else 'UNTRUSTED CONTINUATION DATA:\\n'
+req=json.loads(data.split(marker,1)[1])
 calls=json.loads(ledger.read_text()) if ledger.exists() else []
 if len(calls)>=7:raise SystemExit('model call limit reached')
 calls.append(req['role']);ledger.write_text(json.dumps(calls));ledger.chmod(0o600)
 rc=subprocess.run([real,*sys.argv[1:]],input=data,text=True).returncode
 if rc:raise SystemExit(rc)
-if req['role']=='developer':
+if req['role']=='developer' and calls.count('developer')==1:
  path=Path(sys.argv[sys.argv.index('--output-last-message')+1])
  raw=path.read_text();value=json.loads(raw)
- patch,count=re.subn(r'(?m)^(\\+\\s+return a)\\s*\\+\\s*(b\\s*)$',r'\\1 - \\2',value['patch'])
+ config={{sys.argv[i+1].split('=',1)[0]:sys.argv[i+1].split('=',1)[1] for i,arg in enumerate(sys.argv[:-1]) if arg=='-c'}}
+ from dev_orchestra.infrastructure.workspace import load_session
+ from dev_orchestra.infrastructure.files import digest
+ session=load_session(json.loads(config['mcp_servers.workspace.args'])[-1])
+ source=session.root/'calculator.py'
+ content,count=re.subn(r'(?m)^(\\s+return a)\\s*\\+\\s*(b\\s*)$',r'\\1 - \\2',source.read_text())
  if count!=1:raise SystemExit('fault injection shape mismatch; no retry')
  original=Path({str(root / "original-developer.json")!r});original.write_text(raw);original.chmod(0o600)
- value['patch']=patch;path.write_text(json.dumps(value))
+ session.edit_file('calculator.py',digest(source.read_bytes()),content)
+ value['commit_message']='검증용 산술 결함 주입\\n\\n자동 수정 루프가 실제 테스트 실패를 처리하는지 확인합니다.'
+ path.write_text(json.dumps(value))
 """)
     proxy.chmod(0o700)
     config = Config.model_validate(
@@ -103,7 +111,7 @@ if req['role']=='developer':
     config_path = root / "config.yaml"
     write(config_path, config.model_dump(mode="json"))
     service = RunService(config)
-    upgrade(service.store.path)
+    upgrade(service.store.path, workspace=True)
     runtime = WebRuntime(service)
     with socket.socket() as sock:
         sock.bind(("127.0.0.1", 0))
@@ -147,7 +155,7 @@ if req['role']=='developer':
                 "project_id": pid,
                 "spec": {
                     "kind": "text",
-                    "text": "Implement add(a: int, b: int) -> int in calculator.py returning exactly a + b. Support positive, negative and zero integers. Keep existing tests immutable and add a new pytest file under tests/ for additional cases. Do not add dependencies or extra type validation. Developer patch: use exactly return a + b as the implementation. Keep changes minimal.",
+                    "text": "Implement add(a: int, b: int) -> int in calculator.py returning exactly a + b. Support positive, negative and zero integers. Keep existing tests immutable and add a new pytest file under tests/ for additional cases. Do not add dependencies or extra type validation. Developer: use exactly return a + b as the implementation. Keep changes minimal.",
                 },
             }
             response = client.post(f"/api/projects/{pid}/run-previews", json=proposal)

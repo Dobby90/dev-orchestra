@@ -19,6 +19,7 @@ class Dispatcher:
         self.store, self.queue = store, QueueService(store)
         self.stopped = False
         self.log_cursor = 0
+        self.active_cursor = 0
 
     def tick(self):
         self.queue.recover()
@@ -50,7 +51,9 @@ class Dispatcher:
         budget = IndexBudget(files=32, deadline=time.monotonic() + 0.05)
         with self.store.connection() as db:
             active = db.execute(
-                "SELECT run_id AS id FROM jobs WHERE state IN ('claimed','running') ORDER BY rowid LIMIT 8"
+                "SELECT rowid,run_id AS id FROM jobs WHERE state IN ('claimed','running') "
+                "ORDER BY (rowid<=?),rowid LIMIT 8",
+                (self.active_cursor,),
             ).fetchall()
             history = db.execute(
                 "SELECT rowid,id FROM runs WHERE rowid>? AND NOT EXISTS "
@@ -65,6 +68,8 @@ class Dispatcher:
                 break
             if closed:
                 self.log_cursor = row["rowid"]
+            else:
+                self.active_cursor = row["rowid"]
             try:
                 LogIndexer(self.store).index(
                     row["id"], closed, budget=budget, rescan_interval=30 if closed else 0

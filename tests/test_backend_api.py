@@ -5,6 +5,7 @@ from pathlib import Path
 
 import pytest
 from fastapi.testclient import TestClient
+from test_workflow import legacy_service as legacy_service
 from test_workflow import service as service
 
 from dev_orchestra.api.main import create_app
@@ -48,16 +49,16 @@ def project(client, svc, repo):
     return response.json()
 
 
-def test_migration_preserves_backup_and_cli(web):
-    c, svc, rid, repo, backup = web
-    old = sqlite3.connect(backup)
-    assert old.execute("SELECT version FROM schema_version").fetchone() == (2,)
-    assert old.execute("SELECT id FROM runs").fetchone() == (rid,)
-    old.close()
+def test_migration_preserves_backup_and_cli(legacy_service):
+    svc, rid, _ = legacy_service
+    backup = upgrade(svc.store.path, workspace=True)
+    with sqlite3.connect(backup) as old:
+        assert old.execute("SELECT version FROM schema_version").fetchone() == (2,)
+        assert old.execute("SELECT id FROM runs").fetchone() == (rid,)
     reopened = Store(svc.store.path)
     assert reopened.get(rid) == svc.store.get(rid)
     with reopened.connection() as db:
-        assert db.execute("SELECT version FROM schema_version").fetchone()[0] == 5
+        assert db.execute("SELECT version FROM schema_version").fetchone()[0] == 6
         assert db.execute("PRAGMA integrity_check").fetchone()[0] == "ok"
         assert not db.execute("PRAGMA foreign_key_check").fetchall()
     assert upgrade(svc.store.path) is None
@@ -75,8 +76,8 @@ def test_transaction_rolls_back_all_records(web):
     assert svc.store.events(rid) == []
 
 
-def test_upgrade_refuses_execution_lock(service):
-    svc, rid, _ = service
+def test_upgrade_refuses_execution_lock(legacy_service):
+    svc, rid, _ = legacy_service
     with lock(Path(svc.store.get(rid)["directory"]) / "execution.lock"):
         with pytest.raises(PipelineError):
             upgrade(svc.store.path)
@@ -373,10 +374,10 @@ def test_submission_sql_failure_rolls_back(web, monkeypatch):
         assert db.execute("SELECT count(*) FROM runs").fetchone()[0] == 1
 
 
-def test_migration_ddl_failure_rolls_back(service, monkeypatch):
+def test_migration_ddl_failure_rolls_back(legacy_service, monkeypatch):
     import dev_orchestra.infrastructure.migrations as migration
 
-    svc, rid, _ = service
+    svc, rid, _ = legacy_service
     monkeypatch.setattr(migration, "SCHEMA", migration.SCHEMA + ";INVALID SQL;")
     with pytest.raises(sqlite3.OperationalError):
         upgrade(svc.store.path)
@@ -608,3 +609,21 @@ def test_log_window_contract_and_authentication(web):
     assert c.get(f"/api/runs/{rid}/logs/window?step_id=0").status_code == 422
     c.cookies.clear()
     assert c.get(f"/api/runs/{rid}/logs/window").status_code == 401
+
+
+def test_run_list_exposes_request_and_completion_times(web):
+    client, svc, rid, _, _ = web
+    created = svc.store.get(rid)["created_at"]
+    before = client.get("/api/runs").json()["items"][0]
+    assert before["created_at"] == created
+    assert before["completed_at"] is None
+    with svc.store.connection() as db:
+        db.execute("UPDATE runs SET state='waiting_approval' WHERE id=?", (rid,))
+    svc.store.approve(rid, "a" * 40, "test evidence")
+    completed = svc.store.events(rid)[-1]["timestamp"]
+    summary = client.get("/api/runs?state=completed").json()["items"][0]
+    assert summary["created_at"] == created
+    assert summary["completed_at"] == completed
+    detail = client.get(f"/api/runs/{rid}")
+    assert detail.status_code == 200
+    assert detail.json()["completed_at"] == completed

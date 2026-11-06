@@ -11,6 +11,7 @@ from pathlib import Path
 
 import psutil
 import pytest
+from codex_stub import WORKSPACE_CLIENT
 from test_workflow import service as service
 
 from dev_orchestra.application.service import RunService
@@ -43,15 +44,19 @@ def launch(service, tmp_path, monkeypatch):
         stub.write_text(f"""#!{sys.executable}
 import json,sys,time
 from pathlib import Path
+{WORKSPACE_CLIENT}
 from dev_orchestra.domain.models import AgentResult,Criterion,Coverage
 if '--help' in sys.argv:
- if {stage!r}=='preflight':time.sleep(60)
+ if {stage!r}=='preflight':
+  while not Path({str(release)!r}).exists():time.sleep(.05)
  print('--output-schema --ephemeral --ignore-user-config --json');sys.exit(0)
 data=json.loads(sys.stdin.read().split('UNTRUSTED TASK DATA:\\n',1)[1]);role=data['role']
-if role=={stage!r} and not Path({str(release)!r}).exists():time.sleep(60)
+if role=={stage!r}:
+ while not Path({str(release)!r}).exists():time.sleep(.05)
 result=AgentResult(summary='검증')
 if role=='planner':result.plan='계획';result.criteria=[Criterion(id='AC1',description='조건')]
 if role=='tester':result.command_ids=['unit'];result.coverage=[Coverage(criterion_id='AC1',command_ids=['unit'])]
+result=finish_workspace(data,result)
 Path(sys.argv[sys.argv.index('--output-last-message')+1]).write_text(result.model_dump_json())
 """)
         stub.chmod(0o755)
@@ -95,9 +100,9 @@ os.execv({real_git!r},[{real_git!r},*sys.argv[1:]])
             pattern = (
                 "processes/*.json"
                 if stage in {"preflight", "git_worktree"}
-                else "iterations/*/tester/*/unit.process.json"
+                else "iterations/*/tester/*/test-*/unit.process.json"
                 if stage == "test_command"
-                else f"iterations/*/{stage}/*/process.process.json"
+                else f"iterations/*/{stage}/*/**/process.process.json"
             )
             for mirror in directory.glob(pattern):
                 record = json.loads(mirror.read_text())
@@ -115,10 +120,10 @@ os.execv({real_git!r},[{real_git!r},*sys.argv[1:]])
                     return record
             return None
 
-        # Preparing Git and three independent roles can exceed ten seconds under
+        # Preparing workspace snapshots and independent roles can exceed thirty seconds under
         # concurrent native/browser load. Wait for the actual injection boundary;
         # post-kill termination deadlines and all ownership assertions stay strict.
-        record = until(command_started, timeout=30)
+        record = until(command_started, timeout=90)
         processes.append(record)
         return svc, rid, worker, record, release
 
@@ -178,6 +183,7 @@ def test_guardian_cleans_up_without_status_or_cancel(launch):
 
 def test_worker_sigkill_then_resume_preserves_planner(launch):
     svc, rid, worker, child, release = launch()
+    before = next(s for s in svc.store.steps(rid) if s["role"] == "developer")
     kill_worker(worker)
     until(lambda: not alive(child))
     release.touch()
@@ -186,7 +192,9 @@ def test_worker_sigkill_then_resume_preserves_planner(launch):
     assert svc.status(rid)["state"] == "waiting_approval"
     steps = svc.store.steps(rid)
     assert len([s for s in steps if s["role"] == "planner"]) == 1
-    assert [s["status"] for s in steps if s["role"] == "developer"] == ["interrupted", "completed"]
+    developers = [s for s in steps if s["role"] == "developer"]
+    assert len(developers) == 1 and developers[0]["status"] == "completed"
+    assert (developers[0]["id"], developers[0]["attempt"]) == (before["id"], before["attempt"])
     svc.approve(rid)
     assert svc.status(rid)["state"] == "completed"
 
@@ -195,7 +203,7 @@ def test_duplicate_worker_does_not_replace_owner(launch):
     svc, rid, worker, child, _ = launch()
     directory = Path(svc.store.get(rid)["directory"])
     original_owner = json.loads((directory / "worker.json").read_text())
-    svc.start(rid)
+    svc.start(rid, detached=True)
     assert svc.status(rid)["state"] == "developing"
     assert json.loads((directory / "worker.json").read_text()) == original_owner
     assert alive(child)
@@ -281,18 +289,11 @@ def test_guarded_git_preserves_diff_but_redacts_persisted_logs(service):
 def test_real_worker_pipeline_fixes_failing_pytest_and_approves(service, tmp_path):
     base_service, base_id, repo = service
     test_content = "from pathlib import Path\nimport runpy\ndef test_value():\n    assert runpy.run_path(str(Path(__file__).resolve().parents[1] / 'main.py'))['value'] == 2\n"
-    import difflib
-
-    test_patch = "".join(
-        difflib.unified_diff(
-            [], test_content.splitlines(True), fromfile="/dev/null", tofile="b/tests/test_value.py"
-        )
-    )
-    fix_patch = "--- a/main.py\n+++ b/main.py\n@@ -1 +1 @@\n-original\n+value = 2\n"
     stub = tmp_path / "pipeline-codex"
     stub.write_text(f"""#!{sys.executable}
 import json,sys
 from pathlib import Path
+{WORKSPACE_CLIENT}
 from dev_orchestra.domain.models import AgentResult,Criterion,Coverage
 if '--help' in sys.argv:
  print('--output-schema --ephemeral --ignore-user-config --json');sys.exit(0)
@@ -301,8 +302,9 @@ result=AgentResult(summary='검증')
 if role=='planner':result.plan='값 2 구현';result.criteria=[Criterion(id='AC1',description='value == 2')]
 if role=='tester':
  result.command_ids=['unit'];result.coverage=[Coverage(criterion_id='AC1',command_ids=['unit'])]
- if not Path('tests/test_value.py').exists():result.patch={test_patch!r}
-if role=='fixer':result.patch={fix_patch!r}
+ if not Path('tests/test_value.py').exists():edit('tests/test_value.py',{test_content!r})
+if role=='fixer':edit('main.py','value = 2\\n')
+result=finish_workspace(req,result)
 Path(sys.argv[sys.argv.index('--output-last-message')+1]).write_text(result.model_dump_json())
 """)
     stub.chmod(0o755)

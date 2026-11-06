@@ -6,11 +6,18 @@ import tempfile
 import time
 import uuid
 import xml.etree.ElementTree as ET
+from contextlib import nullcontext
 from pathlib import Path
 
 from dev_orchestra.domain.models import PipelineError, StopRequested
 from dev_orchestra.infrastructure.files import contained, digest, write
-from dev_orchestra.infrastructure.process import environment, execute, execution_directory, sanitize
+from dev_orchestra.infrastructure.process import (
+    environment,
+    execute,
+    execution_directory,
+    execution_scope,
+    sanitize,
+)
 
 
 def sandbox_command(worktree, outputs, scratch, argv, network="none", *, browser=False):
@@ -191,6 +198,16 @@ class TestRunner:
             raise PipelineError("configure at least one allowlisted test command")
         results = []
         directory.mkdir(parents=True, exist_ok=True)
+        observation = {"started_at": time.time(), "status": "incomplete", "commands": []}
+        observation_path = directory / ("test-invocation-" + uuid.uuid4().hex + ".json")
+
+        def observe():
+            try:
+                write(observation_path, observation)
+            except OSError:
+                pass  # Measurements never replace actual JUnit or execution evidence.
+
+        observe()
         for command_id, command in config.commands.items():
             cwd = (
                 worktree
@@ -248,7 +265,20 @@ class TestRunner:
             }
             diagnostic = ""
             try:
-                with tempfile.TemporaryDirectory(prefix="devorchestra-test-") as temp:
+                from dev_orchestra.infrastructure.coordination import host_root, slot
+
+                resource = (
+                    slot(
+                        host_root() / "loopback", execution_directory() or directory, stop, limit=1
+                    )
+                    if command.network == "loopback"
+                    else nullcontext()
+                )
+                with (
+                    resource,
+                    execution_scope(execution_directory() or directory),
+                    tempfile.TemporaryDirectory(prefix="devorchestra-test-") as temp,
+                ):
                     scratch = Path(temp).resolve()
                     env = environment() | {
                         "HOME": str(scratch),
@@ -335,11 +365,17 @@ class TestRunner:
                 )
             result["duration_seconds"] = time.monotonic() - started
             results.append(result)
+            observation["commands"].append(
+                {key: result[key] for key in ["command_id", "status", "duration_seconds"]}
+            )
+            observe()
         statuses = {r["status"] for r in results}
         status = next(
             (s for s in ["timeout", "unavailable", "parse_error", "failed"] if s in statuses),
             "passed",
         )
+        observation.update(status=status, finished_at=time.time())
+        observe()
         return sanitize(
             {
                 "passed": all(r["passed"] for r in results),

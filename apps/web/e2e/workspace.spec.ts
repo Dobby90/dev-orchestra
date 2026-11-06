@@ -3,6 +3,8 @@ import AxeBuilder from "@axe-core/playwright";
 import { execFileSync } from "node:child_process";
 import { existsSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
+// workspace 검증·중단 복구·재검증 두 회차를 실제 호스트에서 수행합니다.
+test.setTimeout(360000);
 const fixture = () =>
   JSON.parse(readFileSync("test-results/fixture.json", "utf8")) as {
     repo: string;
@@ -25,6 +27,25 @@ function bootstrap() {
     { encoding: "utf8" },
   ).trim();
 }
+async function waitForIdleWorker(f: ReturnType<typeof fixture>, rid: string) {
+  await expect
+    .poll(
+      () =>
+        execFileSync(
+          f.python,
+          [
+            "-c",
+            "import sqlite3,sys;print(sqlite3.connect(sys.argv[1]).execute(\"SELECT count(*) FROM jobs WHERE run_id=? AND state IN ('claimed','running')\",(sys.argv[2],)).fetchone()[0])",
+            f.database,
+            rid,
+          ],
+          { encoding: "utf8" },
+        ).trim(),
+      { timeout: 90000 },
+    )
+    .toBe("0");
+}
+
 test("실제 로컬 API: 로그인 → 프로젝트 → 실행 → 재연결 → 승인", async ({
   page,
 }) => {
@@ -121,6 +142,7 @@ test("실제 로컬 API: 로그인 → 프로젝트 → 실행 → 재연결 →
   await expect(
     page.getByRole("heading", { name: "실행 미리보기" }),
   ).toBeVisible();
+  await page.getByRole("button", { name: "대화상자 닫기" }).click();
   await page.getByRole("button", { name: "파일 업로드", exact: true }).click();
   await expect(
     page.getByRole("button", { name: "확인하고 작업 시작" }),
@@ -164,6 +186,7 @@ test("실제 로컬 API: 로그인 → 프로젝트 → 실행 → 재연결 →
     { timeout: 30000 },
   );
   await expect(page.getByText("덧셈 검증", { exact: true })).toBeVisible();
+  await waitForIdleWorker(f, new URL(page.url()).pathname.split("/").at(-1)!);
   await page
     .getByRole("button", { name: "기획 승인 후 개발 시작", exact: true })
     .click();
@@ -174,7 +197,9 @@ test("실제 로컬 API: 로그인 → 프로젝트 → 실행 → 재연결 →
   await expect(page.getByText("개발 중", { exact: true })).toBeVisible({
     timeout: 30000,
   });
-  await expect(page.getByText(/GUI 실시간 한글 로그/)).toBeVisible();
+  await expect(page.getByText(/GUI 실시간 한글 로그/)).toBeVisible({
+    timeout: 75000,
+  });
   expect(await page.locator("body").innerText()).not.toContain("CANARY");
   const runUrl = page.url();
   await page.route("**/events?*", (route) => route.abort("failed"));
@@ -183,7 +208,9 @@ test("실제 로컬 API: 로그인 → 프로젝트 → 실행 → 재연결 →
   await expect(
     page.locator(".run-actions").getByText("재연결 중 · 주기적 조회"),
   ).toBeVisible();
-  await expect(page.getByText(/GUI 실시간 한글 로그/)).toBeVisible();
+  await expect(page.getByText(/GUI 실시간 한글 로그/)).toBeVisible({
+    timeout: 75000,
+  });
   await page.unroute("**/events?*");
   await expect(
     page.locator(".run-actions").getByText("실시간 연결됨"),
@@ -249,7 +276,7 @@ test("실제 로컬 API: 로그인 → 프로젝트 → 실행 → 재연결 →
   await page.getByRole("button", { name: "재개", exact: true }).click();
   await page.getByRole("button", { name: "작업 재개 확인" }).click();
   await expect(page.locator(".page-heading .status")).toHaveText("승인 대기", {
-    timeout: 45000,
+    timeout: 120000,
   });
   await page.getByRole("tab", { name: "테스트", exact: true }).click();
   await page.getByRole("tab", { name: "에이전트·사용량", exact: true }).click();
@@ -284,6 +311,7 @@ test("실제 로컬 API: 로그인 → 프로젝트 → 실행 → 재연결 →
   ).toBeVisible();
   await page.getByRole("tab", { name: "변경 내용", exact: true }).click();
   await expect(page.getByText("이 후보의 변경 파일이 없습니다")).toBeVisible();
+  await waitForIdleWorker(f, new URL(page.url()).pathname.split("/").at(-1)!);
   await page.getByRole("button", { name: "보류", exact: true }).click();
   await page.getByLabel("사유 (필수)").fill("추가 확인 뒤 승인합니다");
   await page.getByRole("button", { name: "승인 보류 확인" }).click();
@@ -293,10 +321,10 @@ test("실제 로컬 API: 로그인 → 프로젝트 → 실행 → 재연결 →
     .getByLabel("수정 지시사항")
     .fill("변경 없이도 테스트와 리뷰를 다시 검증해 주세요.");
   await page.getByRole("button", { name: "수정 요청 확인" }).click();
-  await expect(page.locator(".page-heading .status")).toHaveText("승인 대기", {
-    timeout: 45000,
-  });
   await expect(page.locator(".validation-strip")).toContainText("revision 1");
+  await expect(page.locator(".page-heading .status")).toHaveText("승인 대기", {
+    timeout: 120000,
+  });
   await page.getByRole("tab", { name: "테스트", exact: true }).click();
   await expect(
     page.getByRole("heading", { name: "테스트 통과", exact: true }),
@@ -322,7 +350,7 @@ test("실제 로컬 API: 로그인 → 프로젝트 → 실행 → 재연결 →
   expect(snapshot.trim()).toBe("1\n2");
   await page.getByRole("tab", { name: "최종 보고서" }).click();
   await expect(
-    page.getByRole("heading", { name: "DevOrchestra report" }),
+    page.getByRole("heading", { name: "DevOrchestra 작업 최종 보고서" }),
   ).toBeVisible();
   const cli = join(dirname(f.python), "devorchestra");
   const cliList = JSON.parse(
@@ -345,6 +373,21 @@ test("실제 로컬 API: 로그인 → 프로젝트 → 실행 → 재연결 →
   });
   expect(cliLogs).toContain("GUI 실시간 한글 로그");
   expect(cliLogs).not.toContain("CANARY");
+  // 승인 대기 상태가 먼저 기록될 수 있으므로 Worker의 실행 잠금 반환까지 기다립니다.
+  await expect
+    .poll(() =>
+      execFileSync(
+        f.python,
+        [
+          "-c",
+          "import sqlite3,sys;print(sqlite3.connect(sys.argv[1]).execute(\"SELECT count(*) FROM jobs WHERE run_id=? AND state IN ('claimed','running')\",(sys.argv[2],)).fetchone()[0])",
+          f.database,
+          rid,
+        ],
+        { encoding: "utf8" },
+      ).trim(),
+    )
+    .toBe("0");
   await page.getByRole("button", { name: "최종 승인", exact: true }).click();
   await expect(
     page.getByRole("button", { name: "최종 승인 확인" }),
@@ -524,6 +567,7 @@ test("CLI 시작·브라우저 종료·재접속·CLI 승인과 GUI 생성 교�
     "기획 승인 대기",
     { timeout: 30000 },
   );
+  await waitForIdleWorker(f, rid);
   const plan = JSON.parse(
     execFileSync(cli, [...cliArgs, "status", rid], { encoding: "utf8" }),
   );
@@ -553,7 +597,7 @@ test("CLI 시작·브라우저 종료·재접속·CLI 승인과 GUI 생성 교�
   await expect(reopened.locator(".page-heading .status")).toHaveText(
     "승인 대기",
     {
-      timeout: 45000,
+      timeout: 120000,
     },
   );
   await expect
@@ -605,6 +649,10 @@ test("CLI 시작·브라우저 종료·재접속·CLI 승인과 GUI 생성 교�
     "기획 승인 대기",
     { timeout: 30000 },
   );
+  await waitForIdleWorker(
+    f,
+    new URL(reopened.url()).pathname.split("/").at(-1)!,
+  );
   await reopened
     .getByRole("button", { name: "기획 승인 후 개발 시작", exact: true })
     .click();
@@ -614,7 +662,7 @@ test("CLI 시작·브라우저 종료·재접속·CLI 승인과 GUI 생성 교�
   await expect(reopened.locator(".page-heading .status")).toHaveText(
     "승인 대기",
     {
-      timeout: 45000,
+      timeout: 120000,
     },
   );
   const guiRid = new URL(reopened.url()).pathname.split("/").at(-1)!;

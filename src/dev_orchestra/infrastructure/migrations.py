@@ -47,16 +47,21 @@ CREATE INDEX jobs_queue ON jobs(state,created_at,id);
 """
 
 
-def upgrade(path: Path):
+WORKSPACE_SCHEMA = 6
+
+
+def upgrade(path: Path, *, workspace=False):
     """Never signals a process or resets a checkout while migrating."""
     with lock(path.with_suffix(".maintenance.lock")), ExitStack() as locks:
         db = sqlite3.connect(path, timeout=10)
         try:
             version = db.execute("SELECT version FROM schema_version").fetchall()
-            if version == [(CURRENT_SCHEMA,)]:
+            target_version = WORKSPACE_SCHEMA if workspace else CURRENT_SCHEMA
+            if version in ([(WORKSPACE_SCHEMA,)], [(target_version,)]):
                 return None
-            if version not in ([(2,)], [(3,)], [(4,)]):
-                raise PipelineError("upgrade requires initialized schema 2, 3 or 4")
+            if version not in ([(2,)], [(3,)], [(4,)], [(5,)]):
+                raise PipelineError("upgrade requires initialized schema 2, 3, 4 or 5")
+            locks.enter_context(lock(path.with_suffix(".web.lock")))
             for (raw,) in db.execute("SELECT data FROM runs"):
                 directory = Path(json.loads(raw).get("directory", path.parent / "missing"))
                 locks.enter_context(lock(directory / "execution.lock"))
@@ -66,7 +71,11 @@ def upgrade(path: Path):
                         value = json.loads(record.read_text())
                         if not value.get("finished") and alive(value):
                             raise PipelineError("stop Workers before database upgrade")
-                if any(not r.get("finished") for _, r in markers(directory)):
+                if any(
+                    not r.get("finished")
+                    or (r.get("protocol") == 2 and not r.get("termination_confirmed"))
+                    for _, r in markers(directory)
+                ):
                     raise PipelineError("unconfirmed processes prevent database upgrade")
             backup = path.with_name(path.name + ".backup-" + uuid.uuid4().hex + ".db")
             fd = os.open(backup, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
@@ -97,18 +106,19 @@ def upgrade(path: Path):
             for statement in (
                 (SCHEMA if version == [(2,)] else "")
                 + (SCHEMA4 if version[0][0] < 4 else "")
-                + SCHEMA5
+                + (SCHEMA5 if version[0][0] < 5 else "")
             ).split(";"):
                 if statement.strip():
                     db.execute(statement)
             # Schema 2 stores plan revisions inside JSON checkpoints.
-            db.execute("UPDATE runs SET revision=COALESCE(json_extract(data, '$.revision'), 0)")
-            db.execute(
-                "UPDATE steps SET revision=COALESCE(json_extract(data, '$.revision'), revision)"
-            )
+            if version[0][0] < 5:
+                db.execute("UPDATE runs SET revision=COALESCE(json_extract(data, '$.revision'), 0)")
+                db.execute(
+                    "UPDATE steps SET revision=COALESCE(json_extract(data, '$.revision'), revision)"
+                )
             if db.execute("PRAGMA foreign_key_check").fetchall():
                 raise PipelineError("foreign key check failed")
-            db.execute("UPDATE schema_version SET version=?", (CURRENT_SCHEMA,))
+            db.execute("UPDATE schema_version SET version=?", (target_version,))
             db.commit()
             return backup
         except BaseException:

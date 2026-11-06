@@ -37,7 +37,7 @@ class WebRuntime:
             raise PipelineError("install the web extra before web start") from error
         bundle(assets, required=True)
         with self.service.store.connection() as db:
-            if db.execute("SELECT version FROM schema_version").fetchone()[0] != 5:
+            if db.execute("SELECT version FROM schema_version").fetchone()[0] not in {5, 6}:
                 raise PipelineError("run database-upgrade first")
         if self.status()["alive"]:
             raise PipelineError("web service is already running")

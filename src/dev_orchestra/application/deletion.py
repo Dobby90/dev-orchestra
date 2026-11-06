@@ -8,6 +8,7 @@ from pathlib import Path
 from dev_orchestra.application.errors import ApplicationError
 from dev_orchestra.config import Config
 from dev_orchestra.domain.models import PipelineError
+from dev_orchestra.infrastructure.coordination import metadata, retire_run_capacity
 from dev_orchestra.infrastructure.files import contained
 from dev_orchestra.infrastructure.git import Git
 from dev_orchestra.infrastructure.locking import lock
@@ -187,6 +188,7 @@ class RunDeletionService:
             # Preserve the row on any filesystem failure. A subsequent confirmed
             # request uses the latest version and repeats the same safe removal.
             try:
+                retire_run_capacity(self.store.path, run)
                 if worktree.exists():
                     for report in reports:
                         contained(worktree, report.relative_to(worktree).as_posix()).unlink(
@@ -196,9 +198,10 @@ class RunDeletionService:
                 target = self.branch_target(self.store.get(run_id), worktree)
                 if target:
                     # Compare-and-delete also protects commits added after preflight.
-                    Git(Path(run["repo"])).call(
-                        "update-ref", "--no-deref", "-d", "refs/heads/" + run["branch"], target
-                    )
+                    with metadata(Path(run["repo"])):
+                        Git(Path(run["repo"])).call(
+                            "update-ref", "--no-deref", "-d", "refs/heads/" + run["branch"], target
+                        )
                 with self.store.transaction() as db:
                     self.check_idle(db, self.store.get(run_id), directory)
                     shutil.rmtree(directory)

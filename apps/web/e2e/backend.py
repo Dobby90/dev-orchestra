@@ -2,6 +2,8 @@
 
 import json
 import os
+import runpy
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -16,6 +18,10 @@ from dev_orchestra.api.main import create_app
 from dev_orchestra.application.service import RunService
 from dev_orchestra.config import Config, Storage, TestCommand, Tests
 from dev_orchestra.infrastructure.migrations import upgrade
+
+WORKSPACE_CLIENT = runpy.run_path(Path(__file__).resolve().parents[3] / "tests/codex_stub.py")[
+    "WORKSPACE_CLIENT"
+]
 
 root = Path(tempfile.mkdtemp(prefix="devorchestra-web-e2e-")).resolve()
 repo = root / "repository"
@@ -39,9 +45,14 @@ git("commit", "-m", "임시 GUI 검증 기준선")
 release = root / "release"
 mock = root / "mock-codex"
 mock.write_text(f"""#!{sys.executable}
-import json,sys,time
+import json,os,sys,time
 from pathlib import Path
 from dev_orchestra.domain.models import AgentResult, Criterion, Coverage, ReviewResultV2
+if len(sys.argv)>1 and sys.argv[1]=='sandbox':
+ real_codex={shutil.which("codex")!r}
+ if not real_codex:raise SystemExit('installed Codex sandbox is required')
+ os.execv(real_codex,[real_codex,*sys.argv[1:]])
+{WORKSPACE_CLIENT}
 if '--help' in sys.argv:
  print('--output-schema --ephemeral --ignore-user-config --json');sys.exit(0)
 if 'app-server' in sys.argv:
@@ -59,6 +70,7 @@ if req['role']=='developer':
 r=ReviewResultV2(summary='GUI 검증') if req['role']=='reviewer' and req['context'].get('review_contract')==2 else AgentResult(summary='GUI 검증')
 if req['role']=='planner':r.plan='덧셈 검증';r.criteria=[Criterion(id='AC1',description='덧셈 통과')]
 if req['role']=='tester':r.command_ids=['unit'];r.coverage=[Coverage(criterion_id='AC1',command_ids=['unit'])]
+r=finish_workspace(req,r)
 Path(sys.argv[sys.argv.index('--output-last-message')+1]).write_text(r.model_dump_json())
 print(json.dumps({{'type':'turn.completed','usage':{{'input_tokens':100,'cached_input_tokens':70,'output_tokens':20}}}}),flush=True)
 """)
@@ -83,7 +95,7 @@ config.codex.command = str(mock)
 settings = root / "config.yaml"
 settings.write_text(yaml.safe_dump(config.model_dump(mode="json")))
 svc = RunService(config)
-upgrade(svc.store.path)
+upgrade(svc.store.path, workspace=True)
 manifest = Path("test-results/fixture.json")
 manifest.parent.mkdir(parents=True, exist_ok=True)
 manifest.write_text(
