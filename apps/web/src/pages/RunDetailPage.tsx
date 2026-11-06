@@ -6,6 +6,7 @@ import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import {
   ArrowLeft,
+  CheckCircle2,
   CircleAlert,
   GitBranch,
   Pause,
@@ -322,12 +323,6 @@ function RunDetailBody({ rid }: { rid: string }) {
                     재개
                   </Button>
                 )}
-              {r.execution?.worktree_removed && (
-                <span className="subtle">
-                  Worktree가 정리되어 재개할 수 없습니다. 계속하려면 새 작업을
-                  생성하세요.
-                </span>
-              )}
               {!["completed", "cancelled"].includes(r.state) && (
                 <Button
                   variant="ghost"
@@ -420,6 +415,18 @@ function RunDetailBody({ rid }: { rid: string }) {
           )}
         </div>
       </div>
+      {registered && !r.deletion_pending && r.execution?.worktree_removed && (
+        <div role="status" className="notice worktree-notice">
+          <CheckCircle2 size={18} />
+          <div>
+            <strong>Worktree 정리 완료</strong>
+            <p>
+              브랜치와 작업 결과는 보존됩니다. 이 작업은 재개할 수 없습니다.
+              계속하려면 새 작업을 생성하세요.
+            </p>
+          </div>
+        </div>
+      )}
       {r.deletion_pending && (
         <p role="status" className="notice">
           기록 삭제가 진행 중이거나 중단되었습니다. 일부 파일이 삭제되었을 수

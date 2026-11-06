@@ -186,7 +186,11 @@ it.each(["failed", "needs_input"] as const)(
     await act(async () => {
       await client.invalidateQueries({ queryKey: ["run", "r1"] });
     });
-    expect(await screen.findByText(/계속하려면 새 작업을/)).toBeVisible();
+    const notice = await screen.findByText(/계속하려면 새 작업을/);
+    expect(notice).toBeVisible();
+    expect(notice.closest(".run-actions")).toBeNull();
+    expect(notice.closest('[role="status"]')).toHaveClass("worktree-notice");
+    expect(screen.getByText("Worktree 정리 완료")).toBeVisible();
     expect(
       screen.queryByRole("button", { name: "재개" }),
     ).not.toBeInTheDocument();

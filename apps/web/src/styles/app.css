@@ -385,6 +385,15 @@ main#main {
 .button-ghost:hover {
   background: var(--panel-hover);
 }
+.run-actions :is(.button-ghost, .button-secondary) {
+  background: var(--accent-soft);
+  border-color: color-mix(in srgb, var(--accent) 35%, var(--border));
+  color: var(--text);
+}
+.run-actions :is(.button-ghost, .button-secondary):hover:not(:disabled) {
+  background: color-mix(in srgb, var(--accent) 20%, var(--panel));
+  border-color: var(--accent);
+}
 .button-danger {
   background: color-mix(in srgb, var(--red) 12%, var(--panel));
   border-color: color-mix(in srgb, var(--red) 30%, var(--border));
@@ -602,6 +611,17 @@ tbody tr:hover {
 .notice-error {
   color: var(--red);
   border-color: color-mix(in srgb, var(--red) 25%, var(--border));
+}
+.worktree-notice {
+  background: color-mix(in srgb, var(--green) 6%, var(--panel));
+  border-color: color-mix(in srgb, var(--green) 30%, var(--border));
+}
+.worktree-notice > svg,
+.worktree-notice strong {
+  color: var(--green);
+}
+.worktree-notice p {
+  margin-bottom: 0;
 }
 .notice-error p {
   color: var(--muted);
