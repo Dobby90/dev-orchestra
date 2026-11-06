@@ -984,16 +984,16 @@ class Runner:
                 "questions",
             ]
         }
-        content = "# DevOrchestra report\n\n" + "\n".join(
+        from dev_orchestra.application.reporting import result_markdown
+
+        content = result_markdown(self.store, run, steps)
+        content += "\n## 승인·인계 정보\n\n" + "\n".join(
             f"- **{k}**: {v}" for k, v in summary.items()
         )
         from dev_orchestra.application.handoff import handoff_markdown
 
         content += handoff_markdown(run)
         content += "\n\n리뷰 범위: Run 누적 변경과 직접 영향을 받는 코드·호출부·기존 미해결 이슈.\n"
-        content += "\n\n## Requirements\n\n" + run["spec"]
-        if run.get("directives"):
-            content += "\n\n## User change requests\n\n" + "\n\n".join(run["directives"])
         content += "\n\n## 테스트 범위\n\n요청 범위: " + run.get("test_scope", "full")
         selection = (run.get("test_result") or {}).get("test_selection")
         if selection:
@@ -1009,7 +1009,10 @@ class Runner:
             for record in run["test_change_records"]:
                 for change in record["changes"]:
                     content += f"- `{change['file']}` ({', '.join(change['criterion_ids'])}): {change['reason']}\n"
-        content += "\n\n## Implementation and verification history\n\n"
+        content += "\n\n## 부록: 원문 요구사항\n\n" + run["spec"]
+        if run.get("directives"):
+            content += "\n\n## 부록: 사용자 수정 요청\n\n" + "\n\n".join(run["directives"])
+        content += "\n\n## 부록: 구현·검증 이력\n\n"
         for step in steps:
             content += f"- {step['role']} iteration={step['iteration']} attempt={step['attempt']} {step['status']} SHA={step['output_sha']}\n"
             from dev_orchestra.application.progress import role_progress
@@ -1020,7 +1023,7 @@ class Runner:
             if progress["checkpoint_sha"]:
                 content += f"  - 마지막 복구 지점 `{progress['checkpoint_sha']}` · 보존 변경 {progress['preserved_changes']}개 · 재개 방식 {progress['recovery']}\n"
         content += (
-            "\n## Test and review results\n\n```json\n"
+            "\n## 부록: 원본 테스트·리뷰 결과\n\n```json\n"
             + json.dumps(
                 {"tests": run.get("test_result"), "review": run.get("review_result")},
                 indent=2,
@@ -1028,14 +1031,9 @@ class Runner:
             )
             + "\n```\n"
         )
-        if Path(run["worktree"]).exists():
-            try:
-                content += "\n## Changed files\n\n" + Git(Path(run["worktree"])).call(
-                    "diff", "--name-only", f"{run['base_sha']}...HEAD"
-                )
-            except PipelineError:
-                pass
-        content += "\n\n## Remaining risks\n\nReview findings and missing/failed verification above remain actionable. Automatic review cannot prove absence of defects.\n\nHuman approval is required; no push or merge is performed.\n"
+        content += (
+            "\n\n자동 리뷰는 결함 부재를 보장하지 않습니다. Push·Merge는 자동 수행하지 않습니다.\n"
+        )
         content = redact(content)
         write(Path(run["directory"]) / "metadata.json", summary)
         write(Path(run["directory"]) / "final-report.md", content)
