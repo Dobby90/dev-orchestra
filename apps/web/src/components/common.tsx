@@ -153,12 +153,12 @@ export function RunsTable({ runs }: { runs: Run[] }) {
           <tr>
             <th>작업 / 브랜치</th>
             <th>상태</th>
+            <th>진행 단계</th>
+            <th>수정 회차</th>
             <th title="앱에 기록된 Push 결과입니다. 원본 저장소에서 직접 수행한 Push는 자동 반영되지 않습니다.">
               Push
             </th>
             <th>Worktree</th>
-            <th>현재 단계</th>
-            <th>수정 회차</th>
             <th>요청일시</th>
             <th>완료일시</th>
             <th>
@@ -189,6 +189,12 @@ export function RunsTable({ runs }: { runs: Run[] }) {
                 )}
               </td>
               <td>
+                {run.current_role
+                  ? (roles[run.current_role] ?? run.current_role)
+                  : "—"}
+              </td>
+              <td className="mono">{run.iteration}</td>
+              <td>
                 <span
                   className={
                     run.push_status === "success"
@@ -216,12 +222,6 @@ export function RunsTable({ runs }: { runs: Run[] }) {
                   {run.worktree_removed ? "정리 완료" : "미정리"}
                 </span>
               </td>
-              <td>
-                {run.current_role
-                  ? (roles[run.current_role] ?? run.current_role)
-                  : "—"}
-              </td>
-              <td className="mono">{run.iteration}</td>
               <td className="run-timestamp">
                 {run.created_at ? (
                   <time dateTime={run.created_at}>
