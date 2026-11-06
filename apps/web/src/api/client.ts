@@ -12,6 +12,14 @@ export class ApiError extends Error {
   }
 }
 const messages: Record<string, string> = {
+  PUSH_CANDIDATE_CHANGED:
+    "승인 후 브랜치 SHA 또는 저장소 연결이 변경되어 Push를 차단했습니다. 승인 SHA와 현재 브랜치를 확인하세요.",
+  PUSH_EVIDENCE_INVALID:
+    "승인 후보의 테스트·리뷰 근거가 일치하지 않아 Push를 차단했습니다.",
+  VAULT_UNAVAILABLE:
+    "OS 자격 증명 저장소를 사용할 수 없습니다. 저장소 잠금과 시스템 설정을 확인하세요.",
+  GIT_DELIVERY_BLOCKED:
+    "Push 대상·승인 SHA 또는 Git 인증 설정이 일치하지 않습니다. 최신 상태와 프로젝트 Git 설정을 확인하세요.",
   RUN_WORKTREE_DIRTY:
     "테스트 결과 파일 외 미커밋 변경이 있어 삭제할 수 없습니다. Worktree의 변경 내용을 보존하거나 정리해 주세요.",
   RUN_BRANCH_CHANGED:

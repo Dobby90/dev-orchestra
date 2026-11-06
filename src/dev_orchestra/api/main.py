@@ -20,6 +20,7 @@ from dev_orchestra.application.agent_usage import usage_view
 from dev_orchestra.application.backend import BackendService
 from dev_orchestra.application.commands import Commands
 from dev_orchestra.application.errors import ApplicationError
+from dev_orchestra.application.git_delivery import GitDeliveryService
 from dev_orchestra.application.notifications import NotificationService
 from dev_orchestra.application.results import Results
 from dev_orchestra.application.service import RunService
@@ -39,6 +40,9 @@ from dev_orchestra.application.web_contracts import (
     DiffView,
     DispositionInput,
     EventPage,
+    GitSettingsInput,
+    GitSettingsView,
+    GitTestInput,
     LogPage,
     LogWindow,
     NotificationPage,
@@ -51,6 +55,8 @@ from dev_orchestra.application.web_contracts import (
     ProjectPatch,
     ProjectView,
     Proposal,
+    PushInput,
+    PushView,
     Reason,
     ReportView,
     ResumeInput,
@@ -97,6 +103,7 @@ def create_app(config=None, allowed_roots=None, port=8000, static_directory=None
     )
     key = runtime_key(runs.store.path.with_suffix(".web-key"))
     backend = BackendService(runs, roots, key)
+    delivery = GitDeliveryService(backend)
     security = Security(runs.store, key)
     agent_settings = AgentSettingsService(config)
     notifications = NotificationService(runs.store)
@@ -115,6 +122,7 @@ def create_app(config=None, allowed_roots=None, port=8000, static_directory=None
         openapi_url="/api/openapi.json",
         redoc_url=None,
     )
+    app.state.delivery = delivery
     app.state.backend = backend
     app.state.security = security
     origins = {f"http://127.0.0.1:{port}", "http://127.0.0.1:5173"}
@@ -362,6 +370,26 @@ def create_app(config=None, allowed_roots=None, port=8000, static_directory=None
     @app.delete("/api/projects/{pid}", response_model=ProjectView)
     def archive_project(pid: str, request: Request):
         return backend.change_project(pid, version(request, pid, "project"))
+
+    @app.get("/api/projects/{pid}/git", response_model=GitSettingsView)
+    def git_settings(pid: str):
+        return delivery.view(pid)
+
+    @app.patch("/api/projects/{pid}/git", response_model=GitSettingsView)
+    def save_git_settings(pid: str, body: GitSettingsInput):
+        return delivery.save(pid, body)
+
+    @app.post("/api/projects/{pid}/git/test", response_model=GitSettingsView)
+    def test_git_connection(pid: str, body: GitTestInput):
+        return delivery.test(pid, body.expected_version)
+
+    @app.get("/api/runs/{rid}/push", response_model=PushView)
+    def push_preview(rid: str):
+        return delivery.preview(rid)
+
+    @app.post("/api/runs/{rid}/push", response_model=PushView)
+    def push_branch(rid: str, request: Request, body: PushInput):
+        return delivery.push(rid, body, version(request, rid))
 
     @app.get("/api/projects/{pid}/branches", response_model=BranchPage)
     def branches(pid: str):

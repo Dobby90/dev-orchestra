@@ -80,6 +80,7 @@ def execute(
     capture_raw=False,
     on_event=None,
     separate_stderr=False,
+    output_redactor=None,
 ):
     log.parent.mkdir(parents=True, exist_ok=True)
     with tempfile.TemporaryFile() as input_file, log.open("w") as output_file:
@@ -134,7 +135,7 @@ def execute(
             else:
                 if on_event is not None and stream == "out" and isinstance(event, dict):
                     on_event(sanitize(event))
-            text = redact(line)
+            text = output_redactor(line) if output_redactor is not None else redact(line)
             output_file.write(text)
             output_file.flush()
             if stream == "out":

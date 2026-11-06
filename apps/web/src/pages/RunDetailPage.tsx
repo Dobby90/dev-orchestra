@@ -37,6 +37,7 @@ import { LogViewer } from "../components/LogViewer";
 import { AgentUsagePanel } from "../components/AgentUsagePanel";
 import { WorkflowTimeline } from "../components/WorkflowTimeline";
 import { DeleteRunButton } from "../components/DeleteRunButton";
+import { RunPushPanel } from "../components/RunPushPanel";
 import { RunHandoffPanel } from "../components/RunHandoffPanel";
 import { TestChangePanel } from "../components/TestChangePanel";
 import { useRunEvents } from "../hooks/events";
@@ -497,6 +498,9 @@ function RunDetailBody({ rid }: { rid: string }) {
               : "수동 확인 필요"}
           {operation.data.error && ` · ${operation.data.error}`}
         </p>
+      )}
+      {registered && r.state === "completed" && (
+        <RunPushPanel run={r} onCleanup={() => open("cleanup")} />
       )}
       <RunHandoffPanel run={r} />
       <section className="panel timeline-panel">

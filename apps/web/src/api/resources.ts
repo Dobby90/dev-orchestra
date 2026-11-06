@@ -2,6 +2,28 @@ import { request, version } from "./client";
 import type { Project, Schema } from "./types";
 const id = encodeURIComponent;
 export const api = {
+  gitSettings: (pid: string) =>
+    request<Schema["GitSettingsView"]>(`/projects/${id(pid)}/git`),
+  saveGitSettings: (pid: string, body: Schema["GitSettingsInput"]) =>
+    request<Schema["GitSettingsView"]>(`/projects/${id(pid)}/git`, {
+      method: "PATCH",
+      body: JSON.stringify(body),
+    }),
+  testGit: (pid: string, expected_version: string) =>
+    request<Schema["GitSettingsView"]>(`/projects/${id(pid)}/git/test`, {
+      method: "POST",
+      signal: AbortSignal.timeout(75000),
+      body: JSON.stringify({ expected_version }),
+    }),
+  pushPreview: (rid: string) =>
+    request<Schema["PushView"]>(`/runs/${id(rid)}/push`),
+  pushBranch: (rid: string, revision: number, body: Schema["PushInput"]) =>
+    request<Schema["PushView"]>(`/runs/${id(rid)}/push`, {
+      method: "POST",
+      headers: version("run", rid, revision),
+      signal: AbortSignal.timeout(75000),
+      body: JSON.stringify(body),
+    }),
   deleteRun: (rid: string, revision: number) =>
     request<void>(`/runs/${id(rid)}`, {
       method: "DELETE",

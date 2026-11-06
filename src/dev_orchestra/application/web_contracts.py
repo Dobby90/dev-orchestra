@@ -3,7 +3,7 @@
 from datetime import datetime
 from typing import Annotated, Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, SecretStr, model_validator
 
 from dev_orchestra.application.contracts import RunSummary
 from dev_orchestra.config import AgentOptions, AgentSettings, TestCommand, Tests
@@ -588,3 +588,72 @@ class NotificationRead(Input):
         default_factory=list, max_length=100
     )
     through: int | None = Field(default=None, ge=0, strict=True)
+
+
+class GitSettingsInput(Input):
+    expected_version: str
+    remote: str = Field(min_length=1, max_length=200)
+    account: str = Field(default="", max_length=200, pattern=r"^[^\r\n\x00]*$")
+    token: SecretStr | None = Field(default=None, min_length=1, max_length=8192)
+    delete_token: bool = False
+
+    @model_validator(mode="after")
+    def safe_token(self):
+        if self.token is not None and (
+            self.delete_token or any(c in self.token.get_secret_value() for c in "\r\n\x00")
+        ):
+            raise ValueError("invalid token")
+        return self
+
+
+class GitTestInput(Input):
+    expected_version: str
+
+
+class GitRemoteView(BaseModel):
+    name: str
+    url: str
+
+
+class GitTestView(BaseModel):
+    status: str
+    message: str
+    url: str
+    checked_at: str
+    push_permission: Literal["unknown"] = "unknown"
+
+
+class GitSettingsView(BaseModel):
+    remote: str
+    remote_url: str | None
+    account: str
+    token_registered: bool
+    version: str
+    remotes: list[GitRemoteView]
+    test: GitTestView | None
+
+
+class PushInput(Input):
+    settings_version: str
+    remote_url: str
+    branch: str
+    approved_sha: str
+
+
+class PushResultView(BaseModel):
+    status: str
+    message: str
+    remote: str
+    remote_url: str
+    branch: str
+    sha: str
+    checked_at: str
+
+
+class PushView(BaseModel):
+    remote: str
+    remote_url: str | None
+    settings_version: str
+    branch: str
+    approved_sha: str | None
+    result: PushResultView | None

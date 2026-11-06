@@ -146,6 +146,59 @@ export interface paths {
         patch: operations["patch_project_api_projects__pid__patch"];
         trace?: never;
     };
+    "/api/projects/{pid}/git": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Git Settings */
+        get: operations["git_settings_api_projects__pid__git_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        /** Save Git Settings */
+        patch: operations["save_git_settings_api_projects__pid__git_patch"];
+        trace?: never;
+    };
+    "/api/projects/{pid}/git/test": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Test Git Connection */
+        post: operations["test_git_connection_api_projects__pid__git_test_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/runs/{rid}/push": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Push Preview */
+        get: operations["push_preview_api_runs__rid__push_get"];
+        put?: never;
+        /** Push Branch */
+        post: operations["push_branch_api_runs__rid__push_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/projects/{pid}/branches": {
         parameters: {
             query?: never;
@@ -1154,6 +1207,70 @@ export interface components {
              */
             details: string;
         };
+        /** GitRemoteView */
+        GitRemoteView: {
+            /** Name */
+            name: string;
+            /** Url */
+            url: string;
+        };
+        /** GitSettingsInput */
+        GitSettingsInput: {
+            /** Expected Version */
+            expected_version: string;
+            /** Remote */
+            remote: string;
+            /**
+             * Account
+             * @default
+             */
+            account: string;
+            /** Token */
+            token?: string | null;
+            /**
+             * Delete Token
+             * @default false
+             */
+            delete_token: boolean;
+        };
+        /** GitSettingsView */
+        GitSettingsView: {
+            /** Remote */
+            remote: string;
+            /** Remote Url */
+            remote_url: string | null;
+            /** Account */
+            account: string;
+            /** Token Registered */
+            token_registered: boolean;
+            /** Version */
+            version: string;
+            /** Remotes */
+            remotes: components["schemas"]["GitRemoteView"][];
+            test: components["schemas"]["GitTestView"] | null;
+        };
+        /** GitTestInput */
+        GitTestInput: {
+            /** Expected Version */
+            expected_version: string;
+        };
+        /** GitTestView */
+        GitTestView: {
+            /** Status */
+            status: string;
+            /** Message */
+            message: string;
+            /** Url */
+            url: string;
+            /** Checked At */
+            checked_at: string;
+            /**
+             * Push Permission
+             * @default unknown
+             * @constant
+             */
+            push_permission: "unknown";
+        };
         /** HTTPValidationError */
         HTTPValidationError: {
             /** Detail */
@@ -1420,6 +1537,48 @@ export interface components {
              * @constant
              */
             run_review: true;
+        };
+        /** PushInput */
+        PushInput: {
+            /** Settings Version */
+            settings_version: string;
+            /** Remote Url */
+            remote_url: string;
+            /** Branch */
+            branch: string;
+            /** Approved Sha */
+            approved_sha: string;
+        };
+        /** PushResultView */
+        PushResultView: {
+            /** Status */
+            status: string;
+            /** Message */
+            message: string;
+            /** Remote */
+            remote: string;
+            /** Remote Url */
+            remote_url: string;
+            /** Branch */
+            branch: string;
+            /** Sha */
+            sha: string;
+            /** Checked At */
+            checked_at: string;
+        };
+        /** PushView */
+        PushView: {
+            /** Remote */
+            remote: string;
+            /** Remote Url */
+            remote_url: string | null;
+            /** Settings Version */
+            settings_version: string;
+            /** Branch */
+            branch: string;
+            /** Approved Sha */
+            approved_sha: string | null;
+            result: components["schemas"]["PushResultView"] | null;
         };
         /** Reason */
         Reason: {
@@ -2509,6 +2668,173 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ProjectView"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    git_settings_api_projects__pid__git_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                pid: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["GitSettingsView"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    save_git_settings_api_projects__pid__git_patch: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                pid: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["GitSettingsInput"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["GitSettingsView"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    test_git_connection_api_projects__pid__git_test_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                pid: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["GitTestInput"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["GitSettingsView"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    push_preview_api_runs__rid__push_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                rid: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PushView"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    push_branch_api_runs__rid__push_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                rid: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["PushInput"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PushView"];
                 };
             };
             /** @description Validation Error */

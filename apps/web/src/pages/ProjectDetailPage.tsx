@@ -6,6 +6,7 @@ import { api } from "../api/resources";
 import { Heading, ErrorNotice, Loading } from "../components/common";
 import { Button } from "../components/ui/button";
 import { Modal } from "../components/ui/dialog";
+import { ProjectGitSettings } from "../components/ProjectGitSettings";
 import { ProjectForm } from "../components/ProjectForm";
 export function ProjectDetailPage() {
   const { id = "" } = useParams();
@@ -81,6 +82,7 @@ export function ProjectDetailPage() {
               </p>
             )}
           </section>
+          <ProjectGitSettings pid={p.id} />
           <aside className="panel panel-body side-panel">
             <h2>프로젝트 등록 해제</h2>
             <p className="subtle">

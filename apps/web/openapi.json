@@ -437,6 +437,227 @@
         }
       }
     },
+    "/api/projects/{pid}/git": {
+      "get": {
+        "summary": "Git Settings",
+        "operationId": "git_settings_api_projects__pid__git_get",
+        "parameters": [
+          {
+            "name": "pid",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Pid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GitSettingsView"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "patch": {
+        "summary": "Save Git Settings",
+        "operationId": "save_git_settings_api_projects__pid__git_patch",
+        "parameters": [
+          {
+            "name": "pid",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Pid"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/GitSettingsInput"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GitSettingsView"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/projects/{pid}/git/test": {
+      "post": {
+        "summary": "Test Git Connection",
+        "operationId": "test_git_connection_api_projects__pid__git_test_post",
+        "parameters": [
+          {
+            "name": "pid",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Pid"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/GitTestInput"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GitSettingsView"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/runs/{rid}/push": {
+      "get": {
+        "summary": "Push Preview",
+        "operationId": "push_preview_api_runs__rid__push_get",
+        "parameters": [
+          {
+            "name": "rid",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Rid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PushView"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "summary": "Push Branch",
+        "operationId": "push_branch_api_runs__rid__push_post",
+        "parameters": [
+          {
+            "name": "rid",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Rid"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PushInput"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PushView"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/projects/{pid}/branches": {
       "get": {
         "summary": "Branches",
@@ -3499,6 +3720,179 @@
         ],
         "title": "FailureView"
       },
+      "GitRemoteView": {
+        "properties": {
+          "name": {
+            "type": "string",
+            "title": "Name"
+          },
+          "url": {
+            "type": "string",
+            "title": "Url"
+          }
+        },
+        "type": "object",
+        "required": [
+          "name",
+          "url"
+        ],
+        "title": "GitRemoteView"
+      },
+      "GitSettingsInput": {
+        "properties": {
+          "expected_version": {
+            "type": "string",
+            "title": "Expected Version"
+          },
+          "remote": {
+            "type": "string",
+            "maxLength": 200,
+            "minLength": 1,
+            "title": "Remote"
+          },
+          "account": {
+            "type": "string",
+            "maxLength": 200,
+            "pattern": "^[^\\r\\n\\x00]*$",
+            "title": "Account",
+            "default": ""
+          },
+          "token": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 8192,
+                "minLength": 1,
+                "format": "password",
+                "writeOnly": true
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Token"
+          },
+          "delete_token": {
+            "type": "boolean",
+            "title": "Delete Token",
+            "default": false
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "expected_version",
+          "remote"
+        ],
+        "title": "GitSettingsInput"
+      },
+      "GitSettingsView": {
+        "properties": {
+          "remote": {
+            "type": "string",
+            "title": "Remote"
+          },
+          "remote_url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Remote Url"
+          },
+          "account": {
+            "type": "string",
+            "title": "Account"
+          },
+          "token_registered": {
+            "type": "boolean",
+            "title": "Token Registered"
+          },
+          "version": {
+            "type": "string",
+            "title": "Version"
+          },
+          "remotes": {
+            "items": {
+              "$ref": "#/components/schemas/GitRemoteView"
+            },
+            "type": "array",
+            "title": "Remotes"
+          },
+          "test": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/GitTestView"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "type": "object",
+        "required": [
+          "remote",
+          "remote_url",
+          "account",
+          "token_registered",
+          "version",
+          "remotes",
+          "test"
+        ],
+        "title": "GitSettingsView"
+      },
+      "GitTestInput": {
+        "properties": {
+          "expected_version": {
+            "type": "string",
+            "title": "Expected Version"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "expected_version"
+        ],
+        "title": "GitTestInput"
+      },
+      "GitTestView": {
+        "properties": {
+          "status": {
+            "type": "string",
+            "title": "Status"
+          },
+          "message": {
+            "type": "string",
+            "title": "Message"
+          },
+          "url": {
+            "type": "string",
+            "title": "Url"
+          },
+          "checked_at": {
+            "type": "string",
+            "title": "Checked At"
+          },
+          "push_permission": {
+            "type": "string",
+            "const": "unknown",
+            "title": "Push Permission",
+            "default": "unknown"
+          }
+        },
+        "type": "object",
+        "required": [
+          "status",
+          "message",
+          "url",
+          "checked_at"
+        ],
+        "title": "GitTestView"
+      },
       "HTTPValidationError": {
         "properties": {
           "detail": {
@@ -4234,6 +4628,136 @@
           "spec"
         ],
         "title": "Proposal"
+      },
+      "PushInput": {
+        "properties": {
+          "settings_version": {
+            "type": "string",
+            "title": "Settings Version"
+          },
+          "remote_url": {
+            "type": "string",
+            "title": "Remote Url"
+          },
+          "branch": {
+            "type": "string",
+            "title": "Branch"
+          },
+          "approved_sha": {
+            "type": "string",
+            "title": "Approved Sha"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "settings_version",
+          "remote_url",
+          "branch",
+          "approved_sha"
+        ],
+        "title": "PushInput"
+      },
+      "PushResultView": {
+        "properties": {
+          "status": {
+            "type": "string",
+            "title": "Status"
+          },
+          "message": {
+            "type": "string",
+            "title": "Message"
+          },
+          "remote": {
+            "type": "string",
+            "title": "Remote"
+          },
+          "remote_url": {
+            "type": "string",
+            "title": "Remote Url"
+          },
+          "branch": {
+            "type": "string",
+            "title": "Branch"
+          },
+          "sha": {
+            "type": "string",
+            "title": "Sha"
+          },
+          "checked_at": {
+            "type": "string",
+            "title": "Checked At"
+          }
+        },
+        "type": "object",
+        "required": [
+          "status",
+          "message",
+          "remote",
+          "remote_url",
+          "branch",
+          "sha",
+          "checked_at"
+        ],
+        "title": "PushResultView"
+      },
+      "PushView": {
+        "properties": {
+          "remote": {
+            "type": "string",
+            "title": "Remote"
+          },
+          "remote_url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Remote Url"
+          },
+          "settings_version": {
+            "type": "string",
+            "title": "Settings Version"
+          },
+          "branch": {
+            "type": "string",
+            "title": "Branch"
+          },
+          "approved_sha": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Approved Sha"
+          },
+          "result": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/PushResultView"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "type": "object",
+        "required": [
+          "remote",
+          "remote_url",
+          "settings_version",
+          "branch",
+          "approved_sha",
+          "result"
+        ],
+        "title": "PushView"
       },
       "Reason": {
         "properties": {
