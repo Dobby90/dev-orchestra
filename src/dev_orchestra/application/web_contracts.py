@@ -105,6 +105,7 @@ class StoredSpec(Input):
 
 
 class Proposal(Input):
+    agent_settings: AgentSettings | None = None
     name: RunName
     test_scope: Literal["full", "affected"] = "full"
     project_id: str = Field(pattern=r"^prj-[0-9a-f]{32}$")
@@ -327,6 +328,7 @@ class SpecContent(BaseModel):
 
 
 class PreviewView(BaseModel):
+    agent_settings: AgentSettings | None = None
     test_scope: Literal["full", "affected"] = "full"
     test_scope_notice: str = ""
     run_id: str

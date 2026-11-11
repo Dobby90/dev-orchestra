@@ -14,10 +14,14 @@ import type { Schema } from "../api/types";
 import { Heading, ErrorNotice } from "../components/common";
 import { Button } from "../components/ui/button";
 import { Modal } from "../components/ui/dialog";
+import { RunAgentSettings } from "../components/RunAgentSettings";
 import { PrdGuide } from "../components/PrdGuide";
 export function NewRunPage() {
   const [params] = useSearchParams(),
     navigate = useNavigate();
+  const [agentSettings, setAgentSettings] = useState<
+    Schema["AgentSettings"] | null
+  >(null);
   const [project, setProject] = useState(params.get("project") ?? ""),
     [name, setName] = useState(""),
     [text, setText] = useState(""),
@@ -96,6 +100,7 @@ export function NewRunPage() {
       return;
     }
     const proposal: Schema["Proposal"] = {
+      agent_settings: agentSettings,
       name: name.trim(),
       project_id: project,
       spec:
@@ -307,6 +312,10 @@ export function NewRunPage() {
                 테스트를 분석해 자동 선택합니다. 필요한 경우 관련 모듈로 범위를
                 확대하고 이유를 기록합니다.
               </p>
+              <RunAgentSettings
+                value={agentSettings}
+                onChange={(value) => edit(() => setAgentSettings(value))}
+              />
               <label>
                 자동 수정 최대 횟수
                 <input
@@ -431,6 +440,21 @@ export function NewRunPage() {
             <dd className="mono path">{preview.data.receipt.branch}</dd>
             <dt>기준 커밋</dt>
             <dd className="mono path">{preview.data.receipt.base_sha}</dd>
+            {preview.data.receipt.agent_settings && (
+              <>
+                <dt>에이전트 모델·추론 강도</dt>
+                <dd>
+                  {Object.entries(
+                    preview.data.receipt.agent_settings.roles ?? {},
+                  ).map(([role, options]) => (
+                    <p key={role}>
+                      {role}: {options.model ?? "Codex 기본값"} ·{" "}
+                      {options.reasoning_effort ?? "Codex 기본값"}
+                    </p>
+                  ))}
+                </dd>
+              </>
+            )}
             <dt>테스트 범위</dt>
             <dd>
               {preview.data.proposal.test_scope === "affected"

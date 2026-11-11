@@ -1447,6 +1447,7 @@ export interface components {
         };
         /** PreviewView */
         PreviewView: {
+            agent_settings?: components["schemas"]["AgentSettings"] | null;
             /**
              * Test Scope
              * @default full
@@ -1545,6 +1546,7 @@ export interface components {
         };
         /** Proposal */
         Proposal: {
+            agent_settings?: components["schemas"]["AgentSettings"] | null;
             /** Name */
             name: string;
             /**
@@ -1717,6 +1719,7 @@ export interface components {
         };
         /** RunCreate */
         RunCreate: {
+            agent_settings?: components["schemas"]["AgentSettings"] | null;
             /** Name */
             name: string;
             /**

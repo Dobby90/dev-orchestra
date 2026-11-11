@@ -5,6 +5,7 @@ from typing import Annotated, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, StringConstraints, model_validator
 
+from dev_orchestra.config import AgentSettings
 from dev_orchestra.domain.models import State
 
 
@@ -16,6 +17,7 @@ RunName = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, 
 
 
 class CreateRun(Contract):
+    agent_settings: AgentSettings | None = None
     repo: Path
     spec: Path
     name: RunName | None = None

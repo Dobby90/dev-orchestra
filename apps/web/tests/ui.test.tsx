@@ -419,6 +419,10 @@ describe("화면·위험 명령", () => {
     ).toHaveFocus();
   });
   it("변경 영향 범위를 기본 선택하고 레이어 미리보기를 닫은 뒤 입력을 변경하면 무효화한다", async () => {
+    vi.spyOn(api, "agentSettings").mockResolvedValue({
+      version: "v",
+      settings: { model: "task-model", roles: {} },
+    });
     vi.spyOn(api, "projects").mockResolvedValue({
       items: [p],
       has_more: false,
@@ -463,6 +467,10 @@ describe("화면·위험 명령", () => {
     expect(screen.getByLabelText("PRD")).toHaveValue("작업 요구사항");
     expect(api.preview).not.toHaveBeenCalled();
     expect(screen.getByLabelText("테스트 범위")).toHaveValue("affected");
+    await userEvent.click(
+      screen.getByRole("button", { name: "이 작업만 변경" }),
+    );
+    await screen.findByLabelText("공통 기본값 모델");
     await userEvent.click(screen.getByRole("button", { name: "실행 전 확인" }));
     expect(
       await screen.findByRole("button", { name: "확인하고 작업 시작" }),
@@ -471,6 +479,7 @@ describe("화면·위험 명령", () => {
       expect.objectContaining({
         test_scope: "affected",
         name: "로그인 화면 개선",
+        agent_settings: { model: "task-model", roles: {} },
       }),
     );
     expect(screen.getByRole("dialog", { name: "실행 미리보기" })).toBeVisible();

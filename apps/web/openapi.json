@@ -4409,6 +4409,16 @@
       },
       "PreviewView": {
         "properties": {
+          "agent_settings": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/AgentSettings"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "test_scope": {
             "type": "string",
             "enum": [
@@ -4659,6 +4669,16 @@
       },
       "Proposal": {
         "properties": {
+          "agent_settings": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/AgentSettings"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "name": {
             "type": "string",
             "maxLength": 100,
@@ -5191,6 +5211,16 @@
       },
       "RunCreate": {
         "properties": {
+          "agent_settings": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/AgentSettings"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "name": {
             "type": "string",
             "maxLength": 100,
