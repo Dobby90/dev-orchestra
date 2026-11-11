@@ -8,7 +8,7 @@ import { ErrorNotice, Heading, Loading } from "../components/common";
 import { AgentSettingsForm } from "../components/AgentSettingsForm";
 import { WebhookSettingsForm } from "../components/WebhookSettingsForm";
 export function SettingsPage() {
-  const [tab, setTab] = useState("agents");
+  const [tab, setTab] = useState("environment");
   const session = useSession();
   const health = useQuery({
     queryKey: ["health"],
@@ -20,18 +20,18 @@ export function SettingsPage() {
       <Heading
         eyebrow="WORKSPACE / PREFERENCES"
         title="연결 및 실행 환경"
-        description="에이전트 모델, 웹훅 알림, 로컬 실행 환경을 분류별로 설정합니다."
+        description="서비스 상태를 확인하고 에이전트 모델과 웹훅 알림을 설정합니다."
       />
       <Tabs.Root value={tab} onValueChange={setTab}>
         <Tabs.List className="tabs-list" aria-label="연결 및 실행 환경 분류">
+          <Tabs.Trigger className="tab" value="environment">
+            서비스 상태
+          </Tabs.Trigger>
           <Tabs.Trigger className="tab" value="agents">
             에이전트 모델
           </Tabs.Trigger>
           <Tabs.Trigger className="tab" value="notifications">
             웹훅 알림
-          </Tabs.Trigger>
-          <Tabs.Trigger className="tab" value="environment">
-            연결·실행 환경
           </Tabs.Trigger>
         </Tabs.List>
         <Tabs.Content
@@ -91,16 +91,20 @@ export function SettingsPage() {
                 실행 서비스 확인
               </h2>
               <p className="subtle">
-                API와 독립 Dispatcher는 같은 설정 파일을 사용해야 합니다. 실행
-                상태는 터미널에서 확인할 수 있습니다.
+                로컬 터미널에서 DevOrchestra 저장소 폴더로 이동한 뒤 다음
+                명령으로 Dispatcher 상태를 확인하세요.
               </p>
               <pre className="command">
-                devorchestra --config config.yaml worker status
+                .venv/bin/devorchestra worker status
               </pre>
               <p className="help">
-                이 화면은 임의 명령 실행이나 비밀값 편집 기능을 제공하지
-                않습니다.
+                GUI를 별도 설정 파일로 실행했다면 같은 파일을 지정하세요. 설정
+                파일을 지정하지 않고 실행했다면 위 명령을 그대로 사용합니다.
               </p>
+              <pre className="command">
+                .venv/bin/devorchestra --config /absolute/path/to/config.yaml
+                worker status
+              </pre>
             </section>
           </div>
         </Tabs.Content>

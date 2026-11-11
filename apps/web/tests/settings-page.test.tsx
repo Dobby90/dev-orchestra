@@ -5,7 +5,7 @@ import { expect, it, vi } from "vitest";
 import { api } from "../src/api/resources";
 import { SettingsPage } from "../src/pages/SettingsPage";
 
-it("설정을 분류별 탭으로 표시하고 전환해도 미저장 모델을 유지한다", async () => {
+it("서비스 상태를 첫 탭으로 표시하고 전환해도 미저장 모델을 유지한다", async () => {
   vi.spyOn(api, "health").mockResolvedValue({ status: "ok" });
   vi.spyOn(api, "agentSettings").mockResolvedValue({
     version: "v",
@@ -28,13 +28,26 @@ it("설정을 분류별 탭으로 표시하고 전환해도 미저장 모델을 
       <SettingsPage />
     </QueryClientProvider>,
   );
-  expect(screen.getByRole("tab", { name: "에이전트 모델" })).toHaveAttribute(
+  expect(screen.getAllByRole("tab").map((tab) => tab.textContent)).toEqual([
+    "서비스 상태",
+    "에이전트 모델",
+    "웹훅 알림",
+  ]);
+  expect(screen.getByRole("tab", { name: "서비스 상태" })).toHaveAttribute(
     "aria-selected",
     "true",
   );
+  expect(screen.getByRole("heading", { name: "로컬 연결" })).toBeVisible();
   expect(
-    screen.queryByRole("heading", { name: "로컬 연결" }),
-  ).not.toBeInTheDocument();
+    screen.getByText(".venv/bin/devorchestra worker status"),
+  ).toBeVisible();
+  expect(screen.getByText(/GUI를 별도 설정 파일로 실행했다면/)).toBeVisible();
+  expect(
+    screen.getByText(
+      ".venv/bin/devorchestra --config /absolute/path/to/config.yaml worker status",
+    ),
+  ).toBeVisible();
+  await userEvent.click(screen.getByRole("tab", { name: "에이전트 모델" }));
   await userEvent.click(
     await screen.findByRole("button", { name: "모델 목록 불러오기" }),
   );
@@ -49,7 +62,7 @@ it("설정을 분류별 탭으로 표시하고 전환해도 미저장 모델을 
     screen.queryByRole("heading", { name: "에이전트 모델 설정" }),
   ).not.toBeInTheDocument();
   await userEvent.keyboard("{ArrowRight}");
-  expect(screen.getByRole("tab", { name: "연결·실행 환경" })).toHaveFocus();
+  expect(screen.getByRole("tab", { name: "서비스 상태" })).toHaveFocus();
   expect(screen.getByRole("heading", { name: "로컬 연결" })).toBeVisible();
   expect(
     screen.getByRole("heading", { name: "실행 서비스 확인" }),
