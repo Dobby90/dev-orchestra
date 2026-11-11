@@ -264,3 +264,84 @@ for line in sys.stdin:
         {"model": "test-standard", "reasoning_efforts": ["high"]},
         {"model": "test-review", "reasoning_efforts": ["high"]},
     ]
+
+
+def test_run_override_isolated_and_bound_to_preview(web, catalog):
+    c, svc, original_id, repo, _ = web
+    p = project(c, svc, repo)
+    before = c.get("/api/settings/agents").json()
+    settings = {
+        "model": "test-standard",
+        "reasoning_effort": "medium",
+        "roles": {"reviewer": {"model": "test-review", "reasoning_effort": "xhigh"}},
+    }
+    proposal = {
+        "name": "작업별 설정",
+        "project_id": p["id"],
+        "spec": {"kind": "text", "text": "task"},
+        "agent_settings": settings,
+    }
+    preview = c.post(f"/api/projects/{p['id']}/run-previews", json=proposal)
+    assert preview.status_code == 200, preview.text
+    assert preview.json()["agent_settings"]["roles"]["reviewer"] == settings["roles"]["reviewer"]
+    changed = {**proposal, "agent_settings": {"model": "test-review"}}
+    response = c.post(
+        "/api/runs",
+        json={**changed, "preview_token": preview.json()["preview_token"]},
+        headers={"Idempotency-Key": "override-tamper"},
+    )
+    assert response.status_code == 409
+    response = c.post(
+        "/api/runs",
+        json={**proposal, "preview_token": preview.json()["preview_token"]},
+        headers={"Idempotency-Key": "override-create"},
+    )
+    assert response.status_code == 202, response.text
+    run = svc.store.get(response.json()["run_id"])
+    assert run["config"]["codex"]["model"] == "test-standard"
+    assert run["config"]["codex"]["roles"]["reviewer"]["reasoning_effort"] == "xhigh"
+    assert c.get("/api/settings/agents").json() == before
+    assert svc.store.get(original_id)["config"]["codex"]["model"] is None
+
+
+@pytest.mark.parametrize(
+    "settings",
+    [
+        {"model": "unknown-model"},
+        {"model": "test-review", "reasoning_effort": "low"},
+        {"command": "untrusted"},
+    ],
+)
+def test_run_override_rejects_invalid_settings(web, catalog, settings):
+    c, svc, _, repo, _ = web
+    p = project(c, svc, repo)
+    response = c.post(
+        f"/api/projects/{p['id']}/run-previews",
+        json={
+            "name": "잘못된 설정",
+            "project_id": p["id"],
+            "spec": {"kind": "text", "text": "task"},
+            "agent_settings": settings,
+        },
+    )
+    assert response.status_code == 422, response.text
+
+
+def test_shared_creation_accepts_run_settings(service, catalog):
+    from dev_orchestra.application.contracts import CreateRun
+
+    svc, original_id, repo = service
+    original = svc.store.get(original_id)
+    run_id = svc.create_run(
+        CreateRun(
+            repo=repo,
+            spec=Path(original["directory"]) / "spec.md",
+            agent_settings=AgentSettings(model="test-standard", reasoning_effort="high"),
+        )
+    )
+    run = svc.store.get(run_id)
+    assert run["config"]["codex"]["model"] == "test-standard"
+    assert run["config"]["codex"]["command"] == svc.config.codex.command
+    assert run["config"]["tests"] == original["config"]["tests"]
+    assert svc.config.codex.model is None
+    assert svc.store.get(original_id) == original

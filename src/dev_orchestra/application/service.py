@@ -62,6 +62,8 @@ class RunService:
             if resolve_settings
             else self.config.model_copy(deep=True)
         )
+        if command.agent_settings is not None:
+            config = AgentSettingsService(self.config).override(config, command.agent_settings)
         if max_fixes is not None:
             config.workflow.max_fix_attempts = max_fixes
         config = Config.model_validate(config.model_dump())

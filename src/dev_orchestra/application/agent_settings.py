@@ -56,7 +56,18 @@ class AgentSettingsService:
         snapshot["codex"].update(self.get()["settings"].model_dump())
         return type(config).model_validate(snapshot)
 
-    def save(self, settings, expected_version, models):
+    def override(self, config, settings):
+        explicit = any(
+            settings.for_role(role).model or settings.for_role(role).reasoning_effort
+            for role in ROLES
+        )
+        self.validate(settings, self.models() if explicit else [])
+        snapshot = config.model_dump()
+        snapshot["codex"].update(settings.model_dump())
+        return type(config).model_validate(snapshot)
+
+    @staticmethod
+    def validate(settings, models):
         by_model = {m["model"]: m for m in models}
         for effective in [settings, *(settings.for_role(role) for role in ROLES)]:
             if effective.model and effective.model not in by_model:
@@ -68,6 +79,9 @@ class AgentSettingsService:
                         "VALIDATION_ERROR",
                         "select a model supporting the requested reasoning effort",
                     )
+
+    def save(self, settings, expected_version, models):
+        self.validate(settings, models)
         with lock(self.path.with_suffix(".lock"), wait=True):
             if self.get()["version"] != expected_version:
                 raise ApplicationError("VERSION_CONFLICT", "agent settings changed")

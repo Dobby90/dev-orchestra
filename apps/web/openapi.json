@@ -296,6 +296,98 @@
         }
       }
     },
+    "/api/settings/webhooks": {
+      "get": {
+        "summary": "Get Webhook Settings",
+        "operationId": "get_webhook_settings_api_settings_webhooks_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WebhookSettingsView"
+                }
+              }
+            }
+          }
+        }
+      },
+      "patch": {
+        "summary": "Save Webhook Settings",
+        "operationId": "save_webhook_settings_api_settings_webhooks_patch",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/WebhookSettingsInput"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WebhookSettingsView"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/settings/webhooks/test": {
+      "post": {
+        "summary": "Test Webhook",
+        "operationId": "test_webhook_api_settings_webhooks_test_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/WebhookTestInput"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WebhookSettingsView"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/settings/agents/models": {
       "post": {
         "summary": "Codex Models",
@@ -4138,6 +4230,10 @@
       },
       "NotificationView": {
         "properties": {
+          "message": {
+            "type": "string",
+            "title": "Message"
+          },
           "id": {
             "type": "integer",
             "title": "Id"
@@ -4168,6 +4264,7 @@
         },
         "type": "object",
         "required": [
+          "message",
           "id",
           "run_id",
           "occurred_at",
@@ -4312,6 +4409,16 @@
       },
       "PreviewView": {
         "properties": {
+          "agent_settings": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/AgentSettings"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "test_scope": {
             "type": "string",
             "enum": [
@@ -4562,6 +4669,16 @@
       },
       "Proposal": {
         "properties": {
+          "agent_settings": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/AgentSettings"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "name": {
             "type": "string",
             "maxLength": 100,
@@ -5094,6 +5211,16 @@
       },
       "RunCreate": {
         "properties": {
+          "agent_settings": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/AgentSettings"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "name": {
             "type": "string",
             "maxLength": 100,
@@ -6953,6 +7080,172 @@
         },
         "type": "object",
         "title": "ValidationView"
+      },
+      "WebhookAppView": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "title": "Id"
+          },
+          "label": {
+            "type": "string",
+            "title": "Label"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "label"
+        ],
+        "title": "WebhookAppView"
+      },
+      "WebhookDeliveryView": {
+        "properties": {
+          "status": {
+            "type": "string",
+            "enum": [
+              "sent",
+              "failed"
+            ],
+            "title": "Status"
+          },
+          "message": {
+            "type": "string",
+            "title": "Message"
+          },
+          "occurred_at": {
+            "type": "string",
+            "title": "Occurred At"
+          },
+          "event_id": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Event Id"
+          },
+          "attempts": {
+            "type": "integer",
+            "title": "Attempts"
+          }
+        },
+        "type": "object",
+        "required": [
+          "status",
+          "message",
+          "occurred_at",
+          "event_id",
+          "attempts"
+        ],
+        "title": "WebhookDeliveryView"
+      },
+      "WebhookSettingsInput": {
+        "properties": {
+          "expected_version": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{32}$",
+            "title": "Expected Version"
+          },
+          "enabled": {
+            "type": "boolean",
+            "title": "Enabled"
+          },
+          "app": {
+            "type": "string",
+            "maxLength": 40,
+            "minLength": 1,
+            "title": "App"
+          },
+          "url": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 2048,
+                "minLength": 1,
+                "format": "password",
+                "writeOnly": true
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Url"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "expected_version",
+          "enabled",
+          "app"
+        ],
+        "title": "WebhookSettingsInput"
+      },
+      "WebhookSettingsView": {
+        "properties": {
+          "version": {
+            "type": "string",
+            "title": "Version"
+          },
+          "enabled": {
+            "type": "boolean",
+            "title": "Enabled"
+          },
+          "app": {
+            "type": "string",
+            "title": "App"
+          },
+          "url_configured": {
+            "type": "boolean",
+            "title": "Url Configured"
+          },
+          "apps": {
+            "items": {
+              "$ref": "#/components/schemas/WebhookAppView"
+            },
+            "type": "array",
+            "title": "Apps"
+          },
+          "last_delivery": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/WebhookDeliveryView"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "type": "object",
+        "required": [
+          "version",
+          "enabled",
+          "app",
+          "url_configured",
+          "apps",
+          "last_delivery"
+        ],
+        "title": "WebhookSettingsView"
+      },
+      "WebhookTestInput": {
+        "properties": {
+          "expected_version": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{32}$",
+            "title": "Expected Version"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "expected_version"
+        ],
+        "title": "WebhookTestInput"
       },
       "WorkspaceProgressView": {
         "properties": {

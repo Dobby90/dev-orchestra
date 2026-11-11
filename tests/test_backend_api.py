@@ -676,6 +676,66 @@ def test_notifications_include_all_runs_not_only_first_page(web):
     assert c.get("/api/notifications").json()["items"][0]["run_id"] == rid
 
 
+def test_webhook_settings_api_masks_url_validates_app_and_requires_csrf(web, monkeypatch):
+    from dev_orchestra.application.webhooks import WebhookService
+
+    c, svc, _, _, _ = web
+    url = "https://mattermost.example/hooks/test-secret-key"
+    initial = c.get("/api/settings/webhooks").json()
+    assert not initial["url_configured"]
+    assert not WebhookService(svc.store).path.exists()
+    body = dict(expected_version=initial["version"], enabled=True, app="mattermost", url=url)
+    csrf = c.headers.pop("X-CSRF-Token")
+    assert c.patch("/api/settings/webhooks", json=body).status_code == 403
+    c.headers["X-CSRF-Token"] = csrf
+    assert c.patch("/api/settings/webhooks", json=body | {"app": "unsupported"}).status_code == 422
+    invalid = c.patch("/api/settings/webhooks", json=body | {"url": "invalid secret"})
+    assert invalid.status_code == 422
+    assert "invalid secret" not in invalid.text
+    response = c.patch("/api/settings/webhooks", json=body)
+    assert response.status_code == 200
+    value = response.json()
+    assert value["url_configured"] and url not in response.text
+    assert url not in c.get("/api/settings/webhooks").text
+    assert c.patch("/api/settings/webhooks", json=body).status_code == 412
+    sent = []
+    monkeypatch.setattr("dev_orchestra.application.webhooks.send", lambda *args: sent.append(args))
+    tested = c.post("/api/settings/webhooks/test", json={"expected_version": value["version"]})
+    assert tested.status_code == 200
+    assert tested.json()["last_delivery"]["status"] == "sent"
+    assert len(sent) == 1 and "연결 테스트" in sent[0][2]
+    assert (
+        c.post(
+            "/api/settings/webhooks/test", json={"expected_version": initial["version"]}
+        ).status_code
+        == 412
+    )
+    c.cookies.clear()
+    assert c.get("/api/settings/webhooks").status_code == 401
+
+
+def test_webhook_api_lifespan_delivers_without_notification_reads(web, monkeypatch):
+    import threading
+
+    c, svc, rid, _, _ = web
+    delivered = threading.Event()
+    monkeypatch.setattr("dev_orchestra.application.webhooks.send", lambda *args: delivered.set())
+    initial = c.get("/api/settings/webhooks").json()
+    with c:
+        response = c.patch(
+            "/api/settings/webhooks",
+            json=dict(
+                expected_version=initial["version"],
+                enabled=True,
+                app="mattermost",
+                url="https://mattermost.example/hooks/test-key",
+            ),
+        )
+        assert response.status_code == 200
+        svc.store.update(rid, "paused")
+        assert delivered.wait(3)
+
+
 def test_log_window_contract_and_authentication(web):
     from dev_orchestra.infrastructure.log_index import LogIndexer
 

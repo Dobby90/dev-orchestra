@@ -13,6 +13,7 @@ from dev_orchestra.application.agent_settings import AgentSettingsService, setti
 from dev_orchestra.application.errors import ApplicationError
 from dev_orchestra.application.projects import ProjectService
 from dev_orchestra.application.web_contracts import ProjectCreate, Proposal
+from dev_orchestra.config import ROLES
 from dev_orchestra.infrastructure.git import Git
 from dev_orchestra.infrastructure.store import now
 
@@ -62,6 +63,14 @@ class BackendService:
         config.workflow.max_fix_attempts = policy.max_fix_attempts
         config.review.blocking_severities = policy.blocking_severities
         return self.projects.validate_policy(config)
+
+    def proposal_config(self, policy, proposal):
+        config = self.policy_config(policy)
+        if proposal.agent_settings is not None:
+            config = AgentSettingsService(self.runs.config).override(
+                config, proposal.agent_settings
+            )
+        return config
 
     def validate_project(self, value):
         info = self.projects.validate_repository(
@@ -179,7 +188,7 @@ class BackendService:
             raise ApplicationError("INVALID_STATE", "project archived")
         from dev_orchestra.application.web_contracts import Policy
 
-        config = self.policy_config(Policy.model_validate(p["policy"]))
+        config = self.proposal_config(Policy.model_validate(p["policy"]), proposal)
         config.project.default_base_branch = p["default_base_branch"]
         base = proposal.base_branch or p["default_base_branch"]
         info = self.projects.validate_repository(Path(p["repository_path"]), base)
@@ -222,6 +231,9 @@ class BackendService:
                 else "설정된 전체 테스트와 정적 검사를 실행합니다."
             ),
             "preview_token": token,
+            "agent_settings": {
+                "roles": {role: config.codex.for_role(role).model_dump() for role in ROLES}
+            },
             "spec_sha256": hashlib.sha256(text.encode()).hexdigest(),
             "validation_warnings": policy_warnings(config, info),
         }
@@ -275,7 +287,7 @@ class BackendService:
             raise ApplicationError("BRANCH_CONFLICT", "feature branch exists")
         from dev_orchestra.application.web_contracts import Policy
 
-        config = self.policy_config(Policy.model_validate(p["policy"]))
+        config = self.proposal_config(Policy.model_validate(p["policy"]), proposal)
         if settings_fingerprint(config) != receipt["agent_settings_hash"]:
             raise ApplicationError("PREVIEW_STALE", "agent settings changed")
         config.project.default_base_branch = p["default_base_branch"]
