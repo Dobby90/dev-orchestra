@@ -110,6 +110,41 @@ export interface paths {
         patch: operations["save_agent_settings_api_settings_agents_patch"];
         trace?: never;
     };
+    "/api/settings/webhooks": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Webhook Settings */
+        get: operations["get_webhook_settings_api_settings_webhooks_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        /** Save Webhook Settings */
+        patch: operations["save_webhook_settings_api_settings_webhooks_patch"];
+        trace?: never;
+    };
+    "/api/settings/webhooks/test": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Test Webhook */
+        post: operations["test_webhook_api_settings_webhooks_test_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/settings/agents/models": {
         parameters: {
             query?: never;
@@ -1348,6 +1383,8 @@ export interface components {
         };
         /** NotificationView */
         NotificationView: {
+            /** Message */
+            message: string;
             /** Id */
             id: number;
             /** Run Id */
@@ -2318,6 +2355,59 @@ export interface components {
             /** Reason */
             reason?: string | null;
         };
+        /** WebhookAppView */
+        WebhookAppView: {
+            /** Id */
+            id: string;
+            /** Label */
+            label: string;
+        };
+        /** WebhookDeliveryView */
+        WebhookDeliveryView: {
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "sent" | "failed";
+            /** Message */
+            message: string;
+            /** Occurred At */
+            occurred_at: string;
+            /** Event Id */
+            event_id: number | null;
+            /** Attempts */
+            attempts: number;
+        };
+        /** WebhookSettingsInput */
+        WebhookSettingsInput: {
+            /** Expected Version */
+            expected_version: string;
+            /** Enabled */
+            enabled: boolean;
+            /** App */
+            app: string;
+            /** Url */
+            url?: string | null;
+        };
+        /** WebhookSettingsView */
+        WebhookSettingsView: {
+            /** Version */
+            version: string;
+            /** Enabled */
+            enabled: boolean;
+            /** App */
+            app: string;
+            /** Url Configured */
+            url_configured: boolean;
+            /** Apps */
+            apps: components["schemas"]["WebhookAppView"][];
+            last_delivery: components["schemas"]["WebhookDeliveryView"] | null;
+        };
+        /** WebhookTestInput */
+        WebhookTestInput: {
+            /** Expected Version */
+            expected_version: string;
+        };
         /** WorkspaceProgressView */
         WorkspaceProgressView: {
             /** Commits */
@@ -2591,6 +2681,92 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["AgentSettingsView"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_webhook_settings_api_settings_webhooks_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WebhookSettingsView"];
+                };
+            };
+        };
+    };
+    save_webhook_settings_api_settings_webhooks_patch: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["WebhookSettingsInput"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WebhookSettingsView"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    test_webhook_api_settings_webhooks_test_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["WebhookTestInput"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WebhookSettingsView"];
                 };
             };
             /** @description Validation Error */

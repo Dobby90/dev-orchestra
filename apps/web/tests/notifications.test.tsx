@@ -16,6 +16,8 @@ import { Status } from "../src/components/common";
 
 type Page = Schema["NotificationPage"];
 const item: Page["items"][number] = {
+  message:
+    "계속 진행하려면 사용자 확인 또는 입력이 필요합니다. 상세 화면을 확인해 주세요.",
   id: 1,
   run_id: "r1",
   state: "needs_input",
@@ -54,7 +56,16 @@ describe("공통 작업 알림", () => {
       ...initial,
       cursor: 4,
       unread_count: 2,
-      items: [{ ...item, id: 4, state: "paused" }, item],
+      items: [
+        {
+          ...item,
+          id: 4,
+          state: "paused",
+          message:
+            "작업이 일시중지되었습니다. 계속하려면 작업을 재개해 주세요.",
+        },
+        item,
+      ],
     };
     get.mockResolvedValue(next);
     await act(() => client.refetchQueries({ queryKey: ["notifications"] }));
@@ -94,7 +105,7 @@ describe("공통 작업 알림", () => {
     expect(await screen.findByRole("dialog")).toBeInTheDocument();
     expect(
       screen.getByText(
-        "입력이 필요해 작업이 중단되었습니다. 질문을 확인하고 답변해 주세요.",
+        "계속 진행하려면 사용자 확인 또는 입력이 필요합니다. 상세 화면을 확인해 주세요.",
       ),
     ).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "이전 알림 더 보기" }));

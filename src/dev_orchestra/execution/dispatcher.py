@@ -8,6 +8,7 @@ from pathlib import Path
 
 from dev_orchestra.application.execution import ExecutionService
 from dev_orchestra.application.queue import QueueService
+from dev_orchestra.application.webhooks import WebhookService
 from dev_orchestra.infrastructure.locking import OwnershipError, lock
 from dev_orchestra.infrastructure.log_index import IndexBudget, LogIndexer
 from dev_orchestra.infrastructure.process_owner import identity
@@ -87,6 +88,7 @@ class Dispatcher:
         with (
             lock(self.store.path.with_suffix(".dispatcher.lock")),
             lock(self.store.path.with_suffix(".maintenance.lock"), shared=True),
+            WebhookService(self.store).worker(),
         ):
             owner = identity(os.getpid())
             with self.store.connection() as db:

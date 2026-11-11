@@ -4,6 +4,7 @@ import { api } from "../api/resources";
 import { useSession } from "../hooks/session";
 import { ErrorNotice, Heading, Loading } from "../components/common";
 import { AgentSettingsForm } from "../components/AgentSettingsForm";
+import { WebhookSettingsForm } from "../components/WebhookSettingsForm";
 export function SettingsPage() {
   const session = useSession();
   const health = useQuery({
@@ -19,6 +20,7 @@ export function SettingsPage() {
         description="로컬 세션과 실행 서비스를 확인합니다."
       />
       <AgentSettingsForm />
+      <WebhookSettingsForm />
       <div className="detail-grid">
         <section className="panel panel-body">
           <h2>

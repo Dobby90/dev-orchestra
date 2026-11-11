@@ -11,16 +11,6 @@ import { ErrorNotice, Loading, Status } from "./common";
 import { Button } from "./ui/button";
 import { Modal } from "./ui/dialog";
 
-const messages = {
-  needs_input:
-    "입력이 필요해 작업이 중단되었습니다. 질문을 확인하고 답변해 주세요.",
-  paused: "작업이 일시중지되었습니다. 계속하려면 작업을 재개해 주세요.",
-  waiting_plan_approval:
-    "기획안이 준비되었습니다. 검토 후 개발을 승인해 주세요.",
-  waiting_approval: "작업이 승인 대기 중입니다. 결과를 확인해 주세요.",
-  failed: "작업이 실패했습니다. 오류 내용을 확인해 주세요.",
-};
-
 export function NotificationCenter() {
   const [open, setOpen] = useState(false);
   const client = useQueryClient();
@@ -50,7 +40,7 @@ export function NotificationCenter() {
     );
     if (notification) {
       client.invalidateQueries({ queryKey: ["run", notification.run_id] });
-      window.alert(`${notification.run_id}\n${messages[notification.state]}`);
+      window.alert(`${notification.run_id}\n${notification.message}`);
     }
   }, [page, location.pathname, client]);
   const read = useMutation({
@@ -116,7 +106,7 @@ export function NotificationCenter() {
                 <strong>{item.run_id}</strong>
                 <Status state={item.state} />
               </div>
-              <p>{messages[item.state]}</p>
+              <p>{item.message}</p>
               <time dateTime={item.occurred_at}>
                 {new Date(item.occurred_at).toLocaleString("ko-KR")}
               </time>

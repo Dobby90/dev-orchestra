@@ -39,6 +39,18 @@ export const api = {
   logout: () => request<void>("/session", { method: "DELETE" }),
   health: () => request<{ status: string }>("/health"),
   agentSettings: () => request<Schema["AgentSettingsView"]>("/settings/agents"),
+  webhookSettings: () =>
+    request<Schema["WebhookSettingsView"]>("/settings/webhooks"),
+  saveWebhookSettings: (body: Schema["WebhookSettingsInput"]) =>
+    request<Schema["WebhookSettingsView"]>("/settings/webhooks", {
+      method: "PATCH",
+      body: JSON.stringify(body),
+    }),
+  testWebhook: (expected_version: string) =>
+    request<Schema["WebhookSettingsView"]>("/settings/webhooks/test", {
+      method: "POST",
+      body: JSON.stringify({ expected_version }),
+    }),
   saveAgentSettings: (body: Schema["AgentSettingsInput"]) =>
     request<Schema["AgentSettingsView"]>("/settings/agents", {
       method: "PATCH",

@@ -76,7 +76,11 @@ from dev_orchestra.application.web_contracts import (
     ValidationCandidate,
     ValidationDetectInput,
     ValidationDetection,
+    WebhookSettingsInput,
+    WebhookSettingsView,
+    WebhookTestInput,
 )
+from dev_orchestra.application.webhooks import WebhookService
 from dev_orchestra.config import ROLES, load_config
 from dev_orchestra.domain.models import PipelineError
 from dev_orchestra.infrastructure.locking import lock
@@ -107,11 +111,15 @@ def create_app(config=None, allowed_roots=None, port=8000, static_directory=None
     security = Security(runs.store, key)
     agent_settings = AgentSettingsService(config)
     notifications = NotificationService(runs.store)
+    webhooks = WebhookService(runs.store)
 
     @asynccontextmanager
     async def lifespan(app):
         # An idle standalone API is a writer too; migration must wait for its exit.
-        with lock(runs.store.path.with_suffix(".maintenance.lock"), shared=True):
+        with (
+            lock(runs.store.path.with_suffix(".maintenance.lock"), shared=True),
+            webhooks.worker(),
+        ):
             yield
 
     app = FastAPI(
@@ -324,6 +332,18 @@ def create_app(config=None, allowed_roots=None, port=8000, static_directory=None
     @app.get("/api/settings/agents", response_model=AgentSettingsView)
     def get_agent_settings():
         return agent_settings.get()
+
+    @app.get("/api/settings/webhooks", response_model=WebhookSettingsView)
+    def get_webhook_settings():
+        return webhooks.get()
+
+    @app.patch("/api/settings/webhooks", response_model=WebhookSettingsView)
+    def save_webhook_settings(body: WebhookSettingsInput):
+        return webhooks.save(body)
+
+    @app.post("/api/settings/webhooks/test", response_model=WebhookSettingsView)
+    def test_webhook(body: WebhookTestInput):
+        return webhooks.test(body.expected_version)
 
     @app.post("/api/settings/agents/models", response_model=CodexModelPage)
     def codex_models():

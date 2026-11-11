@@ -572,6 +572,7 @@ class DiffView(ChangedFile):
 
 
 class NotificationView(BaseModel):
+    message: str
     id: int
     run_id: str
     occurred_at: str
@@ -591,6 +592,39 @@ class NotificationRead(Input):
         default_factory=list, max_length=100
     )
     through: int | None = Field(default=None, ge=0, strict=True)
+
+
+class WebhookSettingsInput(Input):
+    expected_version: str = Field(pattern=r"^[0-9a-f]{32}$")
+    enabled: bool
+    app: str = Field(min_length=1, max_length=40)
+    url: SecretStr | None = Field(default=None, min_length=1, max_length=2048)
+
+
+class WebhookTestInput(Input):
+    expected_version: str = Field(pattern=r"^[0-9a-f]{32}$")
+
+
+class WebhookAppView(BaseModel):
+    id: str
+    label: str
+
+
+class WebhookDeliveryView(BaseModel):
+    status: Literal["sent", "failed"]
+    message: str
+    occurred_at: str
+    event_id: int | None
+    attempts: int
+
+
+class WebhookSettingsView(BaseModel):
+    version: str
+    enabled: bool
+    app: str
+    url_configured: bool
+    apps: list[WebhookAppView]
+    last_delivery: WebhookDeliveryView | None
 
 
 class GitSettingsInput(Input):
