@@ -118,6 +118,12 @@ export function NewRunPage() {
     preview.mutate(proposal);
   }
   const choices = projects.data?.pages.flatMap((p) => p.items) ?? [];
+  const validationCommands = Object.entries(
+    selected.data?.policy.tests.commands ?? {},
+  );
+  const testCount = validationCommands.filter(
+    ([, command]) => (command.kind ?? "test") === "test",
+  ).length;
   return (
     <>
       <Link className="back-link" to="/">
@@ -368,26 +374,40 @@ export function NewRunPage() {
             <h2>작업 순서</h2>
             {selected.data && (
               <section>
-                <h3>실행할 검증 명령</h3>
-                {Object.entries(selected.data.policy.tests.commands ?? {}).map(
-                  ([id, command]) => (
-                    <div key={id}>
-                      <strong>
-                        {id} ·{" "}
-                        {(command.kind ?? "test") === "test"
-                          ? "테스트"
-                          : "빌드·정적 검사"}
-                      </strong>
-                      <pre>{command.argv.join(" ")}</pre>
-                      <p className="help">
-                        작업 경로: {command.working_directory ?? "."}
-                        {command.junit_report
-                          ? ` · JUnit: ${command.junit_report}`
-                          : ""}
-                      </p>
-                    </div>
-                  ),
-                )}
+                <h3>검증 설정</h3>
+                <p className="help">
+                  테스트 {testCount}개 · 빌드·정적 검사{" "}
+                  {validationCommands.length - testCount}개
+                </p>
+                <details key={selected.data.id}>
+                  <summary>
+                    검증 명령 {validationCommands.length}개 자세히 보기
+                  </summary>
+                  <div
+                    className="new-run-validation-commands"
+                    tabIndex={0}
+                    role="region"
+                    aria-label="검증 명령 목록"
+                  >
+                    {validationCommands.map(([id, command]) => (
+                      <div key={id}>
+                        <strong>
+                          {id} ·{" "}
+                          {(command.kind ?? "test") === "test"
+                            ? "테스트"
+                            : "빌드·정적 검사"}
+                        </strong>
+                        <pre>{command.argv.join(" ")}</pre>
+                        <p className="help">
+                          작업 경로: {command.working_directory ?? "."}
+                          {command.junit_report
+                            ? ` · JUnit: ${command.junit_report}`
+                            : ""}
+                        </p>
+                      </div>
+                    ))}
+                  </div>
+                </details>
                 <Link to={`/projects/${selected.data.id}`}>
                   프로젝트 검증 설정 열기
                 </Link>

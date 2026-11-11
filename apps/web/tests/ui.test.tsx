@@ -614,3 +614,40 @@ it("작업 상세 상단에서 긴 Feature 브랜치를 별도 행에 표시한�
   expect(value).toBeVisible();
   expect(screen.getByText("기준 브랜치").closest(".run-branch")).not.toBeNull();
 });
+
+it("새 작업의 많은 검증 명령을 요약하고 펼쳐서 확인한다", async () => {
+  const commands = Object.fromEntries(
+    Array.from({ length: 30 }, (_, i) => [
+      `check-${i}`,
+      {
+        kind: i === 0 ? ("test" as const) : ("check" as const),
+        argv: ["tool", `check-${i}`],
+        timeout_seconds: 600,
+        working_directory: ".",
+        network: "none" as const,
+        junit_report: i === 0 ? "report.xml" : null,
+      },
+    ]),
+  );
+  vi.spyOn(api, "projects").mockResolvedValue({
+    items: [p],
+    has_more: false,
+    next_cursor: null,
+  });
+  vi.spyOn(api, "project").mockResolvedValue({
+    ...p,
+    policy: { ...p.policy, tests: { ...p.policy.tests, commands } },
+  });
+  vi.spyOn(api, "branches").mockResolvedValue({ items: ["main"] });
+  wrap(<NewRunPage />, "/runs/new?project=prj-1");
+  const summary = await screen.findByText("검증 명령 30개 자세히 보기");
+  expect(screen.getByText("테스트 1개 · 빌드·정적 검사 29개")).toBeVisible();
+  expect(screen.getByText("tool check-29")).not.toBeVisible();
+  await userEvent.click(summary);
+  expect(screen.getByText("tool check-29")).toBeVisible();
+  expect(
+    screen.getByRole("region", { name: "검증 명령 목록" }),
+  ).toHaveAttribute("tabindex", "0");
+  await userEvent.click(summary);
+  expect(screen.getByText("tool check-29")).not.toBeVisible();
+});

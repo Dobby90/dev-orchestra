@@ -1881,3 +1881,9 @@ dd {
     max-height: 50dvh;
   }
 }
+
+.new-run-validation-commands {
+  max-height: 18rem;
+  overflow-y: auto;
+  margin-block: 0.75rem;
+}
