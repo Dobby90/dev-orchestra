@@ -279,7 +279,9 @@ def web_session(ctx: typer.Context):
 @guarded
 def api_start(
     ctx: typer.Context,
-    allow_root: list[Path] = typer.Option([], "--allow-root"),
+    allow_root: list[Path] = typer.Option(
+        [], "--allow-root", hidden=True, help="호환용 옵션이며 더 이상 경로를 제한하지 않습니다"
+    ),
     port: int = typer.Option(8000, min=1024, max=65535),
 ):
     try:
@@ -288,6 +290,11 @@ def api_start(
         from dev_orchestra.api.main import create_app
     except ImportError as error:
         raise PipelineError("install the web extra: uv sync --extra web") from error
+    if allow_root:
+        typer.echo(
+            "--allow-root는 더 이상 경로를 제한하지 않습니다. 프로젝트별로 저장소를 등록하세요.",
+            err=True,
+        )
     uvicorn.run(
         create_app(ctx.obj.config, allow_root, port),
         host="127.0.0.1",
@@ -383,13 +390,20 @@ app.add_typer(web_app, name="web")
 @guarded
 def web_start(
     ctx: typer.Context,
-    allow_root: list[Path] = typer.Option([], "--allow-root"),
+    allow_root: list[Path] = typer.Option(
+        [], "--allow-root", hidden=True, help="호환용 옵션이며 더 이상 경로를 제한하지 않습니다"
+    ),
     port: int = typer.Option(8000, min=1024, max=65535),
     detach: bool = False,
     assets: Path | None = typer.Option(None),
 ):
     from dev_orchestra.application.web_runtime import WebRuntime
 
+    if allow_root:
+        typer.echo(
+            "--allow-root는 더 이상 경로를 제한하지 않습니다. 프로젝트별로 저장소를 등록하세요.",
+            err=True,
+        )
     typer.echo(json.dumps(WebRuntime(ctx.obj).start(allow_root, port, detach, assets)))
 
 

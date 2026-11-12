@@ -57,7 +57,7 @@ class WebRuntime:
                     {
                         "token": token,
                         "config": self.service.config.model_dump(mode="json"),
-                        "roots": [str(Path(p).expanduser().resolve()) for p in roots],
+                        "roots": [],  # Compatibility with older API child launchers.
                         "port": port,
                         "assets": str(Path(assets).resolve()) if assets else None,
                     }

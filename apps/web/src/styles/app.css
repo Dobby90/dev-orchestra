@@ -737,6 +737,15 @@ fieldset {
 .agent-options .help {
   grid-column: 1 / -1;
 }
+.agent-default-panel {
+  padding: 16px;
+  background: var(--accent-soft);
+  border-radius: 8px;
+}
+.agent-default-row {
+  padding: 0;
+  border: 0;
+}
 @media (max-width: 600px) {
   .agent-options {
     grid-template-columns: 1fr;
@@ -2076,11 +2085,6 @@ dd {
     grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
     gap: 8px 16px;
   }
-  .agent-default-row {
-    padding: 16px;
-    background: var(--accent-soft);
-    border-radius: 8px;
-  }
   .agent-role-row {
     position: relative;
     padding-left: 110px;
@@ -2201,4 +2205,66 @@ dd {
 .run-identity strong {
   color: var(--text);
   overflow-wrap: anywhere;
+}
+
+@media (min-width: 821px) {
+  .modal:has(.project-form) {
+    width: min(760px, calc(100vw - 64px));
+  }
+  .project-step {
+    min-width: 0;
+    display: grid;
+    gap: 16px;
+    margin: 0;
+  }
+  .project-step[hidden] {
+    display: none;
+  }
+  .project-step > legend {
+    font-weight: 600;
+    padding: 0 6px;
+  }
+  .project-settings-tabs .project-step {
+    display: contents;
+  }
+  .project-settings-tabs .project-step > legend {
+    display: none;
+  }
+  .project-settings-tabs .project-step > fieldset,
+  .project-settings-tabs .project-step > details,
+  .project-settings-tabs .project-step > p {
+    grid-column: 1 / -1;
+  }
+  .modal-fixed-footer {
+    gap: 12px;
+  }
+  .modal-scroll-body > .notice-error {
+    margin-top: 16px;
+  }
+}
+
+@media (min-width: 821px) {
+  .project-branch-field {
+    display: grid;
+    gap: 8px;
+    grid-column: 1 / -1;
+    min-width: 0;
+  }
+  .project-branch-control {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    align-items: center;
+    gap: 10px;
+    max-width: 520px;
+  }
+  .project-branch-control > input,
+  .project-branch-control > select,
+  .project-branch-control > .button {
+    height: 38px;
+    margin: 0;
+  }
+  .project-branch-control > .button {
+    padding: 0 14px;
+    white-space: nowrap;
+  }
 }

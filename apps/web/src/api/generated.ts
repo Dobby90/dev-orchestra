@@ -74,6 +74,40 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/project-directories": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Project Directories */
+        post: operations["project_directories_api_project_directories_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/project-repository/inspect": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Inspect Repository */
+        post: operations["inspect_repository_api_project_repository_inspect_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/projects": {
         parameters: {
             query?: never;
@@ -1157,6 +1191,29 @@ export interface components {
             /** Text */
             text: string;
         };
+        /** DirectoryEntry */
+        DirectoryEntry: {
+            /** Name */
+            name: string;
+            /** Path */
+            path: string;
+        };
+        /** DirectoryInput */
+        DirectoryInput: {
+            /** Path */
+            path?: string | null;
+        };
+        /** DirectoryView */
+        DirectoryView: {
+            /** Path */
+            path: string;
+            /** Parent */
+            parent: string | null;
+            /** Items */
+            items: components["schemas"]["DirectoryEntry"][];
+            /** Truncated */
+            truncated: boolean;
+        };
         /** DispositionInput */
         DispositionInput: {
             /** Reason */
@@ -1648,6 +1705,15 @@ export interface components {
              * @default true
              */
             stale: boolean;
+        };
+        /** RepositoryPreview */
+        RepositoryPreview: {
+            /** Repository Path */
+            repository_path: string;
+            /** Branches */
+            branches: string[];
+            /** Default Branch */
+            default_branch: string;
         };
         /** ResumeInput */
         ResumeInput: {
@@ -2569,6 +2635,72 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ValidationDetection"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    project_directories_api_project_directories_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["DirectoryInput"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DirectoryView"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    inspect_repository_api_project_repository_inspect_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["DirectoryInput"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RepositoryPreview"];
                 };
             };
             /** @description Validation Error */

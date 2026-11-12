@@ -806,6 +806,11 @@ it("등록 대화상자의 하단 버튼으로 연결된 프로젝트 폼을 제
     has_more: false,
     next_cursor: null,
   });
+  vi.spyOn(api, "inspectRepository").mockResolvedValue({
+    repository_path: "/projects/example",
+    branches: ["develop"],
+    default_branch: "develop",
+  });
   const create = vi.spyOn(api, "createProject").mockResolvedValue(p);
   wrap(<ProjectsPage />);
   await userEvent.click(
@@ -816,6 +821,14 @@ it("등록 대화상자의 하단 버튼으로 연결된 프로젝트 폼을 제
     screen.getByLabelText("저장소 절대 경로"),
     "/projects/example",
   );
+  await userEvent.click(screen.getByRole("button", { name: "저장소 확인" }));
+  await screen.findByText("Git 저장소 확인 완료");
+  expect(screen.getByLabelText(/기본 기준 브랜치/)).toHaveValue("develop");
+  await userEvent.click(screen.getByRole("button", { name: "대화상자 닫기" }));
+  await userEvent.click(screen.getByRole("button", { name: "프로젝트 등록" }));
+  expect(screen.getByLabelText("프로젝트 이름")).toHaveValue("등록 예제");
+  expect(screen.getByLabelText(/기본 기준 브랜치/)).toHaveValue("develop");
+  await userEvent.click(screen.getByRole("button", { name: "다음" }));
   await userEvent.click(screen.getByText("고급 설정 · 정책 JSON 직접 편집"));
   fireEvent.change(screen.getByLabelText("테스트·리뷰 정책 (JSON)"), {
     target: { value: JSON.stringify(initialPolicy) },
@@ -1019,4 +1032,75 @@ it("새 작업의 프로젝트를 바꿔도 이전 연결 테스트 결과가 �
     client.getQueryData<Schema["GitSettingsView"]>(["project-git", p.id])?.test
       ?.status,
   ).toBe("success");
+});
+
+it("프로젝트 수정에서 브랜치를 조회해도 기존 선택을 유지하고 변경 시 정책을 재확인한다", async () => {
+  const inspect = vi
+    .spyOn(api, "inspectRepository")
+    .mockResolvedValue({
+      repository_path: p.repository_path,
+      branches: ["main", "develop"],
+      default_branch: "develop",
+    });
+  const submit = vi.fn();
+  wrap(
+    <ProjectForm
+      project={{ ...p, policy: initialPolicy }}
+      pending={false}
+      onSubmit={submit}
+    />,
+  );
+  await userEvent.click(screen.getByRole("button", { name: "브랜치 조회" }));
+  const branch = await screen.findByRole("combobox", {
+    name: /기본 기준 브랜치/,
+  });
+  expect(inspect).toHaveBeenCalledWith(p.repository_path);
+  expect(branch).toHaveValue("main");
+  await userEvent.selectOptions(branch, "develop");
+  await userEvent.click(screen.getByRole("button", { name: "변경 사항 저장" }));
+  expect(submit).not.toHaveBeenCalled();
+  await userEvent.click(
+    screen.getByRole("checkbox", { name: /변경한 저장소/ }),
+  );
+  await userEvent.click(screen.getByRole("button", { name: "변경 사항 저장" }));
+  expect(submit).toHaveBeenCalledWith(
+    expect.objectContaining({ default_base_branch: "develop" }),
+  );
+});
+
+it("프로젝트 수정에서 사라진 기준 브랜치는 자동 교체하지 않고 저장을 차단한다", async () => {
+  vi.spyOn(api, "inspectRepository").mockResolvedValue({
+    repository_path: p.repository_path,
+    branches: ["develop"],
+    default_branch: "develop",
+  });
+  const submit = vi.fn();
+  wrap(
+    <ProjectForm
+      project={{ ...p, policy: initialPolicy }}
+      pending={false}
+      onSubmit={submit}
+    />,
+  );
+  await userEvent.click(screen.getByRole("button", { name: "브랜치 조회" }));
+  expect(
+    await screen.findByRole("combobox", { name: /기본 기준 브랜치/ }),
+  ).toHaveValue("main");
+  await userEvent.click(screen.getByRole("button", { name: "변경 사항 저장" }));
+  expect(screen.getByRole("alert")).toHaveTextContent(
+    "현재 기준 브랜치가 저장소에 없습니다",
+  );
+  expect(submit).not.toHaveBeenCalled();
+});
+
+it("프로젝트 수정의 브랜치 조회 실패 시 기존 입력을 보존한다", async () => {
+  vi.spyOn(api, "inspectRepository").mockRejectedValue(
+    new Error("저장소 조회 실패"),
+  );
+  wrap(<ProjectForm project={p} pending={false} onSubmit={vi.fn()} />);
+  await userEvent.click(screen.getByRole("button", { name: "브랜치 조회" }));
+  expect(await screen.findByRole("alert")).toHaveTextContent(
+    "저장소 조회 실패",
+  );
+  expect(screen.getByLabelText(/기본 기준 브랜치/)).toHaveValue("main");
 });

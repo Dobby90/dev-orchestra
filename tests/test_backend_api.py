@@ -784,3 +784,71 @@ def test_run_list_and_detail_expose_linked_project_name(web):
         db.execute("UPDATE runs SET project_id=? WHERE id=?", (registered["id"], rid))
     assert client.get("/api/runs").json()["items"][0]["project_name"] == registered["name"]
     assert client.get(f"/api/runs/{rid}").json()["project_name"] == registered["name"]
+
+
+def test_directory_picker_lists_only_directories_and_rejects_links(web, tmp_path):
+    c, _, _, repo, _ = web
+    root = tmp_path.resolve() / "browse"
+    root.mkdir()
+    (root / "folder with spaces").mkdir()
+    (root / ".hidden").mkdir()
+    (root / "file.txt").write_text("private")
+    (root / "link").symlink_to(repo, target_is_directory=True)
+    response = c.post("/api/project-directories", json={"path": str(root)})
+    assert response.status_code == 200
+    assert response.json() == {
+        "path": str(root),
+        "parent": str(root.parent),
+        "items": [{"name": "folder with spaces", "path": str(root / "folder with spaces")}],
+        "truncated": False,
+    }
+    assert c.post("/api/project-directories", json={"path": str(root / "link")}).status_code == 409
+    assert (
+        c.post("/api/project-directories", json={"path": str(root / "file.txt")}).status_code == 422
+    )
+    assert (
+        c.post("/api/project-directories", json={"path": str(root / "missing")}).status_code == 422
+    )
+    c.headers.pop("X-CSRF-Token")
+    assert c.post("/api/project-directories", json={"path": str(root)}).status_code == 403
+
+
+def test_project_registration_without_allowed_roots(web):
+    c, svc, _, repo, _ = web
+    assert project(c, svc, repo)["repository_path"] == str(repo.resolve())
+
+
+def test_directory_picker_bounds_results_and_requires_session(web, tmp_path):
+    c, _, _, _, _ = web
+    root = tmp_path.resolve() / "many-folders"
+    root.mkdir()
+    for i in range(201):
+        (root / str(i)).mkdir()
+    response = c.post("/api/project-directories", json={"path": str(root)})
+    assert response.status_code == 200
+    assert len(response.json()["items"]) == 200
+    assert response.json()["truncated"] is True
+    assert c.delete("/api/session").status_code == 204
+    assert c.post("/api/project-directories", json={"path": str(root)}).status_code == 401
+
+
+def test_repository_inspection_before_registration(web):
+    import subprocess
+
+    c, svc, _, repo, _ = web
+    subprocess.run(["git", "branch", "-m", "develop"], cwd=repo, check=True)
+    before = c.get("/api/projects").json()
+    response = c.post("/api/project-repository/inspect", json={"path": str(repo)})
+    assert response.status_code == 200
+    assert response.json() == {
+        "repository_path": str(repo.resolve()),
+        "branches": ["develop"],
+        "default_branch": "develop",
+    }
+    assert c.get("/api/projects").json() == before
+    child = repo / "nested"
+    child.mkdir()
+    assert c.post("/api/project-repository/inspect", json={"path": str(child)}).status_code == 409
+    assert c.post("/api/project-repository/inspect", json={"path": None}).status_code == 422
+    c.headers.pop("X-CSRF-Token")
+    assert c.post("/api/project-repository/inspect", json={"path": str(repo)}).status_code == 403

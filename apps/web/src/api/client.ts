@@ -41,6 +41,8 @@ const messages: Record<string, string> = {
     "Codex 모델 목록을 불러오지 못했습니다. Codex 설치·인증 상태를 확인한 뒤 다시 시도해 주세요.",
   CSRF_INVALID: "세션을 다시 확인해야 합니다. 새로고침 후 다시 시도해 주세요.",
   PROJECT_REQUIRED: "등록되지 않은 CLI 작업입니다. CLI에서 제어해 주세요.",
+  REPOSITORY_ROOT_REQUIRED: "Git 저장소의 최상위 폴더를 선택해 주세요.",
+  UNSAFE_PATH: "심볼릭 링크가 포함되지 않은 실제 저장소 경로를 선택해 주세요.",
   VALIDATION_ERROR: "입력 형식이나 프로젝트 정책을 확인해 주세요.",
   BRANCH_CONFLICT:
     "같은 이름의 Feature 브랜치가 있습니다. 새 브랜치 이름을 입력해 주세요.",

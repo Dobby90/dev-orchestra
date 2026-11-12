@@ -105,8 +105,7 @@ def test_project_validation_and_policy_snapshot(service, tmp_path):
     snapshot = projects.validate_policy(svc.config)
     snapshot.workflow.max_fix_attempts = 10
     assert svc.config.workflow.max_fix_attempts == 3
-    with pytest.raises(ApplicationError, match="outside allowed roots"):
-        ProjectService([]).validate_repository(repo.resolve(), "main")
+    assert ProjectService([]).validate_repository(repo.resolve(), "main") == result
     link = tmp_path / "link"
     link.symlink_to(repo, target_is_directory=True)
     with pytest.raises(ApplicationError, match="symlink"):

@@ -214,7 +214,7 @@ function SettingsEditor({
         있습니다. 이 조회는 모델 작업을 실행하지 않습니다.
       </p>
       {catalog.error && <ErrorNotice error={catalog.error} />}
-      {row(null)}
+      <div className="agent-default-panel">{row(null)}</div>
       <div className="agent-role-matrix" aria-label="역할별 모델과 추론 강도">
         {roleIds.map(row)}
       </div>

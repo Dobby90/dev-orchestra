@@ -121,6 +121,9 @@ test("실제 로컬 API: 로그인 → 프로젝트 → 실행 → 재연결 →
     .click();
   await page.getByLabel("프로젝트 이름").fill("GUI 임시 프로젝트");
   await page.getByLabel("저장소 절대 경로").fill(f.repo);
+  await page.getByRole("button", { name: "저장소 확인", exact: true }).click();
+  await expect(page.getByText("Git 저장소 확인 완료")).toBeVisible();
+  await page.getByRole("button", { name: "다음", exact: true }).click();
   await page.getByText("고급 설정 · 정책 JSON 직접 편집").click();
   await page
     .getByLabel("테스트·리뷰 정책 (JSON)")
@@ -625,6 +628,11 @@ test("CLI 시작·브라우저 종료·재접속·CLI 승인과 GUI 생성 교�
     .click();
   await reopened.getByLabel("프로젝트 이름").fill("독립 교차 프로젝트");
   await reopened.getByLabel("저장소 절대 경로").fill(repo);
+  await reopened
+    .getByRole("button", { name: "저장소 확인", exact: true })
+    .click();
+  await expect(reopened.getByText("Git 저장소 확인 완료")).toBeVisible();
+  await reopened.getByRole("button", { name: "다음", exact: true }).click();
   await reopened.getByText("고급 설정 · 정책 JSON 직접 편집").click();
   await reopened
     .getByLabel("테스트·리뷰 정책 (JSON)")
@@ -727,6 +735,9 @@ for args in [('init','-b','main'),('config','user.name','GUI 검사'),('config',
     .click();
   await page.getByLabel("프로젝트 이름").fill("자동 감지 프로젝트");
   await page.getByLabel("저장소 절대 경로").fill(repo);
+  await page.getByRole("button", { name: "저장소 확인", exact: true }).click();
+  await expect(page.getByText("Git 저장소 확인 완료")).toBeVisible();
+  await page.getByRole("button", { name: "다음", exact: true }).click();
   await page.getByRole("button", { name: "검증 자동 감지" }).click();
   await expect(
     page.getByRole("heading", { name: "감지된 검증 후보" }),
@@ -759,9 +770,39 @@ for args in [('init','-b','main'),('config','user.name','GUI 검사'),('config',
     page.getByRole("heading", { name: "자동 감지 프로젝트" }),
   ).toBeVisible();
   await page.getByRole("link", { name: /자동 감지 프로젝트/ }).click();
-  await page.getByRole("link", { name: "이 프로젝트에서 실행" }).click();
+  await expect(page.getByLabel("프로젝트 이름")).toHaveValue(
+    "자동 감지 프로젝트",
+  );
+  for (const width of [1280, 1440]) {
+    await page.setViewportSize({ width, height: 1000 });
+    const branch = page.getByLabel("기본 기준 브랜치", { exact: true });
+    const lookup = page.getByRole("button", {
+      name: "브랜치 조회",
+      exact: true,
+    });
+    const fieldBox = await branch.boundingBox();
+    const buttonBox = await lookup.boundingBox();
+    expect(fieldBox).not.toBeNull();
+    expect(buttonBox).not.toBeNull();
+    expect(Math.abs(fieldBox!.y - buttonBox!.y)).toBeLessThanOrEqual(1);
+    expect(fieldBox!.height).toBe(buttonBox!.height);
+    expect(buttonBox!.width).toBeLessThan(150);
+    expect(buttonBox!.x).toBeGreaterThan(fieldBox!.x + fieldBox!.width);
+    await page.screenshot({
+      path: `test-results/project-branch-${width}.png`,
+      fullPage: true,
+    });
+  }
+  await page.getByRole("button", { name: "브랜치 조회", exact: true }).click();
   await expect(
-    page.getByRole("heading", { name: "실행할 검증 명령" }),
-  ).toBeVisible();
+    page.getByRole("combobox", { name: "기본 기준 브랜치", exact: true }),
+  ).toHaveValue("main");
+  await page.screenshot({
+    path: "test-results/project-branch-loaded.png",
+    fullPage: true,
+  });
+  await page.getByRole("link", { name: "이 프로젝트에서 실행" }).click();
+  await expect(page.getByRole("heading", { name: "검증 설정" })).toBeVisible();
+  await page.getByText(/검증 명령 .*개 자세히 보기/).click();
   await expect(page.getByText(/maven-build/).first()).toBeVisible();
 });
