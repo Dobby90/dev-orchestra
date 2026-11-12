@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type FormEvent } from "react";
+import { useEffect, useId, useRef, useState, type FormEvent } from "react";
 import { api } from "../api/resources";
 import type { Project, Schema } from "../api/types";
 import { Button } from "./ui/button";
@@ -97,6 +97,7 @@ export function ProjectForm({
   pending: boolean;
   onSubmit: (body: Schema["ProjectCreate"]) => void;
 }) {
+  const branchId = useId();
   const [guideOpen, setGuideOpen] = useState(false);
   const [name, setName] = useState(draft?.name ?? project?.name ?? ""),
     [path, setPath] = useState(draft?.path ?? project?.repository_path ?? ""),
@@ -282,55 +283,69 @@ export function ProjectForm({
         {!project && (
           <DirectoryPicker initialPath={path} onSelect={changePath} />
         )}
-        {(step !== undefined || project) && (
-          <Button
-            type="button"
-            variant="secondary"
-            disabled={!path || checking}
-            onClick={inspect}
-          >
-            {checking ? "확인 중…" : project ? "브랜치 조회" : "저장소 확인"}
-          </Button>
-        )}
-        <label>
-          기본 기준 브랜치
-          {inspection ? (
-            <select
-              value={base}
-              onChange={(e) => {
-                if (parsed && !Object.keys(parsed.tests.commands ?? {}).length)
-                  setPolicySource(`${path}\0${e.target.value}`);
-                setBase(e.target.value);
-                setConfirmed(false);
-              }}
-            >
-              {!inspection.branches.includes(base) && (
-                <option value={base}>{base} · 저장소에 없음</option>
-              )}
-              {inspection.branches.map((branch) => (
-                <option key={branch}>{branch}</option>
-              ))}
-            </select>
-          ) : (
-            <input
-              required
-              value={base}
-              onChange={(e) => {
-                if (parsed && !Object.keys(parsed.tests.commands ?? {}).length)
-                  setPolicySource(`${path}\0${e.target.value}`);
-                setBase(e.target.value);
-                setConfirmed(false);
-              }}
-            />
-          )}
+        <div className="project-branch-field">
+          <label htmlFor={branchId}>기본 기준 브랜치</label>
+          <div className="project-branch-control">
+            {inspection ? (
+              <select
+                id={branchId}
+                value={base}
+                onChange={(e) => {
+                  if (
+                    parsed &&
+                    !Object.keys(parsed.tests.commands ?? {}).length
+                  )
+                    setPolicySource(`${path}\0${e.target.value}`);
+                  setBase(e.target.value);
+                  setConfirmed(false);
+                }}
+              >
+                {!inspection.branches.includes(base) && (
+                  <option value={base}>{base} · 저장소에 없음</option>
+                )}
+                {inspection.branches.map((branch) => (
+                  <option key={branch}>{branch}</option>
+                ))}
+              </select>
+            ) : (
+              <input
+                id={branchId}
+                required
+                value={base}
+                onChange={(e) => {
+                  if (
+                    parsed &&
+                    !Object.keys(parsed.tests.commands ?? {}).length
+                  )
+                    setPolicySource(`${path}\0${e.target.value}`);
+                  setBase(e.target.value);
+                  setConfirmed(false);
+                }}
+              />
+            )}
+            {(step !== undefined || project) && (
+              <Button
+                type="button"
+                variant="secondary"
+                disabled={!path || checking}
+                onClick={inspect}
+              >
+                {checking
+                  ? "확인 중…"
+                  : project
+                    ? "브랜치 조회"
+                    : "저장소 확인"}
+              </Button>
+            )}
+          </div>
           {inspection && (
-            <span className="help">
+            <span className="help" role="status">
               {inspection.branches.includes(base)
                 ? "Git 저장소 확인 완료"
                 : "현재 기준 브랜치가 저장소에 없습니다. 다른 브랜치를 선택하세요."}
             </span>
           )}
-        </label>
+        </div>
       </fieldset>
       <fieldset
         className="project-step"

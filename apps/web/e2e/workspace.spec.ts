@@ -773,6 +773,34 @@ for args in [('init','-b','main'),('config','user.name','GUI 검사'),('config',
   await expect(page.getByLabel("프로젝트 이름")).toHaveValue(
     "자동 감지 프로젝트",
   );
+  for (const width of [1280, 1440]) {
+    await page.setViewportSize({ width, height: 1000 });
+    const branch = page.getByLabel("기본 기준 브랜치", { exact: true });
+    const lookup = page.getByRole("button", {
+      name: "브랜치 조회",
+      exact: true,
+    });
+    const fieldBox = await branch.boundingBox();
+    const buttonBox = await lookup.boundingBox();
+    expect(fieldBox).not.toBeNull();
+    expect(buttonBox).not.toBeNull();
+    expect(Math.abs(fieldBox!.y - buttonBox!.y)).toBeLessThanOrEqual(1);
+    expect(fieldBox!.height).toBe(buttonBox!.height);
+    expect(buttonBox!.width).toBeLessThan(150);
+    expect(buttonBox!.x).toBeGreaterThan(fieldBox!.x + fieldBox!.width);
+    await page.screenshot({
+      path: `test-results/project-branch-${width}.png`,
+      fullPage: true,
+    });
+  }
+  await page.getByRole("button", { name: "브랜치 조회", exact: true }).click();
+  await expect(
+    page.getByRole("combobox", { name: "기본 기준 브랜치", exact: true }),
+  ).toHaveValue("main");
+  await page.screenshot({
+    path: "test-results/project-branch-loaded.png",
+    fullPage: true,
+  });
   await page.getByRole("link", { name: "이 프로젝트에서 실행" }).click();
   await expect(page.getByRole("heading", { name: "검증 설정" })).toBeVisible();
   await page.getByText(/검증 명령 .*개 자세히 보기/).click();

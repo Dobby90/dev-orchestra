@@ -2242,3 +2242,29 @@ dd {
     margin-top: 16px;
   }
 }
+
+@media (min-width: 821px) {
+  .project-branch-field {
+    display: grid;
+    gap: 8px;
+    grid-column: 1 / -1;
+    min-width: 0;
+  }
+  .project-branch-control {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    align-items: center;
+    gap: 10px;
+    max-width: 520px;
+  }
+  .project-branch-control > input,
+  .project-branch-control > select,
+  .project-branch-control > .button {
+    height: 38px;
+    margin: 0;
+  }
+  .project-branch-control > .button {
+    padding: 0 14px;
+    white-space: nowrap;
+  }
+}
