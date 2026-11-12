@@ -853,3 +853,28 @@ it("작업명 아래 프로젝트명과 브랜치를 표시하고 미등록 작�
   expect(screen.getByText("미등록 작업")).toBeVisible();
   expect(screen.getByText("브랜치 준비 중")).toBeVisible();
 });
+
+it.each([
+  {
+    project_name: "예제 프로젝트",
+    project_id: "prj-1",
+    expected: "예제 프로젝트",
+  },
+  { project_name: null, project_id: null, expected: "미등록 작업" },
+  { project_name: null, project_id: "prj-1", expected: "프로젝트명 확인 불가" },
+])(
+  "작업 상세에 프로젝트 정보를 표시한다: $expected",
+  async ({ expected, ...project }) => {
+    setupDetail();
+    vi.mocked(api.run).mockResolvedValue({ ...detail, ...project });
+    wrap(
+      <Routes>
+        <Route path="/runs/:id" element={<RunDetailPage />} />
+      </Routes>,
+      "/runs/r1",
+    );
+    const name = await screen.findByText(expected);
+    expect(name).toBeVisible();
+    expect(name.closest(".run-identity")).toHaveTextContent("프로젝트:");
+  },
+);

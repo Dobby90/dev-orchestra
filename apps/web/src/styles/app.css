@@ -2185,3 +2185,20 @@ dd {
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+
+.run-identity {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: 6px 20px;
+  margin-bottom: 12px;
+  font-size: 14px;
+}
+.run-identity .run-id {
+  margin: 0;
+  font-size: 12px;
+}
+.run-identity strong {
+  color: var(--text);
+  overflow-wrap: anywhere;
+}

@@ -249,9 +249,18 @@ function RunDetailBody({ rid }: { rid: string }) {
       <Heading eyebrow="WORKSPACE / RUN DETAIL" title={r.name || rid}>
         <Status state={r.state} large />
       </Heading>
-      {r.name && r.name !== rid && (
-        <p className="mono subtle run-id">작업 ID: {rid}</p>
-      )}
+      <div className="run-identity">
+        <p className="subtle">
+          프로젝트:{" "}
+          <strong>
+            {r.project_name ??
+              (r.project_id ? "프로젝트명 확인 불가" : "미등록 작업")}
+          </strong>
+        </p>
+        {r.name && r.name !== rid && (
+          <p className="mono subtle run-id">작업 ID: {rid}</p>
+        )}
+      </div>
       <div className="run-overview panel">
         <div>
           <span className="subtle">테스트 범위</span>
