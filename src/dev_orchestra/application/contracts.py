@@ -36,6 +36,7 @@ class RunSummary(Contract):
     schema_version: Literal[1] = 1
     id: str
     name: str = ""
+    project_name: str | None = None
     worktree_removed: bool = False
     push_status: Literal["not_pushed", "running", "success", "failed", "stale"] = "not_pushed"
     state: State

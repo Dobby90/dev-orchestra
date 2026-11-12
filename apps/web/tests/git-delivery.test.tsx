@@ -5,8 +5,9 @@ import {
   screen,
   waitFor,
 } from "@testing-library/react";
+import { MemoryRouter } from "react-router-dom";
 import { QueryClientProvider } from "@tanstack/react-query";
-import { expect, it, vi } from "vitest";
+import { beforeEach, expect, it, vi } from "vitest";
 import { api } from "../src/api/resources";
 import type { RunDetail, Schema } from "../src/api/types";
 import { createQueryClient } from "../src/App";
@@ -33,17 +34,30 @@ const preview: Schema["PushView"] = {
 const run = {
   id: "r1",
   version: 3,
+  project_id: "p1",
   state: "completed",
   handoff: { status: "matching" },
   execution: { worktree_removed: false },
 } as RunDetail;
-function wrap(node: React.ReactNode) {
+function wrap(node: React.ReactNode, client = createQueryClient()) {
   return render(
-    <QueryClientProvider client={createQueryClient()}>
-      {node}
+    <QueryClientProvider client={client}>
+      <MemoryRouter>{node}</MemoryRouter>
     </QueryClientProvider>,
   );
 }
+beforeEach(() => {
+  vi.spyOn(api, "gitSettings").mockResolvedValue({
+    ...settings,
+    test: {
+      status: "success",
+      message: "조회 완료",
+      url: settings.remote_url!,
+      checked_at: "2026-11-12T00:00:00Z",
+      push_permission: "unknown",
+    },
+  });
+});
 function result(status: string) {
   return {
     ...preview,
@@ -182,4 +196,129 @@ it("토큰 교체는 저장 요청으로만 전달하고 입력을 비운다", a
     expect(screen.getByLabelText("인증 토큰 등록·교체")).toHaveValue(""),
   );
   expect(localStorage.length).toBe(0);
+});
+
+it.each([
+  [
+    "원격 미설정",
+    { ...settings, remote_url: null },
+    "원격 저장소를 설정하세요",
+  ],
+  ["연결 미확인", settings, "연결 테스트를 실행하세요"],
+  [
+    "인증 실패",
+    {
+      ...settings,
+      test: {
+        status: "authentication_failed",
+        message: "인증 정보를 확인하세요.",
+        url: settings.remote_url!,
+        checked_at: "2026-11-12",
+        push_permission: "unknown" as const,
+      },
+    },
+    "인증 정보를 확인하세요",
+  ],
+] as const)(
+  "%s이면 Push를 차단하고 설정 링크를 제공한다",
+  async (_, value, message) => {
+    vi.mocked(api.gitSettings).mockResolvedValue(value);
+    vi.spyOn(api, "pushPreview").mockResolvedValue(preview);
+    const request = vi.spyOn(api, "pushBranch");
+    wrap(<RunPushPanel run={run} />);
+    expect(await screen.findByText(new RegExp(message))).toBeVisible();
+    const button = screen.getByRole("button", { name: "작업 브랜치 Push" });
+    expect(button).toBeDisabled();
+    fireEvent.click(button);
+    expect(request).not.toHaveBeenCalled();
+    expect(
+      screen.getByRole("link", { name: "Git 계정·인증 설정" }),
+    ).toHaveAttribute("href", "/projects/p1?tab=git");
+  },
+);
+
+it("토큰 없는 SSH·helper 연결도 재확인 후 Push를 활성화한다", async () => {
+  vi.mocked(api.gitSettings).mockResolvedValue({
+    ...settings,
+    account: "",
+    token_registered: false,
+  });
+  vi.spyOn(api, "pushPreview").mockResolvedValue(preview);
+  vi.spyOn(api, "testGit").mockResolvedValue({
+    ...settings,
+    account: "",
+    token_registered: false,
+    test: {
+      status: "success",
+      message: "조회 완료",
+      url: settings.remote_url!,
+      checked_at: "2026-11-12",
+      push_permission: "unknown",
+    },
+  });
+  wrap(<RunPushPanel run={run} />);
+  expect(
+    await screen.findByRole("button", { name: "작업 브랜치 Push" }),
+  ).toBeDisabled();
+  fireEvent.click(screen.getByRole("button", { name: "Git 연결 테스트" }));
+  await waitFor(() =>
+    expect(
+      screen.getByRole("button", { name: "작업 브랜치 Push" }),
+    ).toBeEnabled(),
+  );
+  expect(api.testGit).toHaveBeenCalledWith("p1", "v1");
+});
+
+it("연결 성공 이후 발생한 인증 실패는 연결 재확인까지 Push를 막는다", async () => {
+  const failed = result("authentication_failed");
+  failed.result.checked_at = "2026-11-13T00:00:00Z";
+  vi.spyOn(api, "pushPreview").mockResolvedValue(failed);
+  wrap(<RunPushPanel run={run} />);
+  expect(await screen.findByText(/마지막 Push의 인증·접근 오류/)).toBeVisible();
+  expect(
+    screen.getByRole("button", { name: "작업 브랜치 Push 재시도" }),
+  ).toBeDisabled();
+});
+
+it("외부에서 연결 설정이 변경되면 기존 연결 성공으로 Push를 허용하지 않는다", async () => {
+  const client = createQueryClient();
+  vi.spyOn(api, "pushPreview").mockResolvedValue(preview);
+  wrap(<RunPushPanel run={run} />, client);
+  await waitFor(() =>
+    expect(
+      screen.getByRole("button", { name: "작업 브랜치 Push" }),
+    ).toBeEnabled(),
+  );
+  vi.mocked(api.gitSettings).mockResolvedValue({ ...settings, version: "v2" });
+  vi.mocked(api.pushPreview).mockResolvedValue({
+    ...preview,
+    settings_version: "v2",
+  });
+  await act(async () => {
+    await client.invalidateQueries({ queryKey: ["project-git", "p1"] });
+  });
+  expect(
+    await screen.findByText("Push 전에 Git 연결 테스트를 실행하세요."),
+  ).toBeVisible();
+  expect(
+    screen.getByRole("button", { name: "작업 브랜치 Push" }),
+  ).toBeDisabled();
+});
+
+it("연결 테스트 요청 자체가 실패해도 Push는 비활성 상태를 유지한다", async () => {
+  vi.spyOn(api, "pushPreview").mockResolvedValue(preview);
+  vi.spyOn(api, "testGit").mockRejectedValue(new Error("연결 오류"));
+  wrap(<RunPushPanel run={run} />);
+  await waitFor(() =>
+    expect(
+      screen.getByRole("button", { name: "Git 연결 테스트" }),
+    ).toBeEnabled(),
+  );
+  fireEvent.click(screen.getByRole("button", { name: "Git 연결 테스트" }));
+  expect(
+    await screen.findByText("Git 연결 테스트에 실패했습니다. 다시 확인하세요."),
+  ).toBeVisible();
+  expect(
+    screen.getByRole("button", { name: "작업 브랜치 Push" }),
+  ).toBeDisabled();
 });

@@ -121,7 +121,7 @@ function SettingsEditor({
     return (
       <fieldset
         key={role ?? "default"}
-        className="agent-options"
+        className={`agent-options ${role ? "agent-role-row" : "agent-default-row"}`}
         disabled={save.isPending}
       >
         <legend>{label}</legend>
@@ -215,7 +215,9 @@ function SettingsEditor({
       </p>
       {catalog.error && <ErrorNotice error={catalog.error} />}
       {row(null)}
-      {roleIds.map(row)}
+      <div className="agent-role-matrix" aria-label="역할별 모델과 추론 강도">
+        {roleIds.map(row)}
+      </div>
       {invalid && (
         <p role="alert" className="text-amber">
           {invalid}

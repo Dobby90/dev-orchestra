@@ -1887,3 +1887,318 @@ dd {
   overflow-y: auto;
   margin-block: 0.75rem;
 }
+
+.notification-toast {
+  position: fixed;
+  top: 80px;
+  right: 24px;
+  z-index: 50;
+  max-width: 440px;
+  padding: 16px;
+  background: var(--panel);
+  border: 1px solid var(--accent);
+  border-radius: 9px;
+  box-shadow: var(--shadow);
+  font-size: 14px;
+}
+.notification-toast p {
+  margin-bottom: 10px;
+}
+.new-run-grid summary {
+  cursor: pointer;
+  margin-bottom: 16px;
+}
+
+/* 데스크톱의 읽기 순서와 정보 밀도 */
+@media (min-width: 821px) {
+  main#main {
+    padding-top: 28px;
+  }
+  .page-heading {
+    margin-bottom: 22px;
+  }
+  .eyebrow {
+    margin-bottom: 6px;
+  }
+  .page-heading .subtle,
+  .form-grid label,
+  input,
+  textarea,
+  select {
+    font-size: 14px;
+  }
+  h2,
+  h3 {
+    font-size: 17px;
+  }
+  .button,
+  .tab {
+    font-size: 13px;
+  }
+  .button {
+    min-height: 38px;
+  }
+  .help,
+  .text-small,
+  .stat-card p {
+    font-size: 12px;
+  }
+  .stat-label {
+    font-size: 13px;
+  }
+  .stat-card {
+    padding: 14px 18px;
+  }
+  .stat-value {
+    margin: 4px 0;
+    font-size: 28px;
+  }
+  .stats-grid {
+    margin-bottom: 20px;
+  }
+  .panel-heading {
+    padding: 14px 18px;
+  }
+  .run-id {
+    font-size: 12px;
+    margin-bottom: 10px;
+  }
+  .run-overview {
+    padding: 16px 20px;
+    gap: 14px 24px;
+  }
+  .run-overview > div > .subtle {
+    font-size: 12px;
+  }
+  .run-overview strong {
+    font-size: 13px;
+  }
+  .run-overview .run-branch {
+    grid-column: auto;
+    padding: 0;
+    border: 0;
+  }
+  .run-overview .run-branch:has(.mono) {
+    grid-column: span 2;
+  }
+  .run-actions :is(.button-ghost, .button-secondary) {
+    background: transparent;
+    border-color: var(--border);
+  }
+  .run-actions .button-ghost {
+    border-color: transparent;
+  }
+  .run-actions .button-primary {
+    order: 2;
+    margin-left: 8px;
+  }
+  .connection {
+    font-size: 12px;
+  }
+  .runs-table table {
+    table-layout: fixed;
+    font-size: 13px;
+    white-space: normal;
+  }
+  .runs-table th,
+  .runs-table td {
+    padding: 12px 10px;
+  }
+  .runs-table th {
+    font-size: 12px;
+  }
+  .runs-table th:first-child {
+    width: 30%;
+  }
+  .runs-table th:nth-child(2) {
+    width: 12%;
+  }
+  .runs-table th:nth-child(3) {
+    width: 10%;
+  }
+  .runs-table th:nth-child(4) {
+    width: 7%;
+  }
+  .runs-table th:nth-child(5),
+  .runs-table th:nth-child(6) {
+    width: 8%;
+  }
+  .runs-table th:nth-child(7),
+  .runs-table th:nth-child(8) {
+    width: 10%;
+  }
+  .runs-table th:last-child {
+    width: 5%;
+  }
+  .runs-table .run-link {
+    font-size: 14px;
+    margin-bottom: 4px;
+  }
+  .runs-table .mono {
+    overflow-wrap: anywhere;
+  }
+  .runs-table .run-timestamp {
+    font-size: 12px;
+    white-space: normal;
+  }
+  .runs-table .status {
+    font-size: 12px;
+  }
+  .new-run-grid {
+    grid-template-columns: minmax(0, 1fr) 300px;
+  }
+  .new-run-grid > aside {
+    position: sticky;
+    top: 20px;
+  }
+  .prd-label-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    font-size: 14px;
+  }
+  .form-action-bar {
+    display: flex;
+    align-items: center;
+    justify-content: flex-end;
+    gap: 16px;
+    position: sticky;
+    bottom: 0;
+    padding: 14px 0;
+    border-top: 1px solid var(--border);
+    background: var(--panel);
+    z-index: 2;
+  }
+  .new-run-grid > .panel {
+    overflow: visible;
+  }
+  .agent-options {
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+    gap: 8px 16px;
+  }
+  .agent-default-row {
+    padding: 16px;
+    background: var(--accent-soft);
+    border-radius: 8px;
+  }
+  .agent-role-row {
+    position: relative;
+    padding-left: 110px;
+  }
+  .agent-role-row legend {
+    position: absolute;
+    left: 0;
+    top: 24px;
+    font-size: 14px;
+  }
+  .agent-role-row .help {
+    margin: 0;
+  }
+  .agent-role-row label {
+    font-size: 12px;
+  }
+  .agent-role-matrix {
+    display: grid;
+  }
+  .project-settings-tabs > .side-panel {
+    margin: 20px 22px;
+  }
+  .project-settings-tabs .project-form {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+  .project-settings-tabs .project-form > fieldset,
+  .project-settings-tabs .project-form > details,
+  .project-settings-tabs .project-form > p,
+  .project-settings-tabs .project-form > .project-form-actions,
+  .project-settings-tabs .validation-editor {
+    grid-column: 1 / -1;
+  }
+  .project-settings-tabs .validation-editor {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+  .project-settings-tabs .validation-editor > :not(label) {
+    grid-column: 1 / -1;
+  }
+  .modal:has(.project-form) {
+    padding: 24px;
+  }
+  .modal .project-form-actions {
+    position: sticky;
+    bottom: -24px;
+    margin: 0 -24px -24px;
+    padding: 16px 24px;
+  }
+  .modal:has(.project-form) > h2 {
+    position: sticky;
+    top: -24px;
+    padding: 16px 0;
+    background: var(--panel);
+    z-index: 3;
+  }
+}
+
+@media (min-width: 821px) {
+  .modal-with-footer {
+    display: flex;
+    flex-direction: column;
+    padding-bottom: 0;
+    overflow: hidden;
+  }
+  .modal-scroll-body {
+    overflow-y: auto;
+    min-height: 0;
+    padding: 4px;
+  }
+  .modal-fixed-footer {
+    flex-shrink: 0;
+    display: flex;
+    justify-content: flex-end;
+    padding: 16px 0;
+    border-top: 1px solid var(--border);
+  }
+}
+
+.modal-close {
+  z-index: 4;
+}
+
+.run-metadata {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  min-width: 0;
+}
+.run-project {
+  color: var(--muted);
+  max-width: 65%;
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.run-branch-name {
+  color: var(--faint);
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.run-identity {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: 6px 20px;
+  margin-bottom: 12px;
+  font-size: 14px;
+}
+.run-identity .run-id {
+  margin: 0;
+  font-size: 12px;
+}
+.run-identity strong {
+  color: var(--text);
+  overflow-wrap: anywhere;
+}

@@ -8,6 +8,7 @@ export function Modal({
   description,
   children,
   trigger,
+  footer,
 }: {
   open: boolean;
   onOpenChange: (value: boolean) => void;
@@ -15,16 +16,26 @@ export function Modal({
   description: string;
   children: ReactNode;
   trigger?: ReactNode;
+  footer?: ReactNode;
 }) {
   return (
     <Dialog.Root open={open} onOpenChange={onOpenChange}>
       {trigger && <Dialog.Trigger asChild>{trigger}</Dialog.Trigger>}
       <Dialog.Portal>
         <Dialog.Overlay className="modal-overlay" />
-        <Dialog.Content className="modal">
+        <Dialog.Content
+          className={`modal${footer ? " modal-with-footer" : ""}`}
+        >
           <Dialog.Title>{title}</Dialog.Title>
           <Dialog.Description>{description}</Dialog.Description>
-          {children}
+          {footer ? (
+            <>
+              <div className="modal-scroll-body">{children}</div>
+              <div className="modal-fixed-footer">{footer}</div>
+            </>
+          ) : (
+            children
+          )}
           <Dialog.Close
             className="icon-button modal-close"
             aria-label="대화상자 닫기"

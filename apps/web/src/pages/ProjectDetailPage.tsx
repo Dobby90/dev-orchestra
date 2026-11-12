@@ -1,5 +1,11 @@
+import * as Tabs from "@radix-ui/react-tabs";
 import { useState } from "react";
-import { Link, useNavigate, useParams } from "react-router-dom";
+import {
+  Link,
+  useNavigate,
+  useParams,
+  useSearchParams,
+} from "react-router-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { ArrowLeft, Archive, Plus } from "lucide-react";
 import { api } from "../api/resources";
@@ -13,6 +19,8 @@ export function ProjectDetailPage() {
   const navigate = useNavigate(),
     client = useQueryClient();
   const [archive, setArchive] = useState(false);
+  const [params, setParams] = useSearchParams();
+  const tab = params.get("tab") === "git" ? "git" : "policy";
   const project = useQuery({
     queryKey: ["project", id],
     queryFn: () => api.project(id),
@@ -61,28 +69,56 @@ export function ProjectDetailPage() {
       {p.archived_at ? (
         <p className="notice">등록 해제된 프로젝트입니다.</p>
       ) : (
-        <div className="detail-grid">
-          <section className="panel panel-body">
-            <h2>실행 정책</h2>
-            <p className="subtle">
-              현재 버전을 확인한 뒤 변경 사항을 저장합니다.
-            </p>
-            {save.error && <ErrorNotice error={save.error} />}
-            <ProjectForm
-              key={p.version}
-              project={p}
-              pending={save.isPending}
-              onSubmit={({ name, default_base_branch, policy }) =>
-                save.mutate({ name, default_base_branch, policy })
-              }
-            />
-            {save.isSuccess && (
-              <p role="status" className="text-green">
-                변경 사항을 저장했습니다.
+        <Tabs.Root
+          value={tab}
+          onValueChange={(value) =>
+            setParams(value === "git" ? { tab: "git" } : {})
+          }
+          className="project-settings-tabs"
+        >
+          <Tabs.List className="tabs-list" aria-label="프로젝트 설정 분류">
+            <Tabs.Trigger className="tab" value="policy">
+              기본 정보·실행 정책
+            </Tabs.Trigger>
+            <Tabs.Trigger className="tab" value="git">
+              Git 계정·인증
+            </Tabs.Trigger>
+          </Tabs.List>
+          <Tabs.Content
+            value="policy"
+            forceMount
+            hidden={tab !== "policy"}
+            className="tab-content"
+          >
+            <section className="panel panel-body">
+              <h2>실행 정책</h2>
+              <p className="subtle">
+                현재 버전을 확인한 뒤 변경 사항을 저장합니다.
               </p>
-            )}
-          </section>
-          <ProjectGitSettings pid={p.id} />
+              {save.error && <ErrorNotice error={save.error} />}
+              <ProjectForm
+                key={p.version}
+                project={p}
+                pending={save.isPending}
+                onSubmit={({ name, default_base_branch, policy }) =>
+                  save.mutate({ name, default_base_branch, policy })
+                }
+              />
+              {save.isSuccess && (
+                <p role="status" className="text-green">
+                  변경 사항을 저장했습니다.
+                </p>
+              )}
+            </section>
+          </Tabs.Content>
+          <Tabs.Content
+            value="git"
+            forceMount
+            hidden={tab !== "git"}
+            className="tab-content"
+          >
+            <ProjectGitSettings pid={p.id} />
+          </Tabs.Content>
           <aside className="panel panel-body side-panel">
             <h2>프로젝트 등록 해제</h2>
             <p className="subtle">
@@ -93,7 +129,7 @@ export function ProjectDetailPage() {
               등록 해제
             </Button>
           </aside>
-        </div>
+        </Tabs.Root>
       )}
       <Modal
         open={archive}

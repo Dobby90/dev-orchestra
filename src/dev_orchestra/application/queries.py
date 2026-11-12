@@ -42,8 +42,21 @@ class RunQueryService:
         values.update(delivery_status(run))
         values["current_role"] = run.get("next_role") if run.get("next_role") != "done" else None
         with self.store.connection() as db:
+            row = db.execute("SELECT * FROM runs WHERE id=?", (run_id,)).fetchone()
+            values["project_name"] = self._project_name(db, row)
             values["completed_at"] = self._completed_at(db, run_id, run["state"])
         return RunSummary.model_validate(values)
+
+    @staticmethod
+    def _project_name(db, row):
+        # Schema 2 history has no project relation. Use the DB relation rather
+        # than untrusted run data, and retain names for archived projects.
+        if "project_id" not in row.keys() or not row["project_id"]:
+            return None
+        project = db.execute(
+            "SELECT name FROM projects WHERE id=?", (row["project_id"],)
+        ).fetchone()
+        return project["name"] if project else None
 
     @staticmethod
     def _completed_at(db, run_id, state):
@@ -78,6 +91,7 @@ class RunQueryService:
                 {k: v for k, v in data.items() if k in RunSummary.model_fields}
                 | delivery_status(data)
             ).model_dump(mode="json")
+            value["project_name"] = self._project_name(db, row)
             value["event_cursor"] = db.execute(
                 "SELECT coalesce((SELECT seq FROM sqlite_sequence WHERE name='events'),0)"
             ).fetchone()[0]

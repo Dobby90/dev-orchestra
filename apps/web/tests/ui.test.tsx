@@ -1,3 +1,6 @@
+import { ProjectDetailPage } from "../src/pages/ProjectDetailPage";
+import { ProjectsPage } from "../src/pages/ProjectsPage";
+import { useState } from "react";
 import {
   act,
   fireEvent,
@@ -11,6 +14,8 @@ import { MemoryRouter } from "react-router-dom";
 import { describe, expect, it, vi } from "vitest";
 import { App, createQueryClient } from "../src/App";
 import { LoginPage } from "../src/pages/LoginPage";
+import { RunDraftProvider } from "../src/hooks/runDraft";
+import { DashboardPage } from "../src/pages/DashboardPage";
 import { NewRunPage } from "../src/pages/NewRunPage";
 import { RunDetailPage } from "../src/pages/RunDetailPage";
 import { Routes, Route } from "react-router-dom";
@@ -134,6 +139,21 @@ it("재진입 시 정리 실패를 표시하고 Push·정리 재시도·상태 �
     branch: "feature/run",
     approved_sha: "a".repeat(40),
     result: null,
+  });
+  vi.spyOn(api, "gitSettings").mockResolvedValue({
+    remote: "origin",
+    remote_url: "https://example.invalid/repo.git",
+    account: "",
+    token_registered: false,
+    version: "v1",
+    remotes: [],
+    test: {
+      status: "success",
+      message: "조회 완료",
+      url: "https://example.invalid/repo.git",
+      checked_at: "2026-11-12",
+      push_permission: "unknown",
+    },
   });
   const request = vi.spyOn(api, "pushBranch");
   wrap(
@@ -444,6 +464,7 @@ describe("화면·위험 명령", () => {
       spec_sha256: "hash",
     });
     wrap(<NewRunPage />, "/runs/new?project=prj-1");
+    await userEvent.click(screen.getByText("브랜치·추가 지시사항 (선택)"));
     expect(
       await screen.findByText("custom/tasks/add-task-search"),
     ).toBeVisible();
@@ -467,6 +488,7 @@ describe("화면·위험 명령", () => {
     expect(screen.getByLabelText("PRD")).toHaveValue("작업 요구사항");
     expect(api.preview).not.toHaveBeenCalled();
     expect(screen.getByLabelText("테스트 범위")).toHaveValue("affected");
+    await userEvent.click(screen.getByText("모델·자동 수정 설정 (선택)"));
     await userEvent.click(
       screen.getByRole("button", { name: "이 작업만 변경" }),
     );
@@ -549,10 +571,10 @@ it("작업 목록에 요청일시와 완료일시 및 미기록 표시를 제공
   expect(screen.getByRole("columnheader", { name: "완료일시" })).toBeVisible();
   expect(
     document.querySelector(`time[datetime="${created_at}"]`),
-  ).toHaveTextContent(new Date(created_at).toLocaleString("ko-KR"));
+  ).toHaveAttribute("title", new Date(created_at).toLocaleString("ko-KR"));
   expect(
     document.querySelector(`time[datetime="${completed_at}"]`),
-  ).toHaveTextContent(new Date(completed_at).toLocaleString("ko-KR"));
+  ).toHaveAttribute("title", new Date(completed_at).toLocaleString("ko-KR"));
   expect(screen.getByRole("row", { name: /pending/ })).toHaveTextContent("—");
 });
 
@@ -650,4 +672,351 @@ it("새 작업의 많은 검증 명령을 요약하고 펼쳐서 확인한다", 
   ).toHaveAttribute("tabindex", "0");
   await userEvent.click(summary);
   expect(screen.getByText("tool check-29")).not.toBeVisible();
+});
+
+it("초안을 유지한 채 검증 설정에서 돌아오고 로그아웃 경계에서 폐기한다", async () => {
+  vi.spyOn(api, "projects").mockResolvedValue({
+    items: [p],
+    has_more: false,
+    next_cursor: null,
+  });
+  vi.spyOn(api, "project").mockResolvedValue(p);
+  vi.spyOn(api, "branches").mockResolvedValue({ items: ["main"] });
+  function Fixture() {
+    const [visible, setVisible] = useState(true);
+    return (
+      <>
+        <button onClick={() => setVisible(!visible)}>화면 이동</button>
+        {visible && <NewRunPage />}
+      </>
+    );
+  }
+  const view = wrap(
+    <RunDraftProvider>
+      <Fixture />
+    </RunDraftProvider>,
+    "/runs/new?project=prj-1",
+  );
+  await userEvent.type(screen.getByLabelText("작업명"), "보존할 작업");
+  await userEvent.type(screen.getByLabelText("PRD"), "보존할 요구사항");
+  await userEvent.click(screen.getByText("화면 이동"));
+  await userEvent.click(screen.getByText("화면 이동"));
+  expect(screen.getByLabelText("작업명")).toHaveValue("보존할 작업");
+  expect(screen.getByLabelText("PRD")).toHaveValue("보존할 요구사항");
+  view.unmount();
+  wrap(
+    <RunDraftProvider>
+      <NewRunPage />
+    </RunDraftProvider>,
+  );
+  expect(screen.getByLabelText("PRD")).toHaveValue("");
+});
+it("프로젝트가 없으면 등록 경로와 실행 불가 이유를 안내한다", async () => {
+  vi.spyOn(api, "projects").mockResolvedValue({
+    items: [],
+    has_more: false,
+    next_cursor: null,
+  });
+  wrap(<NewRunPage />);
+  expect(
+    await screen.findByText("먼저 프로젝트를 등록해 주세요"),
+  ).toBeVisible();
+  expect(
+    screen.getByRole("link", { name: "프로젝트 등록하러 가기" }),
+  ).toHaveAttribute("href", "/projects");
+  expect(screen.getByRole("button", { name: "실행 전 확인" })).toBeDisabled();
+});
+it("승인 대기 결과를 인계 정보보다 먼저 표시하고 테스트 탭을 기본 선택한다", async () => {
+  setupDetail();
+  wrap(
+    <Routes>
+      <Route path="/runs/:id" element={<RunDetailPage />} />
+    </Routes>,
+    "/runs/r1",
+  );
+  const tab = await screen.findByRole("tab", { name: "테스트" });
+  expect(tab).toHaveAttribute("aria-selected", "true");
+  expect(
+    document
+      .querySelector(".results-panel")!
+      .compareDocumentPosition(document.querySelector(".run-execution")!) &
+      Node.DOCUMENT_POSITION_FOLLOWING,
+  ).toBeTruthy();
+});
+it("승인 요약 카드의 묶음 필터가 두 상태의 다음 페이지까지 조회한다", async () => {
+  vi.spyOn(api, "dashboard").mockResolvedValue({
+    project_count: 1,
+    counts_by_state: {},
+  } as Schema["DashboardView"]);
+  const get = vi.spyOn(api, "runs").mockImplementation(async (params) => ({
+    items: [
+      {
+        ...detail,
+        id: params.get("state")! + (params.get("cursor") ?? ""),
+        name: params.get("state")! + (params.get("cursor") ?? ""),
+      },
+    ],
+    has_more: !params.get("cursor"),
+    next_cursor: params.get("cursor") ? null : "next",
+  }));
+  wrap(<DashboardPage />, "/?state=approvals");
+  expect(
+    await screen.findByRole("link", {
+      name: "waiting_plan_approvalnext",
+    }),
+  ).toBeVisible();
+  expect(get).toHaveBeenCalledTimes(4);
+  expect(screen.getByRole("link", { name: /등록 프로젝트/ })).toHaveAttribute(
+    "href",
+    "/projects",
+  );
+});
+
+it("프로젝트 설정 탭을 이동해도 편집 중인 정책을 유지한다", async () => {
+  vi.spyOn(api, "project").mockResolvedValue(p);
+  vi.spyOn(api, "gitSettings").mockResolvedValue({
+    remote: "",
+    remote_url: null,
+    account: "",
+    token_registered: false,
+    version: "1",
+    remotes: [],
+    test: null,
+  });
+  wrap(
+    <Routes>
+      <Route path="/projects/:id" element={<ProjectDetailPage />} />
+    </Routes>,
+    "/projects/prj-1",
+  );
+  const input = await screen.findByLabelText("프로젝트 이름");
+  await userEvent.clear(input);
+  await userEvent.type(input, "수정 중 이름");
+  await userEvent.click(screen.getByRole("tab", { name: "Git 계정·인증" }));
+  expect(input).not.toBeVisible();
+  await userEvent.click(
+    screen.getByRole("tab", { name: "기본 정보·실행 정책" }),
+  );
+  expect(input).toBeVisible();
+  expect(input).toHaveValue("수정 중 이름");
+});
+it("등록 대화상자의 하단 버튼으로 연결된 프로젝트 폼을 제출한다", async () => {
+  vi.spyOn(api, "projects").mockResolvedValue({
+    items: [],
+    has_more: false,
+    next_cursor: null,
+  });
+  const create = vi.spyOn(api, "createProject").mockResolvedValue(p);
+  wrap(<ProjectsPage />);
+  await userEvent.click(
+    await screen.findByRole("button", { name: "프로젝트 등록" }),
+  );
+  await userEvent.type(screen.getByLabelText("프로젝트 이름"), "등록 예제");
+  await userEvent.type(
+    screen.getByLabelText("저장소 절대 경로"),
+    "/projects/example",
+  );
+  await userEvent.click(screen.getByText("고급 설정 · 정책 JSON 직접 편집"));
+  fireEvent.change(screen.getByLabelText("테스트·리뷰 정책 (JSON)"), {
+    target: { value: JSON.stringify(initialPolicy) },
+  });
+  await userEvent.click(
+    screen.getAllByRole("button", { name: "프로젝트 등록" }).at(-1)!,
+  );
+  await waitFor(() =>
+    expect(create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        name: "등록 예제",
+        repository_path: "/projects/example",
+      }),
+      expect.anything(),
+    ),
+  );
+});
+
+it("작업명 아래 프로젝트명과 브랜치를 표시하고 미등록 작업을 구분한다", () => {
+  wrap(
+    <RunsTable
+      runs={[
+        {
+          ...detail,
+          id: "project-run",
+          name: "같은 작업명",
+          project_name: "웹 프로젝트",
+          branch: "feature/long-branch",
+        },
+        {
+          ...detail,
+          id: "cli-run",
+          name: "같은 작업명",
+          project_name: null,
+          branch: null,
+        },
+      ]}
+    />,
+  );
+  const project = screen.getByText("웹 프로젝트");
+  expect(project.closest("td")).toHaveTextContent("같은 작업명");
+  expect(project.closest(".run-metadata")).toHaveTextContent(
+    "feature/long-branch",
+  );
+  expect(project).toHaveAttribute("title", "웹 프로젝트");
+  expect(screen.getByText("feature/long-branch")).toHaveAttribute(
+    "title",
+    "feature/long-branch",
+  );
+  expect(screen.getByText("미등록 작업")).toBeVisible();
+  expect(screen.getByText("브랜치 준비 중")).toBeVisible();
+});
+
+it.each([
+  {
+    project_name: "예제 프로젝트",
+    project_id: "prj-1",
+    expected: "예제 프로젝트",
+  },
+  { project_name: null, project_id: null, expected: "미등록 작업" },
+  { project_name: null, project_id: "prj-1", expected: "프로젝트명 확인 불가" },
+])(
+  "작업 상세에 프로젝트 정보를 표시한다: $expected",
+  async ({ expected, ...project }) => {
+    setupDetail();
+    vi.mocked(api.run).mockResolvedValue({ ...detail, ...project });
+    wrap(
+      <Routes>
+        <Route path="/runs/:id" element={<RunDetailPage />} />
+      </Routes>,
+      "/runs/r1",
+    );
+    const name = await screen.findByText(expected);
+    expect(name).toBeVisible();
+    expect(name.closest(".run-identity")).toHaveTextContent("프로젝트:");
+  },
+);
+
+it("새 작업에서 Git 미설정 상태와 설정 링크를 안내해도 작업 입력을 허용한다", async () => {
+  vi.spyOn(api, "projects").mockResolvedValue({
+    items: [p],
+    has_more: false,
+    next_cursor: null,
+  });
+  vi.spyOn(api, "project").mockResolvedValue(p);
+  vi.spyOn(api, "branches").mockResolvedValue({ items: ["main"] });
+  vi.spyOn(api, "gitSettings").mockResolvedValue({
+    remote: "",
+    remote_url: null,
+    account: "",
+    token_registered: false,
+    version: "v1",
+    remotes: [],
+    test: null,
+  });
+  wrap(<NewRunPage />, "/runs/new?project=prj-1");
+  expect(
+    await screen.findByText("프로젝트에서 Push 원격 저장소를 설정하세요."),
+  ).toBeVisible();
+  expect(
+    screen.getByRole("link", { name: "Git 계정·인증 설정" }),
+  ).toHaveAttribute("href", "/projects/prj-1?tab=git");
+  expect(screen.getByLabelText("작업명")).toBeEnabled();
+  expect(screen.queryByRole("button", { name: "작업 브랜치 Push" })).toBeNull();
+});
+
+it("Git 설정 링크로 진입하면 인증 탭을 바로 표시한다", async () => {
+  vi.spyOn(api, "project").mockResolvedValue(p);
+  vi.spyOn(api, "gitSettings").mockResolvedValue({
+    remote: "",
+    remote_url: null,
+    account: "",
+    token_registered: false,
+    version: "v1",
+    remotes: [],
+    test: null,
+  });
+  wrap(
+    <Routes>
+      <Route path="/projects/:id" element={<ProjectDetailPage />} />
+    </Routes>,
+    "/projects/prj-1?tab=git",
+  );
+  expect(
+    await screen.findByRole("heading", { name: "Git 계정 및 인증" }),
+  ).toBeVisible();
+  expect(screen.getByRole("tab", { name: "Git 계정·인증" })).toHaveAttribute(
+    "aria-selected",
+    "true",
+  );
+});
+
+it("새 작업의 프로젝트를 바꿔도 이전 연결 테스트 결과가 새 프로젝트에 섞이지 않는다", async () => {
+  const client = createQueryClient();
+  const second = { ...p, id: "prj-2", name: "다른 프로젝트" };
+  const connection = {
+    remote: "origin",
+    remote_url: "https://example.invalid/first.git",
+    account: "",
+    token_registered: false,
+    version: "v1",
+    remotes: [],
+    test: null,
+  };
+  vi.spyOn(api, "projects").mockResolvedValue({
+    items: [p, second],
+    has_more: false,
+    next_cursor: null,
+  });
+  vi.spyOn(api, "project").mockImplementation(async (id) =>
+    id === p.id ? p : second,
+  );
+  vi.spyOn(api, "branches").mockResolvedValue({ items: ["main"] });
+  vi.spyOn(api, "gitSettings").mockImplementation(async (id) => ({
+    ...connection,
+    remote_url:
+      id === p.id
+        ? connection.remote_url
+        : "https://example.invalid/second.git",
+  }));
+  let resolve!: (value: Schema["GitSettingsView"]) => void;
+  vi.spyOn(api, "testGit").mockImplementation(
+    () =>
+      new Promise((r) => {
+        resolve = r;
+      }),
+  );
+  wrap(<NewRunPage />, "/runs/new", client);
+  await screen.findByRole("option", { name: "다른 프로젝트" });
+  fireEvent.change(screen.getByLabelText("프로젝트"), {
+    target: { value: p.id },
+  });
+  await waitFor(() =>
+    expect(
+      screen.getByRole("button", { name: "Git 연결 테스트" }),
+    ).toBeEnabled(),
+  );
+  fireEvent.click(screen.getByRole("button", { name: "Git 연결 테스트" }));
+  await waitFor(() => expect(api.testGit).toHaveBeenCalled());
+  fireEvent.change(screen.getByLabelText("프로젝트"), {
+    target: { value: second.id },
+  });
+  await waitFor(() => expect(api.gitSettings).toHaveBeenCalledWith(second.id));
+  await act(async () =>
+    resolve({
+      ...connection,
+      test: {
+        status: "success",
+        message: "조회 완료",
+        url: connection.remote_url,
+        checked_at: "2026-11-12",
+        push_permission: "unknown",
+      },
+    }),
+  );
+  expect(
+    client.getQueryData<Schema["GitSettingsView"]>(["project-git", second.id])
+      ?.remote_url,
+  ).toBe("https://example.invalid/second.git");
+  expect(
+    client.getQueryData<Schema["GitSettingsView"]>(["project-git", p.id])?.test
+      ?.status,
+  ).toBe("success");
 });

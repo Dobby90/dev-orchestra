@@ -46,7 +46,7 @@ function mount(path = "/runs/r1") {
 afterEach(() => vi.restoreAllMocks());
 
 describe("공통 작업 알림", () => {
-  it("기존 이력과 재조회는 alert 없이 표시하고 상세의 새로운 상태만 한 번 알린다", async () => {
+  it("기존 이력은 조용히 유지하고 새 상태를 비차단 알림으로 한 번 표시한다", async () => {
     const get = vi.spyOn(api, "notifications").mockResolvedValue(initial);
     const alert = vi.spyOn(window, "alert").mockImplementation(() => {});
     const client = mount();
@@ -69,8 +69,10 @@ describe("공통 작업 알림", () => {
     };
     get.mockResolvedValue(next);
     await act(() => client.refetchQueries({ queryKey: ["notifications"] }));
-    await waitFor(() => expect(alert).toHaveBeenCalledTimes(1));
-    expect(alert).toHaveBeenCalledWith(expect.stringContaining("일시중지"));
+    await waitFor(() =>
+      expect(screen.getByRole("status")).toHaveTextContent("일시중지"),
+    );
+    fireEvent.click(screen.getByRole("button", { name: "상태 알림 닫기" }));
     await act(() => client.refetchQueries({ queryKey: ["notifications"] }));
     fireEvent.click(screen.getByText("프로젝트로 이동"));
     get.mockResolvedValue({
@@ -80,7 +82,8 @@ describe("공통 작업 알림", () => {
     });
     await act(() => client.refetchQueries({ queryKey: ["notifications"] }));
     fireEvent.click(screen.getByText("상세로 이동"));
-    expect(alert).toHaveBeenCalledTimes(1);
+    expect(alert).not.toHaveBeenCalled();
+    expect(screen.queryByRole("status")).not.toBeInTheDocument();
     client.clear();
   });
 

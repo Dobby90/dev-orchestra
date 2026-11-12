@@ -90,11 +90,21 @@ export function ProjectsPage() {
       <Modal
         open={open}
         onOpenChange={setOpen}
+        footer={
+          <Button
+            type="submit"
+            form="project-registration"
+            disabled={create.isPending}
+          >
+            {create.isPending ? "등록 중…" : "프로젝트 등록"}
+          </Button>
+        }
         title="프로젝트 등록"
         description="허용된 경로의 Git 저장소와 테스트 정책을 입력하세요."
       >
         {create.error && <ErrorNotice error={create.error} />}
         <ProjectForm
+          formId="project-registration"
           pending={create.isPending}
           onSubmit={(body) => create.mutate(body)}
         />
