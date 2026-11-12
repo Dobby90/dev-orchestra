@@ -166,7 +166,7 @@ export function ProjectForm({
       setInspection(result);
       if (parsed && !Object.keys(parsed.tests.commands ?? {}).length)
         setPolicySource(`${path}\0${result.default_branch}`);
-      setBase(result.default_branch);
+      if (!project) setBase(result.default_branch);
       setConfirmed(false);
       if (!name) setName(result.repository_path.split("/").pop() ?? "");
     } catch (e) {
@@ -198,6 +198,12 @@ export function ProjectForm({
       }
       setError("");
       onStepChange?.(2);
+      return;
+    }
+    if (inspection && !inspection.branches.includes(base)) {
+      fail(
+        "현재 기준 브랜치가 저장소에 없습니다. 조회된 브랜치를 선택해 주세요.",
+      );
       return;
     }
     if (stale && !confirmed) {
@@ -276,14 +282,14 @@ export function ProjectForm({
         {!project && (
           <DirectoryPicker initialPath={path} onSelect={changePath} />
         )}
-        {step !== undefined && (
+        {(step !== undefined || project) && (
           <Button
             type="button"
             variant="secondary"
             disabled={!path || checking}
             onClick={inspect}
           >
-            {checking ? "확인 중…" : "저장소 확인"}
+            {checking ? "확인 중…" : project ? "브랜치 조회" : "저장소 확인"}
           </Button>
         )}
         <label>
@@ -298,6 +304,9 @@ export function ProjectForm({
                 setConfirmed(false);
               }}
             >
+              {!inspection.branches.includes(base) && (
+                <option value={base}>{base} · 저장소에 없음</option>
+              )}
               {inspection.branches.map((branch) => (
                 <option key={branch}>{branch}</option>
               ))}
@@ -314,7 +323,13 @@ export function ProjectForm({
               }}
             />
           )}
-          {inspection && <span className="help">Git 저장소 확인 완료</span>}
+          {inspection && (
+            <span className="help">
+              {inspection.branches.includes(base)
+                ? "Git 저장소 확인 완료"
+                : "현재 기준 브랜치가 저장소에 없습니다. 다른 브랜치를 선택하세요."}
+            </span>
+          )}
         </label>
       </fieldset>
       <fieldset
