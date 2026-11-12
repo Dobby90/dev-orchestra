@@ -140,6 +140,21 @@ it("재진입 시 정리 실패를 표시하고 Push·정리 재시도·상태 �
     approved_sha: "a".repeat(40),
     result: null,
   });
+  vi.spyOn(api, "gitSettings").mockResolvedValue({
+    remote: "origin",
+    remote_url: "https://example.invalid/repo.git",
+    account: "",
+    token_registered: false,
+    version: "v1",
+    remotes: [],
+    test: {
+      status: "success",
+      message: "조회 완료",
+      url: "https://example.invalid/repo.git",
+      checked_at: "2026-11-12",
+      push_permission: "unknown",
+    },
+  });
   const request = vi.spyOn(api, "pushBranch");
   wrap(
     <Routes>
@@ -878,3 +893,130 @@ it.each([
     expect(name.closest(".run-identity")).toHaveTextContent("프로젝트:");
   },
 );
+
+it("새 작업에서 Git 미설정 상태와 설정 링크를 안내해도 작업 입력을 허용한다", async () => {
+  vi.spyOn(api, "projects").mockResolvedValue({
+    items: [p],
+    has_more: false,
+    next_cursor: null,
+  });
+  vi.spyOn(api, "project").mockResolvedValue(p);
+  vi.spyOn(api, "branches").mockResolvedValue({ items: ["main"] });
+  vi.spyOn(api, "gitSettings").mockResolvedValue({
+    remote: "",
+    remote_url: null,
+    account: "",
+    token_registered: false,
+    version: "v1",
+    remotes: [],
+    test: null,
+  });
+  wrap(<NewRunPage />, "/runs/new?project=prj-1");
+  expect(
+    await screen.findByText("프로젝트에서 Push 원격 저장소를 설정하세요."),
+  ).toBeVisible();
+  expect(
+    screen.getByRole("link", { name: "Git 계정·인증 설정" }),
+  ).toHaveAttribute("href", "/projects/prj-1?tab=git");
+  expect(screen.getByLabelText("작업명")).toBeEnabled();
+  expect(screen.queryByRole("button", { name: "작업 브랜치 Push" })).toBeNull();
+});
+
+it("Git 설정 링크로 진입하면 인증 탭을 바로 표시한다", async () => {
+  vi.spyOn(api, "project").mockResolvedValue(p);
+  vi.spyOn(api, "gitSettings").mockResolvedValue({
+    remote: "",
+    remote_url: null,
+    account: "",
+    token_registered: false,
+    version: "v1",
+    remotes: [],
+    test: null,
+  });
+  wrap(
+    <Routes>
+      <Route path="/projects/:id" element={<ProjectDetailPage />} />
+    </Routes>,
+    "/projects/prj-1?tab=git",
+  );
+  expect(
+    await screen.findByRole("heading", { name: "Git 계정 및 인증" }),
+  ).toBeVisible();
+  expect(screen.getByRole("tab", { name: "Git 계정·인증" })).toHaveAttribute(
+    "aria-selected",
+    "true",
+  );
+});
+
+it("새 작업의 프로젝트를 바꿔도 이전 연결 테스트 결과가 새 프로젝트에 섞이지 않는다", async () => {
+  const client = createQueryClient();
+  const second = { ...p, id: "prj-2", name: "다른 프로젝트" };
+  const connection = {
+    remote: "origin",
+    remote_url: "https://example.invalid/first.git",
+    account: "",
+    token_registered: false,
+    version: "v1",
+    remotes: [],
+    test: null,
+  };
+  vi.spyOn(api, "projects").mockResolvedValue({
+    items: [p, second],
+    has_more: false,
+    next_cursor: null,
+  });
+  vi.spyOn(api, "project").mockImplementation(async (id) =>
+    id === p.id ? p : second,
+  );
+  vi.spyOn(api, "branches").mockResolvedValue({ items: ["main"] });
+  vi.spyOn(api, "gitSettings").mockImplementation(async (id) => ({
+    ...connection,
+    remote_url:
+      id === p.id
+        ? connection.remote_url
+        : "https://example.invalid/second.git",
+  }));
+  let resolve!: (value: Schema["GitSettingsView"]) => void;
+  vi.spyOn(api, "testGit").mockImplementation(
+    () =>
+      new Promise((r) => {
+        resolve = r;
+      }),
+  );
+  wrap(<NewRunPage />, "/runs/new", client);
+  await screen.findByRole("option", { name: "다른 프로젝트" });
+  fireEvent.change(screen.getByLabelText("프로젝트"), {
+    target: { value: p.id },
+  });
+  await waitFor(() =>
+    expect(
+      screen.getByRole("button", { name: "Git 연결 테스트" }),
+    ).toBeEnabled(),
+  );
+  fireEvent.click(screen.getByRole("button", { name: "Git 연결 테스트" }));
+  await waitFor(() => expect(api.testGit).toHaveBeenCalled());
+  fireEvent.change(screen.getByLabelText("프로젝트"), {
+    target: { value: second.id },
+  });
+  await waitFor(() => expect(api.gitSettings).toHaveBeenCalledWith(second.id));
+  await act(async () =>
+    resolve({
+      ...connection,
+      test: {
+        status: "success",
+        message: "조회 완료",
+        url: connection.remote_url,
+        checked_at: "2026-11-12",
+        push_permission: "unknown",
+      },
+    }),
+  );
+  expect(
+    client.getQueryData<Schema["GitSettingsView"]>(["project-git", second.id])
+      ?.remote_url,
+  ).toBe("https://example.invalid/second.git");
+  expect(
+    client.getQueryData<Schema["GitSettingsView"]>(["project-git", p.id])?.test
+      ?.status,
+  ).toBe("success");
+});

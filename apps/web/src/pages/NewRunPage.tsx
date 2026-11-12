@@ -17,6 +17,10 @@ import { Modal } from "../components/ui/dialog";
 import { RunAgentSettings } from "../components/RunAgentSettings";
 import { useDraftField, useClearDraft } from "../hooks/runDraft";
 import { PrdGuide } from "../components/PrdGuide";
+import {
+  ProjectGitConnection,
+  useProjectGitConnection,
+} from "../components/ProjectGitConnection";
 export function NewRunPage() {
   const [params] = useSearchParams(),
     navigate = useNavigate();
@@ -60,6 +64,7 @@ export function NewRunPage() {
     queryFn: () => api.branches(project),
     enabled: !!project,
   });
+  const gitConnection = useProjectGitConnection(project);
   const upload = useMutation({ mutationFn: api.upload });
   const preview = useMutation({
     mutationFn: async (proposal: Schema["Proposal"]) => ({
@@ -222,6 +227,7 @@ export function NewRunPage() {
                   retry={() => projects.refetch()}
                 />
               )}
+              <ProjectGitConnection connection={gitConnection} />
               <div className="segmented" aria-label="PRD 입력 방식">
                 <Button
                   type="button"

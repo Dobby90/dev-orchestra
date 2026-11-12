@@ -1,6 +1,11 @@
 import * as Tabs from "@radix-ui/react-tabs";
 import { useState } from "react";
-import { Link, useNavigate, useParams } from "react-router-dom";
+import {
+  Link,
+  useNavigate,
+  useParams,
+  useSearchParams,
+} from "react-router-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { ArrowLeft, Archive, Plus } from "lucide-react";
 import { api } from "../api/resources";
@@ -14,7 +19,8 @@ export function ProjectDetailPage() {
   const navigate = useNavigate(),
     client = useQueryClient();
   const [archive, setArchive] = useState(false);
-  const [tab, setTab] = useState("policy");
+  const [params, setParams] = useSearchParams();
+  const tab = params.get("tab") === "git" ? "git" : "policy";
   const project = useQuery({
     queryKey: ["project", id],
     queryFn: () => api.project(id),
@@ -65,7 +71,9 @@ export function ProjectDetailPage() {
       ) : (
         <Tabs.Root
           value={tab}
-          onValueChange={setTab}
+          onValueChange={(value) =>
+            setParams(value === "git" ? { tab: "git" } : {})
+          }
           className="project-settings-tabs"
         >
           <Tabs.List className="tabs-list" aria-label="프로젝트 설정 분류">
