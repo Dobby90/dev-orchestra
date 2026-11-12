@@ -68,7 +68,7 @@ export function ProjectsPage() {
       ) : (
         <section className="panel">
           <Empty title="첫 프로젝트를 등록해 보세요">
-            API에서 허용한 경로 아래의 Git 저장소를 등록할 수 있습니다.
+            로컬 Git 저장소를 직접 입력하거나 폴더를 선택해 등록할 수 있습니다.
           </Empty>
         </section>
       )}
@@ -100,7 +100,7 @@ export function ProjectsPage() {
           </Button>
         }
         title="프로젝트 등록"
-        description="허용된 경로의 Git 저장소와 테스트 정책을 입력하세요."
+        description="로컬 Git 저장소와 테스트 정책을 입력하세요."
       >
         {create.error && <ErrorNotice error={create.error} />}
         <ProjectForm

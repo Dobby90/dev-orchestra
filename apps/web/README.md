@@ -15,7 +15,7 @@ UV_CACHE_DIR="$PWD/.uv-cache" .tools/uv sync --frozen --extra web
 같은 설정 파일로 각 서비스를 별도 터미널에서 시작합니다.
 
 ```sh
-.venv/bin/devorchestra --config config.yaml api-start --allow-root /Users/me/projects
+.venv/bin/devorchestra --config config.yaml api-start
 .venv/bin/devorchestra --config config.yaml worker start --detach
 npm run dev:web
 ```
@@ -46,7 +46,7 @@ npm run dev:web
 .venv/bin/python scripts/build_web.py
 # 기존 API·Dispatcher·웹 서비스·Run Worker를 종료한 상태에서 실행
 .venv/bin/devorchestra --config config.yaml database-upgrade --workspace
-.venv/bin/devorchestra --config config.yaml web start --detach --allow-root /Users/me/projects --port 8000
+.venv/bin/devorchestra --config config.yaml web start --detach --port 8000
 .venv/bin/devorchestra --config config.yaml web-session
 .venv/bin/devorchestra --config config.yaml web status
 .venv/bin/devorchestra --config config.yaml web stop

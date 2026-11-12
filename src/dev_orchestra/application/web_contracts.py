@@ -81,6 +81,22 @@ class ValidationDetection(BaseModel):
     warnings: list[str]
 
 
+class DirectoryInput(Input):
+    path: str | None = Field(default=None, min_length=1, max_length=4096, pattern=r"^[^\x00]*$")
+
+
+class DirectoryEntry(BaseModel):
+    name: str
+    path: str
+
+
+class DirectoryView(BaseModel):
+    path: str
+    parent: str | None
+    items: list[DirectoryEntry]
+    truncated: bool
+
+
 class ProjectCreate(Input):
     name: str = Field(min_length=1, max_length=100)
     repository_path: str = Field(min_length=1, max_length=4096)

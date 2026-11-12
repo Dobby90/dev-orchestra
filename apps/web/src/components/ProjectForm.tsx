@@ -2,6 +2,7 @@ import { useState, type FormEvent } from "react";
 import type { Project, Schema } from "../api/types";
 import { Button } from "./ui/button";
 import { Modal } from "./ui/dialog";
+import { DirectoryPicker } from "./DirectoryPicker";
 import { ValidationEditor } from "./ValidationEditor";
 export const initialPolicy = {
   tests: {
@@ -158,6 +159,7 @@ export function ProjectForm({
           onChange={(e) => setPath(e.target.value)}
         />
       </label>
+      {!project && <DirectoryPicker initialPath={path} onSelect={setPath} />}
       <label>
         기본 기준 브랜치
         <input

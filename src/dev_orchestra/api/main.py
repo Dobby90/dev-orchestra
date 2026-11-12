@@ -38,6 +38,8 @@ from dev_orchestra.application.web_contracts import (
     DashboardView,
     DeferInput,
     DiffView,
+    DirectoryInput,
+    DirectoryView,
     DispositionInput,
     EventPage,
     GitSettingsInput,
@@ -98,15 +100,8 @@ def create_app(config=None, allowed_roots=None, port=8000, static_directory=None
     with runs.store.connection() as db:
         if db.execute("SELECT version FROM schema_version").fetchone()[0] not in {5, 6}:
             raise PipelineError("run devorchestra database-upgrade before starting API")
-    roots = (
-        allowed_roots
-        if allowed_roots is not None
-        else [
-            Path(p) for p in os.environ.get("DEVORCHESTRA_ALLOWED_ROOTS", "").split(os.pathsep) if p
-        ]
-    )
     key = runtime_key(runs.store.path.with_suffix(".web-key"))
-    backend = BackendService(runs, roots, key)
+    backend = BackendService(runs, [], key)
     delivery = GitDeliveryService(backend)
     security = Security(runs.store, key)
     agent_settings = AgentSettingsService(config)
@@ -324,6 +319,10 @@ def create_app(config=None, allowed_roots=None, port=8000, static_directory=None
     @app.post("/api/project-validation/detect", response_model=ValidationDetection)
     def detect_validation(body: ValidationDetectInput):
         return backend.projects.detect_validation(Path(body.repository_path), body.base_branch)
+
+    @app.post("/api/project-directories", response_model=DirectoryView)
+    def project_directories(body: DirectoryInput):
+        return backend.projects.directories(body.path)
 
     @app.post("/api/projects", status_code=201, response_model=ProjectView)
     def project_create(body: ProjectCreate):

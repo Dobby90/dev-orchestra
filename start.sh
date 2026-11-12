@@ -4,19 +4,13 @@ set -euo pipefail
 
 caller_dir="$PWD"
 repo_dir="$(CDPATH= cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
-# 기본 프로젝트 허용 경로 설정입니다. --allow-root를 지정하면 해당 값으로 대체합니다.
-# workspace/tools/dev-orchestra 배치에서 workspace 디렉터리를 가리킵니다.
-default_allowed_roots=("$(dirname -- "$(dirname -- "$repo_dir")")")
 config_file=""
 port="8000"
 rebuild=0
-allowed_roots=()
 
 usage() {
   cat <<'HELP'
 사용법: ./start.sh [옵션]
-  --allow-root 경로  등록할 프로젝트의 상위 경로 (여러 번 지정 가능)
-                    기본값: start.sh의 default_allowed_roots (저장소의 두 단계 상위)
   --port 포트        기본값: 8000 (1024~65535)
   --config 파일      모든 명령에 동일하게 적용할 YAML 설정 파일
   --rebuild          GUI 의존성도 재설치 (서비스 종료 후 사용)
@@ -36,10 +30,7 @@ while [ "$#" -gt 0 ]; do
       [ "$#" -ge 2 ] && [ -n "$2" ] || fail "$1 뒤에 값을 지정하세요."
       case "$1" in
         --allow-root)
-          case "$2" in
-            /*) allowed_roots+=("$2") ;;
-            *) allowed_roots+=("$caller_dir/$2") ;;
-          esac ;;
+          printf '안내: --allow-root는 더 이상 사용하지 않습니다. 프로젝트별로 저장소를 등록하세요.\n' >&2 ;;
         --config)
           case "$2" in
             /*) config_file="$2" ;;
@@ -58,12 +49,6 @@ done
 port=$((10#$port))
 [ "$port" -ge 1024 ] && [ "$port" -le 65535 ] || fail "포트는 1024~65535여야 합니다."
 [ -z "$config_file" ] || [ -f "$config_file" ] || fail "설정 파일을 찾을 수 없습니다: $config_file"
-if [ "${#allowed_roots[@]}" -eq 0 ]; then
-  allowed_roots=("${default_allowed_roots[@]}")
-fi
-for root in "${allowed_roots[@]}"; do
-  [ -d "$root" ] || fail "프로젝트 허용 경로가 없습니다: $root"
-done
 
 cd "$repo_dir"
 python="$repo_dir/.venv/bin/python"
@@ -94,7 +79,7 @@ status_json="$(run_cli web status)"
 existing_port="$(printf '%s' "$status_json" | "$python" -c 'import json,sys; s=json.load(sys.stdin); print(s["port"] if s["alive"] else "")')"
 if [ -n "$existing_port" ]; then
   [ "$rebuild" -eq 0 ] || fail '이미 실행 중입니다. stop.sh로 종료한 뒤 --rebuild를 사용하세요.'
-  printf '이미 실행 중인 서비스를 사용합니다. 포트·허용 경로 변경은 종료 후 기동해야 반영됩니다.\n'
+  printf '이미 실행 중인 서비스를 사용합니다. 포트 변경은 종료 후 기동해야 반영됩니다.\n'
   printf 'GUI 소스 변경을 반영하려면 stop.sh로 종료한 뒤 start.sh로 다시 기동하세요.\n'
   show_access "$existing_port"
   exit 0
@@ -128,9 +113,6 @@ if [ "$needs_upgrade" = "1" ]; then
 fi
 
 start_args=(web start --detach --port "$port")
-for root in "${allowed_roots[@]}"; do
-  start_args+=(--allow-root "$root")
-done
 run_cli "${start_args[@]}" >/dev/null
 printf 'DevOrchestra를 기동했습니다.\n'
 show_access "$port"

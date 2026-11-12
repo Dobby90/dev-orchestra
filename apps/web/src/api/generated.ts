@@ -74,6 +74,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/project-directories": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Project Directories */
+        post: operations["project_directories_api_project_directories_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/projects": {
         parameters: {
             query?: never;
@@ -1156,6 +1173,29 @@ export interface components {
             candidate_sha: string;
             /** Text */
             text: string;
+        };
+        /** DirectoryEntry */
+        DirectoryEntry: {
+            /** Name */
+            name: string;
+            /** Path */
+            path: string;
+        };
+        /** DirectoryInput */
+        DirectoryInput: {
+            /** Path */
+            path?: string | null;
+        };
+        /** DirectoryView */
+        DirectoryView: {
+            /** Path */
+            path: string;
+            /** Parent */
+            parent: string | null;
+            /** Items */
+            items: components["schemas"]["DirectoryEntry"][];
+            /** Truncated */
+            truncated: boolean;
         };
         /** DispositionInput */
         DispositionInput: {
@@ -2569,6 +2609,39 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ValidationDetection"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    project_directories_api_project_directories_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["DirectoryInput"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DirectoryView"];
                 };
             };
             /** @description Validation Error */

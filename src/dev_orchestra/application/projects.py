@@ -1,5 +1,6 @@
 """Project validation; persistence is added with the database expansion phase."""
 
+import os
 from pathlib import Path
 
 from dev_orchestra.application.contracts import RepositoryInfo
@@ -9,16 +10,42 @@ from dev_orchestra.infrastructure.git import Git
 
 
 class ProjectService:
-    def __init__(self, allowed_roots: list[Path]):
-        self.allowed_roots = tuple(p.expanduser().resolve(strict=True) for p in allowed_roots)
+    def __init__(self, allowed_roots=None):
+        # Retained for callers from older versions; registration authorizes each repository.
+        pass
 
-    def validate_repository(self, path: Path, base_branch: str) -> RepositoryInfo:
+    @staticmethod
+    def directory(path: Path) -> Path:
         requested = path.expanduser().absolute()
         if any(p.is_symlink() for p in [requested, *requested.parents]):
-            raise ApplicationError("UNSAFE_PATH", "symlink repository paths are not allowed")
+            raise ApplicationError("UNSAFE_PATH", "symlink paths are not allowed")
         canonical = requested.resolve(strict=True)
-        if not any(canonical.is_relative_to(p) for p in self.allowed_roots):
-            raise ApplicationError("PATH_NOT_ALLOWED", "repository is outside allowed roots")
+        if not canonical.is_dir():
+            raise ApplicationError("VALIDATION_ERROR", "directory required")
+        return canonical
+
+    def directories(self, path: str | None):
+        root = self.directory(Path(path) if path else Path.home())
+        children = []
+        truncated = False
+        with os.scandir(root) as entries:
+            for entry in entries:
+                if entry.name.startswith(".") or not entry.is_dir(follow_symlinks=False):
+                    continue
+                if len(children) == 200:
+                    truncated = True
+                    break
+                children.append({"name": entry.name, "path": str(root / entry.name)})
+        children.sort(key=lambda child: child["name"].casefold())
+        return {
+            "path": str(root),
+            "parent": str(root.parent) if root.parent != root else None,
+            "items": children,
+            "truncated": truncated,
+        }
+
+    def validate_repository(self, path: Path, base_branch: str) -> RepositoryInfo:
+        canonical = self.directory(path)
         git = Git(canonical)
         top = Path(git.call("rev-parse", "--show-toplevel")).resolve(strict=True)
         if top != canonical:

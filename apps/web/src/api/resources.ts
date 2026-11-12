@@ -79,6 +79,11 @@ export const api = {
       method: "POST",
       body: JSON.stringify(body),
     }),
+  directories: (path?: string) =>
+    request<Schema["DirectoryView"]>("/project-directories", {
+      method: "POST",
+      body: JSON.stringify({ path: path || null }),
+    }),
   projects: (cursor = "") =>
     request<Schema["ProjectPage"]>(`/projects?cursor=${id(cursor)}`),
   project: (pid: string) => request<Project>(`/projects/${id(pid)}`),
