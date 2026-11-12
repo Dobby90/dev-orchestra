@@ -2206,3 +2206,39 @@ dd {
   color: var(--text);
   overflow-wrap: anywhere;
 }
+
+@media (min-width: 821px) {
+  .modal:has(.project-form) {
+    width: min(760px, calc(100vw - 64px));
+  }
+  .project-step {
+    min-width: 0;
+    display: grid;
+    gap: 16px;
+    margin: 0;
+  }
+  .project-step[hidden] {
+    display: none;
+  }
+  .project-step > legend {
+    font-weight: 600;
+    padding: 0 6px;
+  }
+  .project-settings-tabs .project-step {
+    display: contents;
+  }
+  .project-settings-tabs .project-step > legend {
+    display: none;
+  }
+  .project-settings-tabs .project-step > fieldset,
+  .project-settings-tabs .project-step > details,
+  .project-settings-tabs .project-step > p {
+    grid-column: 1 / -1;
+  }
+  .modal-fixed-footer {
+    gap: 12px;
+  }
+  .modal-scroll-body > .notice-error {
+    margin-top: 16px;
+  }
+}

@@ -6,10 +6,12 @@ import { api } from "../api/resources";
 import { Heading, ErrorNotice, Loading, Empty } from "../components/common";
 import { Button } from "../components/ui/button";
 import { Modal } from "../components/ui/dialog";
-import { ProjectForm } from "../components/ProjectForm";
+import { ProjectForm, type ProjectDraft } from "../components/ProjectForm";
 export function ProjectsPage() {
   const [open, setOpen] = useState(false),
     [params, setParams] = useSearchParams();
+  const [draft, setDraft] = useState<ProjectDraft>();
+  const [step, setStep] = useState(1);
   const cursor = params.get("cursor") ?? "";
   const client = useQueryClient();
   const projects = useQuery({
@@ -22,6 +24,8 @@ export function ProjectsPage() {
       client.invalidateQueries({ queryKey: ["projects"] });
       client.invalidateQueries({ queryKey: ["dashboard"] });
       setOpen(false);
+      setStep(1);
+      setDraft(undefined);
     },
   });
   return (
@@ -89,25 +93,46 @@ export function ProjectsPage() {
       </div>
       <Modal
         open={open}
-        onOpenChange={setOpen}
+        onOpenChange={(value) => {
+          if (!create.isPending) setOpen(value);
+        }}
         footer={
-          <Button
-            type="submit"
-            form="project-registration"
-            disabled={create.isPending}
-          >
-            {create.isPending ? "등록 중…" : "프로젝트 등록"}
-          </Button>
+          <>
+            {step === 2 && (
+              <Button
+                variant="secondary"
+                disabled={create.isPending}
+                onClick={() => setStep(1)}
+              >
+                이전
+              </Button>
+            )}
+            <Button
+              type="submit"
+              form="project-registration"
+              disabled={create.isPending}
+            >
+              {create.isPending
+                ? "등록 중…"
+                : step === 1
+                  ? "다음"
+                  : "프로젝트 등록"}
+            </Button>
+          </>
         }
         title="프로젝트 등록"
         description="로컬 Git 저장소와 테스트 정책을 입력하세요."
       >
-        {create.error && <ErrorNotice error={create.error} />}
         <ProjectForm
+          draft={draft}
+          onDraftChange={setDraft}
+          step={step}
+          onStepChange={setStep}
           formId="project-registration"
           pending={create.isPending}
           onSubmit={(body) => create.mutate(body)}
         />
+        {create.error && <ErrorNotice error={create.error} />}
       </Modal>
     </>
   );

@@ -806,6 +806,11 @@ it("등록 대화상자의 하단 버튼으로 연결된 프로젝트 폼을 제
     has_more: false,
     next_cursor: null,
   });
+  vi.spyOn(api, "inspectRepository").mockResolvedValue({
+    repository_path: "/projects/example",
+    branches: ["develop"],
+    default_branch: "develop",
+  });
   const create = vi.spyOn(api, "createProject").mockResolvedValue(p);
   wrap(<ProjectsPage />);
   await userEvent.click(
@@ -816,6 +821,14 @@ it("등록 대화상자의 하단 버튼으로 연결된 프로젝트 폼을 제
     screen.getByLabelText("저장소 절대 경로"),
     "/projects/example",
   );
+  await userEvent.click(screen.getByRole("button", { name: "저장소 확인" }));
+  await screen.findByText("Git 저장소 확인 완료");
+  expect(screen.getByLabelText(/기본 기준 브랜치/)).toHaveValue("develop");
+  await userEvent.click(screen.getByRole("button", { name: "대화상자 닫기" }));
+  await userEvent.click(screen.getByRole("button", { name: "프로젝트 등록" }));
+  expect(screen.getByLabelText("프로젝트 이름")).toHaveValue("등록 예제");
+  expect(screen.getByLabelText(/기본 기준 브랜치/)).toHaveValue("develop");
+  await userEvent.click(screen.getByRole("button", { name: "다음" }));
   await userEvent.click(screen.getByText("고급 설정 · 정책 JSON 직접 편집"));
   fireEvent.change(screen.getByLabelText("테스트·리뷰 정책 (JSON)"), {
     target: { value: JSON.stringify(initialPolicy) },

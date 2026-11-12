@@ -61,6 +61,7 @@ from dev_orchestra.application.web_contracts import (
     PushView,
     Reason,
     ReportView,
+    RepositoryPreview,
     ResumeInput,
     ReviewResultView,
     RunCreate,
@@ -323,6 +324,12 @@ def create_app(config=None, allowed_roots=None, port=8000, static_directory=None
     @app.post("/api/project-directories", response_model=DirectoryView)
     def project_directories(body: DirectoryInput):
         return backend.projects.directories(body.path)
+
+    @app.post("/api/project-repository/inspect", response_model=RepositoryPreview)
+    def inspect_repository(body: DirectoryInput):
+        if not body.path:
+            raise ApplicationError("VALIDATION_ERROR", "repository path required")
+        return backend.projects.inspect_repository(Path(body.path))
 
     @app.post("/api/projects", status_code=201, response_model=ProjectView)
     def project_create(body: ProjectCreate):

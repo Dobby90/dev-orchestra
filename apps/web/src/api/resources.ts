@@ -84,6 +84,11 @@ export const api = {
       method: "POST",
       body: JSON.stringify({ path: path || null }),
     }),
+  inspectRepository: (path: string) =>
+    request<Schema["RepositoryPreview"]>("/project-repository/inspect", {
+      method: "POST",
+      body: JSON.stringify({ path }),
+    }),
   projects: (cursor = "") =>
     request<Schema["ProjectPage"]>(`/projects?cursor=${id(cursor)}`),
   project: (pid: string) => request<Project>(`/projects/${id(pid)}`),

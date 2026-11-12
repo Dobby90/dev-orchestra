@@ -189,3 +189,22 @@ it("고급 설정에 잘못된 구조를 입력해도 화면을 유지하고 제
   );
   expect(submit).not.toHaveBeenCalled();
 });
+
+it("적용한 검증 정책은 경로 변경 후 재확인해야 제출한다", async () => {
+  const submit = mount();
+  await userEvent.type(screen.getByLabelText("프로젝트 이름"), "프로젝트");
+  await userEvent.type(screen.getByLabelText("저장소 절대 경로"), "/tmp/a");
+  await userEvent.click(screen.getByText("고급 설정 · 정책 JSON 직접 편집"));
+  fireEvent.change(screen.getByLabelText("테스트·리뷰 정책 (JSON)"), {
+    target: { value: JSON.stringify(initialPolicy) },
+  });
+  await userEvent.type(screen.getByLabelText("저장소 절대 경로"), "b");
+  await userEvent.click(screen.getByRole("button", { name: "프로젝트 등록" }));
+  expect(submit).not.toHaveBeenCalled();
+  expect(screen.getByRole("alert")).toHaveTextContent("재확인");
+  await userEvent.click(
+    screen.getByRole("checkbox", { name: /변경한 저장소/ }),
+  );
+  await userEvent.click(screen.getByRole("button", { name: "프로젝트 등록" }));
+  expect(submit).toHaveBeenCalledOnce();
+});

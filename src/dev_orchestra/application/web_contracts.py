@@ -97,6 +97,12 @@ class DirectoryView(BaseModel):
     truncated: bool
 
 
+class RepositoryPreview(BaseModel):
+    repository_path: str
+    branches: list[str]
+    default_branch: str
+
+
 class ProjectCreate(Input):
     name: str = Field(min_length=1, max_length=100)
     repository_path: str = Field(min_length=1, max_length=4096)

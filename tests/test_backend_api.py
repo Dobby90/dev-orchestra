@@ -830,3 +830,25 @@ def test_directory_picker_bounds_results_and_requires_session(web, tmp_path):
     assert response.json()["truncated"] is True
     assert c.delete("/api/session").status_code == 204
     assert c.post("/api/project-directories", json={"path": str(root)}).status_code == 401
+
+
+def test_repository_inspection_before_registration(web):
+    import subprocess
+
+    c, svc, _, repo, _ = web
+    subprocess.run(["git", "branch", "-m", "develop"], cwd=repo, check=True)
+    before = c.get("/api/projects").json()
+    response = c.post("/api/project-repository/inspect", json={"path": str(repo)})
+    assert response.status_code == 200
+    assert response.json() == {
+        "repository_path": str(repo.resolve()),
+        "branches": ["develop"],
+        "default_branch": "develop",
+    }
+    assert c.get("/api/projects").json() == before
+    child = repo / "nested"
+    child.mkdir()
+    assert c.post("/api/project-repository/inspect", json={"path": str(child)}).status_code == 409
+    assert c.post("/api/project-repository/inspect", json={"path": None}).status_code == 422
+    c.headers.pop("X-CSRF-Token")
+    assert c.post("/api/project-repository/inspect", json={"path": str(repo)}).status_code == 403

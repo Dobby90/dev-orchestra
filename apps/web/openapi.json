@@ -182,6 +182,44 @@
         }
       }
     },
+    "/api/project-repository/inspect": {
+      "post": {
+        "summary": "Inspect Repository",
+        "operationId": "inspect_repository_api_project_repository_inspect_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DirectoryInput"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RepositoryPreview"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/projects": {
       "post": {
         "summary": "Project Create",
@@ -5088,6 +5126,32 @@
           "markdown"
         ],
         "title": "ReportView"
+      },
+      "RepositoryPreview": {
+        "properties": {
+          "repository_path": {
+            "type": "string",
+            "title": "Repository Path"
+          },
+          "branches": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Branches"
+          },
+          "default_branch": {
+            "type": "string",
+            "title": "Default Branch"
+          }
+        },
+        "type": "object",
+        "required": [
+          "repository_path",
+          "branches",
+          "default_branch"
+        ],
+        "title": "RepositoryPreview"
       },
       "ResumeInput": {
         "properties": {

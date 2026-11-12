@@ -57,6 +57,22 @@ class ProjectService:
             base_sha=git.baseline(base_branch),
         )
 
+    def inspect_repository(self, path: Path):
+        canonical = self.directory(path)
+        git = Git(canonical)
+        top = Path(git.call("rev-parse", "--show-toplevel")).resolve(strict=True)
+        if top != canonical:
+            raise ApplicationError("REPOSITORY_ROOT_REQUIRED", "register the repository root")
+        branches = git.call("for-each-ref", "--format=%(refname:short)", "refs/heads/").splitlines()
+        if not branches:
+            raise ApplicationError("VALIDATION_ERROR", "a committed local branch is required")
+        current = git.call("rev-parse", "--abbrev-ref", "HEAD")
+        return {
+            "repository_path": str(canonical),
+            "branches": branches,
+            "default_branch": current if current in branches else branches[0],
+        }
+
     def detect_validation(self, path: Path, base_branch: str):
         from dev_orchestra.application.validation import detect_validation
 
