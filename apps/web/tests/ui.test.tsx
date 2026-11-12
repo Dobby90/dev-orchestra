@@ -818,3 +818,38 @@ it("등록 대화상자의 하단 버튼으로 연결된 프로젝트 폼을 제
     ),
   );
 });
+
+it("작업명 아래 프로젝트명과 브랜치를 표시하고 미등록 작업을 구분한다", () => {
+  wrap(
+    <RunsTable
+      runs={[
+        {
+          ...detail,
+          id: "project-run",
+          name: "같은 작업명",
+          project_name: "웹 프로젝트",
+          branch: "feature/long-branch",
+        },
+        {
+          ...detail,
+          id: "cli-run",
+          name: "같은 작업명",
+          project_name: null,
+          branch: null,
+        },
+      ]}
+    />,
+  );
+  const project = screen.getByText("웹 프로젝트");
+  expect(project.closest("td")).toHaveTextContent("같은 작업명");
+  expect(project.closest(".run-metadata")).toHaveTextContent(
+    "feature/long-branch",
+  );
+  expect(project).toHaveAttribute("title", "웹 프로젝트");
+  expect(screen.getByText("feature/long-branch")).toHaveAttribute(
+    "title",
+    "feature/long-branch",
+  );
+  expect(screen.getByText("미등록 작업")).toBeVisible();
+  expect(screen.getByText("브랜치 준비 중")).toBeVisible();
+});

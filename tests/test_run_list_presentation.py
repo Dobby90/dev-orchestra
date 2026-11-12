@@ -50,3 +50,39 @@ def test_completion_time_uses_approval_event_and_queries_are_read_only(queries):
     assert queries.store.events("run") == events
     queries.store.update("run", "needs_input")
     assert queries.summary("run").completed_at is None
+
+
+def test_project_names_follow_database_relation_and_include_archived_projects(queries):
+    with queries.store.connection() as db:
+        db.execute(
+            "INSERT INTO projects(id,name,repository_path,git_common_directory,identity,"
+            "default_base_branch,policy,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?)",
+            (
+                "project",
+                "예제 프로젝트",
+                "/example",
+                "/example/.git",
+                "identity",
+                "main",
+                "{}",
+                "now",
+                "now",
+            ),
+        )
+    queries.store.create({"id": "linked", "project_name": "신뢰하지 않는 이름"})
+    queries.store.create({"id": "cli", "project_name": "신뢰하지 않는 이름"})
+    with queries.store.connection() as db:
+        db.execute("UPDATE runs SET project_id='project' WHERE id='linked'")
+    assert queries.summary("linked").project_name == "예제 프로젝트"
+    assert queries.summary("cli").project_name is None
+    with queries.store.connection() as db:
+        db.execute("UPDATE projects SET name='변경된 이름', archived_at='now' WHERE id='project'")
+    items = {item["id"]: item for item in queries.page()["items"]}
+    assert items["linked"]["project_name"] == "변경된 이름"
+    assert items["cli"]["project_name"] is None
+
+
+def test_schema_two_history_has_no_project_name(tmp_path):
+    store = Store(tmp_path / "legacy.db")
+    store.create({"id": "legacy", "project_name": "위조된 이름"})
+    assert RunQueryService(store).summary("legacy").project_name is None

@@ -774,3 +774,13 @@ def test_run_list_exposes_request_and_completion_times(web):
     detail = client.get(f"/api/runs/{rid}")
     assert detail.status_code == 200
     assert detail.json()["completed_at"] == completed
+
+
+def test_run_list_and_detail_expose_linked_project_name(web):
+    client, svc, rid, repo, _ = web
+    assert client.get("/api/runs").json()["items"][0]["project_name"] is None
+    registered = project(client, svc, repo)
+    with svc.store.connection() as db:
+        db.execute("UPDATE runs SET project_id=? WHERE id=?", (registered["id"], rid))
+    assert client.get("/api/runs").json()["items"][0]["project_name"] == registered["name"]
+    assert client.get(f"/api/runs/{rid}").json()["project_name"] == registered["name"]

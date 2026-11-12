@@ -1773,6 +1773,8 @@ export interface components {
              * @default
              */
             name: string;
+            /** Project Name */
+            project_name?: string | null;
             /**
              * Worktree Removed
              * @default false
@@ -1886,6 +1888,8 @@ export interface components {
              * @default
              */
             name: string;
+            /** Project Name */
+            project_name?: string | null;
             /**
              * Worktree Removed
              * @default false

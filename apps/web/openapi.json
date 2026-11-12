@@ -5345,6 +5345,17 @@
             "title": "Name",
             "default": ""
           },
+          "project_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Project Name"
+          },
           "worktree_removed": {
             "type": "boolean",
             "title": "Worktree Removed",
@@ -5684,6 +5695,17 @@
             "type": "string",
             "title": "Name",
             "default": ""
+          },
+          "project_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Project Name"
           },
           "worktree_removed": {
             "type": "boolean",

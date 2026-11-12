@@ -151,7 +151,7 @@ export function RunsTable({ runs }: { runs: Run[] }) {
       <table>
         <thead>
           <tr>
-            <th>작업 / 브랜치</th>
+            <th>작업 / 프로젝트·브랜치</th>
             <th>상태</th>
             <th>진행 단계</th>
             <th>수정 회차</th>
@@ -176,8 +176,22 @@ export function RunsTable({ runs }: { runs: Run[] }) {
                 {run.name && run.name !== run.id && (
                   <span className="sr-only">{run.id}</span>
                 )}
-                <div className="mono subtle text-small">
-                  {run.branch ?? "브랜치 준비 중"}
+                <div className="run-metadata text-small">
+                  <span
+                    className="run-project"
+                    title={run.project_name ?? "미등록 작업"}
+                  >
+                    {run.project_name ?? "미등록 작업"}
+                  </span>
+                  <span className="subtle" aria-hidden="true">
+                    ·
+                  </span>
+                  <span
+                    className="run-branch-name mono"
+                    title={run.branch ?? "브랜치 준비 중"}
+                  >
+                    {run.branch ?? "브랜치 준비 중"}
+                  </span>
                 </div>
               </td>
               <td>
