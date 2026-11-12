@@ -1887,3 +1887,24 @@ dd {
   overflow-y: auto;
   margin-block: 0.75rem;
 }
+
+.notification-toast {
+  position: fixed;
+  top: 80px;
+  right: 24px;
+  z-index: 50;
+  max-width: 440px;
+  padding: 16px;
+  background: var(--panel);
+  border: 1px solid var(--accent);
+  border-radius: 9px;
+  box-shadow: var(--shadow);
+  font-size: 14px;
+}
+.notification-toast p {
+  margin-bottom: 10px;
+}
+.new-run-grid summary {
+  cursor: pointer;
+  margin-bottom: 16px;
+}

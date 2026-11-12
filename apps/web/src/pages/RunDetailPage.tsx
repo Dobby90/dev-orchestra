@@ -93,10 +93,11 @@ function RunDetailBody({ rid }: { rid: string }) {
   const [pushActions, setPushActions] = useState<HTMLSpanElement | null>(null);
   const client = useQueryClient(),
     [params, setParams] = useSearchParams();
-  const selected = params.get("tab") ?? "plan";
-  const tab = tabs.includes(selected as (typeof tabs)[number])
-    ? selected
-    : "logs";
+  const selected = params.get("tab");
+  const tab =
+    selected && tabs.includes(selected as (typeof tabs)[number])
+      ? selected
+      : null;
   const [action, setAction] = useState<{
       kind: Action;
       run: RunDetail;
@@ -533,36 +534,14 @@ function RunDetailBody({ rid }: { rid: string }) {
       {registered && r.state === "completed" && (
         <RunPushPanel run={r} actionContainer={pushActions} />
       )}
-      <RunHandoffPanel run={r} />
-      <section className="panel timeline-panel">
-        <div className="panel-heading">
-          <h2>워크플로 타임라인</h2>
-          <span className="subtle text-small">
-            회차·시도별 이력 보존 · 단계 완료와 검증 통과를 구분합니다.
-          </span>
-        </div>
-        {steps.isPending ? (
-          <Loading />
-        ) : steps.error ? (
-          <ErrorNotice error={steps.error} retry={() => steps.refetch()} />
-        ) : (
-          <WorkflowTimeline
-            run={r}
-            items={steps.data.items}
-            onSelect={(tab, step) => {
-              setParams({ tab, step: String(step) });
-              requestAnimationFrame(() =>
-                document
-                  .querySelector(".results-panel")
-                  ?.scrollIntoView({ block: "start" }),
-              );
-            }}
-          />
-        )}
-      </section>
       <section className="panel results-panel">
         <Tabs.Root
-          value={tab}
+          value={
+            tab ??
+            (r.state === "waiting_approval" || r.state === "completed"
+              ? "tests"
+              : "plan")
+          }
           onValueChange={(value) => setParams({ tab: value })}
         >
           <Tabs.List className="tabs-list" aria-label="실행 결과">
@@ -708,6 +687,33 @@ function RunDetailBody({ rid }: { rid: string }) {
             )}
           </Tabs.Content>
         </Tabs.Root>
+      </section>
+      <RunHandoffPanel run={r} />
+      <section className="panel timeline-panel">
+        <div className="panel-heading">
+          <h2>워크플로 타임라인</h2>
+          <span className="subtle text-small">
+            회차·시도별 이력 보존 · 단계 완료와 검증 통과를 구분합니다.
+          </span>
+        </div>
+        {steps.isPending ? (
+          <Loading />
+        ) : steps.error ? (
+          <ErrorNotice error={steps.error} retry={() => steps.refetch()} />
+        ) : (
+          <WorkflowTimeline
+            run={r}
+            items={steps.data.items}
+            onSelect={(tab, step) => {
+              setParams({ tab, step: String(step) });
+              requestAnimationFrame(() =>
+                document
+                  .querySelector(".results-panel")
+                  ?.scrollIntoView({ block: "start" }),
+              );
+            }}
+          />
+        )}
       </section>
       <Modal
         open={!!action}

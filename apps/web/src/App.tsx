@@ -26,6 +26,7 @@ import {
   Sun,
   X,
 } from "lucide-react";
+import { RunDraftProvider } from "./hooks/runDraft";
 import { NotificationCenter } from "./components/NotificationCenter";
 import { SessionProvider } from "./hooks/session";
 import { api } from "./api/resources";
@@ -298,7 +299,9 @@ export function App() {
     <QueryClientProvider client={client}>
       <BrowserRouter>
         <SessionProvider>
-          <Shell />
+          <RunDraftProvider>
+            <Shell />
+          </RunDraftProvider>
         </SessionProvider>
       </BrowserRouter>
     </QueryClientProvider>

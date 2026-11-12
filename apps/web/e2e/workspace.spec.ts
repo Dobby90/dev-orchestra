@@ -234,9 +234,7 @@ test("실제 로컬 API: 로그인 → 프로젝트 → 실행 → 재연결 →
       ).trim(),
     )
     .toBe("0");
-  await expect
-    .poll(() => alerts.some((message) => message.includes("일시중지")))
-    .toBe(true);
+  await expect(page.locator(".notification-toast")).toContainText("일시중지");
   await expect(page.locator(".page-heading .status")).toHaveClass(
     /status-large/,
   );
@@ -265,7 +263,7 @@ test("실제 로컬 API: 로그인 → 프로젝트 → 실행 → 재연결 →
     page.getByRole("button", { name: "알림, 읽지 않음 0 개" }),
   ).toBeVisible();
   expect(alerts.filter((message) => message.includes("일시중지"))).toHaveLength(
-    1,
+    0,
   );
   await page.getByRole("link", { name: "프로젝트", exact: true }).click();
   await page.getByRole("button", { name: "알림, 읽지 않음 0 개" }).click();

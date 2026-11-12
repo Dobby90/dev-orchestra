@@ -24,7 +24,15 @@ export function DashboardPage() {
   const [params, setParams] = useSearchParams();
   const selected = params.get("state") ?? "",
     cursor = params.get("cursor") ?? "";
+  const groups: Record<string, State[]> = {
+    running: Object.keys(states).filter(
+      (key) => active(key as State) && key !== "queued",
+    ) as State[],
+    approvals: ["waiting_approval", "waiting_plan_approval"],
+    attention: ["failed", "needs_input"],
+  };
   const state = selected in states ? (selected as State) : "";
+  const group = groups[selected];
   const query = new URLSearchParams({ limit: "30", cursor });
   if (state) query.set("state", state);
   const dashboard = useQuery({
@@ -33,8 +41,33 @@ export function DashboardPage() {
     refetchInterval: 5000,
   });
   const runs = useQuery({
-    queryKey: ["runs", state, cursor],
-    queryFn: () => api.runs(query),
+    queryKey: ["runs", selected, cursor],
+    queryFn: async () => {
+      if (!group) return api.runs(query);
+      const pages = await Promise.all(
+        group.map(async (state) => {
+          const items = [];
+          let cursor = "";
+          do {
+            const page = await api.runs(
+              new URLSearchParams({ limit: "100", state, cursor }),
+            );
+            items.push(...page.items);
+            cursor = page.has_more ? (page.next_cursor ?? "") : "";
+          } while (cursor);
+          return { items };
+        }),
+      );
+      return {
+        items: pages
+          .flatMap((page) => page.items)
+          .sort((a, b) =>
+            (b.created_at ?? "").localeCompare(a.created_at ?? ""),
+          ),
+        has_more: false,
+        next_cursor: null,
+      };
+    },
     refetchInterval: 5000,
   });
   const counts = dashboard.data?.counts_by_state;
@@ -68,6 +101,7 @@ export function DashboardPage() {
         {[
           {
             label: "등록 프로젝트",
+            to: "/projects",
             value: dashboard.data?.project_count,
             icon: FolderGit2,
             note: "로컬 저장소",
@@ -75,6 +109,7 @@ export function DashboardPage() {
           },
           {
             label: "실행 중",
+            to: "/?state=running",
             value: running,
             icon: Play,
             note: "에이전트 작업 진행",
@@ -82,6 +117,7 @@ export function DashboardPage() {
           },
           {
             label: "승인 대기",
+            to: "/?state=approvals",
             value: counts
               ? (counts.waiting_approval ?? 0) +
                 (counts.waiting_plan_approval ?? 0)
@@ -92,6 +128,7 @@ export function DashboardPage() {
           },
           {
             label: "실패 / 입력 필요",
+            to: "/?state=attention",
             value: counts
               ? (counts.failed ?? 0) + (counts.needs_input ?? 0)
               : null,
@@ -100,7 +137,7 @@ export function DashboardPage() {
             tone: "red",
           },
         ].map((item) => (
-          <div className="stat-card" key={item.label}>
+          <Link to={item.to} className="stat-card" key={item.label}>
             <div className="stat-label">
               {item.label}
               <item.icon size={17} />
@@ -109,7 +146,7 @@ export function DashboardPage() {
               {item.value ?? "—"}
             </strong>
             <p>{item.note}</p>
-          </div>
+          </Link>
         ))}
       </div>
       <section className="panel">
@@ -125,12 +162,15 @@ export function DashboardPage() {
           </div>
           <select
             aria-label="작업 상태 필터"
-            value={state}
+            value={selected}
             onChange={(e) =>
               setParams(e.target.value ? { state: e.target.value } : {})
             }
           >
             <option value="">모든 상태</option>
+            <option value="running">실행 중 전체</option>
+            <option value="approvals">승인 대기 전체</option>
+            <option value="attention">실패 / 입력 필요</option>
             {Object.entries(states).map(([key, value]) => (
               <option key={key} value={key}>
                 {value.label}

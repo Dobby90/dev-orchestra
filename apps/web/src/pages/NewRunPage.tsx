@@ -1,4 +1,4 @@
-import { useState, type FormEvent } from "react";
+import { useEffect, useState, type FormEvent } from "react";
 import { Link, useNavigate, useSearchParams } from "react-router-dom";
 import { useInfiniteQuery, useMutation, useQuery } from "@tanstack/react-query";
 import {
@@ -15,24 +15,35 @@ import { Heading, ErrorNotice } from "../components/common";
 import { Button } from "../components/ui/button";
 import { Modal } from "../components/ui/dialog";
 import { RunAgentSettings } from "../components/RunAgentSettings";
+import { useDraftField, useClearDraft } from "../hooks/runDraft";
 import { PrdGuide } from "../components/PrdGuide";
 export function NewRunPage() {
   const [params] = useSearchParams(),
     navigate = useNavigate();
-  const [agentSettings, setAgentSettings] = useState<
-    Schema["AgentSettings"] | null
-  >(null);
-  const [project, setProject] = useState(params.get("project") ?? ""),
-    [name, setName] = useState(""),
-    [text, setText] = useState(""),
-    [mode, setMode] = useState<"text" | "file">("text"),
-    [base, setBase] = useState(""),
-    [branch, setBranch] = useState(""),
-    [instructions, setInstructions] = useState(""),
-    [budget, setBudget] = useState(""),
-    [testScope, setTestScope] = useState<"full" | "affected">("affected"),
+  const clearDraft = useClearDraft();
+  const [agentSettings, setAgentSettings] = useDraftField("agentSettings");
+  const [project, setProject] = useDraftField(
+      "project",
+      params.get("project") ?? "",
+    ),
+    [name, setName] = useDraftField("name"),
+    [text, setText] = useDraftField("text"),
+    [mode, setMode] = useDraftField("mode"),
+    [base, setBase] = useDraftField("base"),
+    [branch, setBranch] = useDraftField("branch"),
+    [instructions, setInstructions] = useDraftField("instructions"),
+    [budget, setBudget] = useDraftField("budget"),
+    [testScope, setTestScope] = useDraftField("testScope"),
     [previewOpen, setPreviewOpen] = useState(false),
     [localError, setLocalError] = useState("");
+  useEffect(() => {
+    const requested = params.get("project");
+    if (requested && requested !== project) {
+      setProject(requested);
+      setBase("");
+      setBudget("");
+    }
+  }, [params]);
   const projects = useInfiniteQuery({
     queryKey: ["projects", "choices"],
     queryFn: ({ pageParam }) => api.projects(pageParam),
@@ -67,7 +78,10 @@ export function NewRunPage() {
         },
         preview.data!.key,
       ),
-    onSuccess: (value) => navigate(`/runs/${value.run_id}`),
+    onSuccess: (value) => {
+      clearDraft();
+      navigate(`/runs/${value.run_id}`);
+    },
   });
   const uncertain =
     submit.error instanceof ApiError &&
@@ -135,6 +149,21 @@ export function NewRunPage() {
         title="새 작업"
         description="요구사항과 정책을 확인하고, 격리된 작업 공간에서 실행합니다."
       />
+      <p className="help">
+        입력 중인 초안은 로그인한 동안 화면을 이동해도 유지됩니다. 새로고침이나
+        로그아웃 시에는 사라집니다. 파일은 돌아온 뒤 다시 선택해 주세요.
+      </p>
+      {projects.isSuccess && !choices.length && (
+        <section className="notice">
+          <div>
+            <strong>먼저 프로젝트를 등록해 주세요</strong>
+            <p>작업을 실행할 로컬 Git 저장소가 필요합니다.</p>
+            <Button asChild>
+              <Link to="/projects">프로젝트 등록하러 가기</Link>
+            </Button>
+          </div>
+        </section>
+      )}
       <div className="new-run-grid">
         <section className="panel panel-body">
           <h2>
@@ -253,52 +282,58 @@ export function NewRunPage() {
                   )}
                 </label>
               )}
-              <div className="form-columns">
+              <details>
+                <summary>브랜치·추가 지시사항 (선택)</summary>
+                <div className="form-columns">
+                  <label>
+                    기준 브랜치
+                    <select
+                      value={base}
+                      onChange={(e) => edit(() => setBase(e.target.value))}
+                    >
+                      <option value="">
+                        기본값 ({selected.data?.default_base_branch ?? "main"})
+                      </option>
+                      {branches.data?.items.map((b) => (
+                        <option key={b}>{b}</option>
+                      ))}
+                    </select>
+                  </label>
+                  <label>
+                    Feature 브랜치 (선택)
+                    <input
+                      value={branch}
+                      maxLength={200}
+                      aria-describedby="feature-branch-guide"
+                      placeholder="자동 생성"
+                      onChange={(e) => edit(() => setBranch(e.target.value))}
+                    />
+                  </label>
+                </div>
+                <p id="feature-branch-guide" className="help">
+                  Feature 브랜치는 비워 두면 자동 생성됩니다.
+                  {selected.data && (
+                    <>
+                      {" "}
+                      직접 입력할 때는{" "}
+                      <code>{selected.data.branch_prefix}/</code>로 시작해야
+                      합니다. 예:{" "}
+                      <code>{selected.data.branch_prefix}/add-task-search</code>
+                    </>
+                  )}
+                </p>
                 <label>
-                  기준 브랜치
-                  <select
-                    value={base}
-                    onChange={(e) => edit(() => setBase(e.target.value))}
-                  >
-                    <option value="">
-                      기본값 ({selected.data?.default_base_branch ?? "main"})
-                    </option>
-                    {branches.data?.items.map((b) => (
-                      <option key={b}>{b}</option>
-                    ))}
-                  </select>
-                </label>
-                <label>
-                  Feature 브랜치 (선택)
-                  <input
-                    value={branch}
-                    maxLength={200}
-                    aria-describedby="feature-branch-guide"
-                    placeholder="자동 생성"
-                    onChange={(e) => edit(() => setBranch(e.target.value))}
+                  추가 지시사항 (선택)
+                  <textarea
+                    rows={3}
+                    value={instructions}
+                    maxLength={65536}
+                    onChange={(e) =>
+                      edit(() => setInstructions(e.target.value))
+                    }
                   />
                 </label>
-              </div>
-              <p id="feature-branch-guide" className="help">
-                Feature 브랜치는 비워 두면 자동 생성됩니다.
-                {selected.data && (
-                  <>
-                    {" "}
-                    직접 입력할 때는 <code>{selected.data.branch_prefix}/</code>
-                    로 시작해야 합니다. 예:{" "}
-                    <code>{selected.data.branch_prefix}/add-task-search</code>
-                  </>
-                )}
-              </p>
-              <label>
-                추가 지시사항 (선택)
-                <textarea
-                  rows={3}
-                  value={instructions}
-                  maxLength={65536}
-                  onChange={(e) => edit(() => setInstructions(e.target.value))}
-                />
-              </label>
+              </details>
               <label>
                 테스트 범위
                 <select
@@ -318,21 +353,24 @@ export function NewRunPage() {
                 테스트를 분석해 자동 선택합니다. 필요한 경우 관련 모듈로 범위를
                 확대하고 이유를 기록합니다.
               </p>
-              <RunAgentSettings
-                value={agentSettings}
-                onChange={(value) => edit(() => setAgentSettings(value))}
-              />
-              <label>
-                자동 수정 최대 횟수
-                <input
-                  type="number"
-                  min={0}
-                  max={20}
-                  value={budget}
-                  placeholder={`프로젝트 기본값: ${selected.data?.policy.max_fix_attempts ?? 3}`}
-                  onChange={(e) => edit(() => setBudget(e.target.value))}
+              <details>
+                <summary>모델·자동 수정 설정 (선택)</summary>
+                <RunAgentSettings
+                  value={agentSettings}
+                  onChange={(value) => edit(() => setAgentSettings(value))}
                 />
-              </label>
+                <label>
+                  자동 수정 최대 횟수
+                  <input
+                    type="number"
+                    min={0}
+                    max={20}
+                    value={budget}
+                    placeholder={`프로젝트 기본값: ${selected.data?.policy.max_fix_attempts ?? 3}`}
+                    onChange={(e) => edit(() => setBudget(e.target.value))}
+                  />
+                </label>
+              </details>
             </fieldset>
             {localError && (
               <p role="alert" className="text-red">

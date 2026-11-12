@@ -1,3 +1,4 @@
+import { useState } from "react";
 import {
   act,
   fireEvent,
@@ -11,6 +12,8 @@ import { MemoryRouter } from "react-router-dom";
 import { describe, expect, it, vi } from "vitest";
 import { App, createQueryClient } from "../src/App";
 import { LoginPage } from "../src/pages/LoginPage";
+import { RunDraftProvider } from "../src/hooks/runDraft";
+import { DashboardPage } from "../src/pages/DashboardPage";
 import { NewRunPage } from "../src/pages/NewRunPage";
 import { RunDetailPage } from "../src/pages/RunDetailPage";
 import { Routes, Route } from "react-router-dom";
@@ -444,6 +447,7 @@ describe("화면·위험 명령", () => {
       spec_sha256: "hash",
     });
     wrap(<NewRunPage />, "/runs/new?project=prj-1");
+    await userEvent.click(screen.getByText("브랜치·추가 지시사항 (선택)"));
     expect(
       await screen.findByText("custom/tasks/add-task-search"),
     ).toBeVisible();
@@ -467,6 +471,7 @@ describe("화면·위험 명령", () => {
     expect(screen.getByLabelText("PRD")).toHaveValue("작업 요구사항");
     expect(api.preview).not.toHaveBeenCalled();
     expect(screen.getByLabelText("테스트 범위")).toHaveValue("affected");
+    await userEvent.click(screen.getByText("모델·자동 수정 설정 (선택)"));
     await userEvent.click(
       screen.getByRole("button", { name: "이 작업만 변경" }),
     );
@@ -650,4 +655,102 @@ it("새 작업의 많은 검증 명령을 요약하고 펼쳐서 확인한다", 
   ).toHaveAttribute("tabindex", "0");
   await userEvent.click(summary);
   expect(screen.getByText("tool check-29")).not.toBeVisible();
+});
+
+it("초안을 유지한 채 검증 설정에서 돌아오고 로그아웃 경계에서 폐기한다", async () => {
+  vi.spyOn(api, "projects").mockResolvedValue({
+    items: [p],
+    has_more: false,
+    next_cursor: null,
+  });
+  vi.spyOn(api, "project").mockResolvedValue(p);
+  vi.spyOn(api, "branches").mockResolvedValue({ items: ["main"] });
+  function Fixture() {
+    const [visible, setVisible] = useState(true);
+    return (
+      <>
+        <button onClick={() => setVisible(!visible)}>화면 이동</button>
+        {visible && <NewRunPage />}
+      </>
+    );
+  }
+  const view = wrap(
+    <RunDraftProvider>
+      <Fixture />
+    </RunDraftProvider>,
+    "/runs/new?project=prj-1",
+  );
+  await userEvent.type(screen.getByLabelText("작업명"), "보존할 작업");
+  await userEvent.type(screen.getByLabelText("PRD"), "보존할 요구사항");
+  await userEvent.click(screen.getByText("화면 이동"));
+  await userEvent.click(screen.getByText("화면 이동"));
+  expect(screen.getByLabelText("작업명")).toHaveValue("보존할 작업");
+  expect(screen.getByLabelText("PRD")).toHaveValue("보존할 요구사항");
+  view.unmount();
+  wrap(
+    <RunDraftProvider>
+      <NewRunPage />
+    </RunDraftProvider>,
+  );
+  expect(screen.getByLabelText("PRD")).toHaveValue("");
+});
+it("프로젝트가 없으면 등록 경로와 실행 불가 이유를 안내한다", async () => {
+  vi.spyOn(api, "projects").mockResolvedValue({
+    items: [],
+    has_more: false,
+    next_cursor: null,
+  });
+  wrap(<NewRunPage />);
+  expect(
+    await screen.findByText("먼저 프로젝트를 등록해 주세요"),
+  ).toBeVisible();
+  expect(
+    screen.getByRole("link", { name: "프로젝트 등록하러 가기" }),
+  ).toHaveAttribute("href", "/projects");
+  expect(screen.getByRole("button", { name: "실행 전 확인" })).toBeDisabled();
+});
+it("승인 대기 결과를 인계 정보보다 먼저 표시하고 테스트 탭을 기본 선택한다", async () => {
+  setupDetail();
+  wrap(
+    <Routes>
+      <Route path="/runs/:id" element={<RunDetailPage />} />
+    </Routes>,
+    "/runs/r1",
+  );
+  const tab = await screen.findByRole("tab", { name: "테스트" });
+  expect(tab).toHaveAttribute("aria-selected", "true");
+  expect(
+    document
+      .querySelector(".results-panel")!
+      .compareDocumentPosition(document.querySelector(".run-execution")!) &
+      Node.DOCUMENT_POSITION_FOLLOWING,
+  ).toBeTruthy();
+});
+it("승인 요약 카드의 묶음 필터가 두 상태의 다음 페이지까지 조회한다", async () => {
+  vi.spyOn(api, "dashboard").mockResolvedValue({
+    project_count: 1,
+    counts_by_state: {},
+  } as Schema["DashboardView"]);
+  const get = vi.spyOn(api, "runs").mockImplementation(async (params) => ({
+    items: [
+      {
+        ...detail,
+        id: params.get("state")! + (params.get("cursor") ?? ""),
+        name: params.get("state")! + (params.get("cursor") ?? ""),
+      },
+    ],
+    has_more: !params.get("cursor"),
+    next_cursor: params.get("cursor") ? null : "next",
+  }));
+  wrap(<DashboardPage />, "/?state=approvals");
+  expect(
+    await screen.findByRole("link", {
+      name: "waiting_plan_approvalnext",
+    }),
+  ).toBeVisible();
+  expect(get).toHaveBeenCalledTimes(4);
+  expect(screen.getByRole("link", { name: /등록 프로젝트/ })).toHaveAttribute(
+    "href",
+    "/projects",
+  );
 });
