@@ -240,7 +240,10 @@ export function NewRunPage() {
                   파일 업로드
                 </Button>
               </div>
-              <PrdGuide />
+              <div className="prd-label-row">
+                <strong>요구사항</strong>
+                <PrdGuide />
+              </div>
               {mode === "text" ? (
                 <label>
                   PRD
@@ -390,20 +393,25 @@ export function NewRunPage() {
                 }
               />
             )}
-            <Button
-              type="submit"
-              disabled={
-                locked ||
-                preview.isPending ||
-                !project ||
-                upload.isPending ||
-                !!selected.data?.archived_at ||
-                !!selected.error
-              }
-            >
-              실행 전 확인
-              <ArrowRight size={16} />
-            </Button>
+            <div className="form-action-bar">
+              <span className="help">
+                실행 전에 브랜치와 테스트 범위를 확인합니다.
+              </span>
+              <Button
+                type="submit"
+                disabled={
+                  locked ||
+                  preview.isPending ||
+                  !project ||
+                  upload.isPending ||
+                  !!selected.data?.archived_at ||
+                  !!selected.error
+                }
+              >
+                실행 전 확인
+                <ArrowRight size={16} />
+              </Button>
+            </div>
           </form>
         </section>
         <aside>

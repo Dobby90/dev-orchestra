@@ -147,7 +147,7 @@ export function Loading() {
 }
 export function RunsTable({ runs }: { runs: Run[] }) {
   return runs.length ? (
-    <div className="table-scroll">
+    <div className="table-scroll runs-table">
       <table>
         <thead>
           <tr>
@@ -174,7 +174,7 @@ export function RunsTable({ runs }: { runs: Run[] }) {
                   {run.name || run.id}
                 </Link>
                 {run.name && run.name !== run.id && (
-                  <div className="mono subtle text-small">{run.id}</div>
+                  <span className="sr-only">{run.id}</span>
                 )}
                 <div className="mono subtle text-small">
                   {run.branch ?? "브랜치 준비 중"}
@@ -224,8 +224,17 @@ export function RunsTable({ runs }: { runs: Run[] }) {
               </td>
               <td className="run-timestamp">
                 {run.created_at ? (
-                  <time dateTime={run.created_at}>
-                    {new Date(run.created_at).toLocaleString("ko-KR")}
+                  <time
+                    dateTime={run.created_at}
+                    title={new Date(run.created_at).toLocaleString("ko-KR")}
+                  >
+                    {new Date(run.created_at).toLocaleString("ko-KR", {
+                      month: "2-digit",
+                      day: "2-digit",
+                      hour: "2-digit",
+                      minute: "2-digit",
+                      hour12: false,
+                    })}
                   </time>
                 ) : (
                   "—"
@@ -233,8 +242,17 @@ export function RunsTable({ runs }: { runs: Run[] }) {
               </td>
               <td className="run-timestamp">
                 {run.completed_at ? (
-                  <time dateTime={run.completed_at}>
-                    {new Date(run.completed_at).toLocaleString("ko-KR")}
+                  <time
+                    dateTime={run.completed_at}
+                    title={new Date(run.completed_at).toLocaleString("ko-KR")}
+                  >
+                    {new Date(run.completed_at).toLocaleString("ko-KR", {
+                      month: "2-digit",
+                      day: "2-digit",
+                      hour: "2-digit",
+                      minute: "2-digit",
+                      hour12: false,
+                    })}
                   </time>
                 ) : (
                   "—"

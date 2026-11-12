@@ -250,7 +250,7 @@ function RunDetailBody({ rid }: { rid: string }) {
         <Status state={r.state} large />
       </Heading>
       {r.name && r.name !== rid && (
-        <p className="mono subtle">작업 ID: {rid}</p>
+        <p className="mono subtle run-id">작업 ID: {rid}</p>
       )}
       <div className="run-overview panel">
         <div>
@@ -329,7 +329,7 @@ function RunDetailBody({ rid }: { rid: string }) {
                 )}
               {!["completed", "cancelled"].includes(r.state) && (
                 <Button
-                  variant="ghost"
+                  variant="danger"
                   disabled={pendingControl}
                   onClick={() => open("cancel")}
                 >

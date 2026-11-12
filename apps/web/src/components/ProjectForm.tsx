@@ -69,10 +69,12 @@ function editablePolicy(value: unknown): value is Schema["Policy"] {
 }
 export function ProjectForm({
   project,
+  formId,
   pending,
   onSubmit,
 }: {
   project?: Project;
+  formId?: string;
   pending: boolean;
   onSubmit: (body: Schema["ProjectCreate"]) => void;
 }) {
@@ -135,7 +137,7 @@ export function ProjectForm({
     }
   }
   return (
-    <form onSubmit={submit} className="form-grid">
+    <form id={formId} onSubmit={submit} className="form-grid project-form">
       <label>
         프로젝트 이름
         <input
@@ -295,9 +297,17 @@ export function ProjectForm({
           {error}
         </p>
       )}
-      <Button type="submit" disabled={pending}>
-        {pending ? "저장 중…" : project ? "변경 사항 저장" : "프로젝트 등록"}
-      </Button>
+      {!formId && (
+        <div className="form-action-bar project-form-actions">
+          <Button type="submit" disabled={pending}>
+            {pending
+              ? "저장 중…"
+              : project
+                ? "변경 사항 저장"
+                : "프로젝트 등록"}
+          </Button>
+        </div>
+      )}
     </form>
   );
 }

@@ -1,3 +1,5 @@
+import { ProjectDetailPage } from "../src/pages/ProjectDetailPage";
+import { ProjectsPage } from "../src/pages/ProjectsPage";
 import { useState } from "react";
 import {
   act,
@@ -554,10 +556,10 @@ it("작업 목록에 요청일시와 완료일시 및 미기록 표시를 제공
   expect(screen.getByRole("columnheader", { name: "완료일시" })).toBeVisible();
   expect(
     document.querySelector(`time[datetime="${created_at}"]`),
-  ).toHaveTextContent(new Date(created_at).toLocaleString("ko-KR"));
+  ).toHaveAttribute("title", new Date(created_at).toLocaleString("ko-KR"));
   expect(
     document.querySelector(`time[datetime="${completed_at}"]`),
-  ).toHaveTextContent(new Date(completed_at).toLocaleString("ko-KR"));
+  ).toHaveAttribute("title", new Date(completed_at).toLocaleString("ko-KR"));
   expect(screen.getByRole("row", { name: /pending/ })).toHaveTextContent("—");
 });
 
@@ -752,5 +754,67 @@ it("승인 요약 카드의 묶음 필터가 두 상태의 다음 페이지까�
   expect(screen.getByRole("link", { name: /등록 프로젝트/ })).toHaveAttribute(
     "href",
     "/projects",
+  );
+});
+
+it("프로젝트 설정 탭을 이동해도 편집 중인 정책을 유지한다", async () => {
+  vi.spyOn(api, "project").mockResolvedValue(p);
+  vi.spyOn(api, "gitSettings").mockResolvedValue({
+    remote: "",
+    remote_url: null,
+    account: "",
+    token_registered: false,
+    version: "1",
+    remotes: [],
+    test: null,
+  });
+  wrap(
+    <Routes>
+      <Route path="/projects/:id" element={<ProjectDetailPage />} />
+    </Routes>,
+    "/projects/prj-1",
+  );
+  const input = await screen.findByLabelText("프로젝트 이름");
+  await userEvent.clear(input);
+  await userEvent.type(input, "수정 중 이름");
+  await userEvent.click(screen.getByRole("tab", { name: "Git 계정·인증" }));
+  expect(input).not.toBeVisible();
+  await userEvent.click(
+    screen.getByRole("tab", { name: "기본 정보·실행 정책" }),
+  );
+  expect(input).toBeVisible();
+  expect(input).toHaveValue("수정 중 이름");
+});
+it("등록 대화상자의 하단 버튼으로 연결된 프로젝트 폼을 제출한다", async () => {
+  vi.spyOn(api, "projects").mockResolvedValue({
+    items: [],
+    has_more: false,
+    next_cursor: null,
+  });
+  const create = vi.spyOn(api, "createProject").mockResolvedValue(p);
+  wrap(<ProjectsPage />);
+  await userEvent.click(
+    await screen.findByRole("button", { name: "프로젝트 등록" }),
+  );
+  await userEvent.type(screen.getByLabelText("프로젝트 이름"), "등록 예제");
+  await userEvent.type(
+    screen.getByLabelText("저장소 절대 경로"),
+    "/projects/example",
+  );
+  await userEvent.click(screen.getByText("고급 설정 · 정책 JSON 직접 편집"));
+  fireEvent.change(screen.getByLabelText("테스트·리뷰 정책 (JSON)"), {
+    target: { value: JSON.stringify(initialPolicy) },
+  });
+  await userEvent.click(
+    screen.getAllByRole("button", { name: "프로젝트 등록" }).at(-1)!,
+  );
+  await waitFor(() =>
+    expect(create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        name: "등록 예제",
+        repository_path: "/projects/example",
+      }),
+      expect.anything(),
+    ),
   );
 });

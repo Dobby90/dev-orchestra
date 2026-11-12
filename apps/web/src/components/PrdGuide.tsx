@@ -27,7 +27,7 @@ export function PrdGuide() {
       open={open}
       onOpenChange={setOpen}
       trigger={
-        <Button type="button" variant="secondary">
+        <Button className="prd-guide-button" type="button" variant="ghost">
           PRD 작성 가이드
         </Button>
       }
