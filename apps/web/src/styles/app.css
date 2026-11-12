@@ -737,6 +737,15 @@ fieldset {
 .agent-options .help {
   grid-column: 1 / -1;
 }
+.agent-default-panel {
+  padding: 16px;
+  background: var(--accent-soft);
+  border-radius: 8px;
+}
+.agent-default-row {
+  padding: 0;
+  border: 0;
+}
 @media (max-width: 600px) {
   .agent-options {
     grid-template-columns: 1fr;
@@ -2075,11 +2084,6 @@ dd {
   .agent-options {
     grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
     gap: 8px 16px;
-  }
-  .agent-default-row {
-    padding: 16px;
-    background: var(--accent-soft);
-    border-radius: 8px;
   }
   .agent-role-row {
     position: relative;
