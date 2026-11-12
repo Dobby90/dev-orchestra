@@ -5,7 +5,7 @@ import { Button } from "./ui/button";
 import { Modal } from "./ui/dialog";
 import { DirectoryPicker } from "./DirectoryPicker";
 import { ValidationEditor } from "./ValidationEditor";
-export const initialPolicy = {
+export const initialPolicy: Schema["Policy"] = {
   tests: {
     commands: {
       unit: {
