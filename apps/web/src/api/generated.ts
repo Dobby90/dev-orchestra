@@ -1504,6 +1504,7 @@ export interface components {
         };
         /** PreviewView */
         PreviewView: {
+            resolved_validation?: components["schemas"]["Tests"] | null;
             agent_settings?: components["schemas"]["AgentSettings"] | null;
             /**
              * Test Scope

@@ -738,6 +738,7 @@ for args in [('init','-b','main'),('config','user.name','GUI 검사'),('config',
   await page.getByRole("button", { name: "저장소 확인", exact: true }).click();
   await expect(page.getByText("Git 저장소 확인 완료")).toBeVisible();
   await page.getByRole("button", { name: "다음", exact: true }).click();
+  await page.getByText("고급 설정 · 검증 직접 설정", { exact: true }).click();
   await page.getByRole("button", { name: "검증 자동 감지" }).click();
   await expect(
     page.getByRole("heading", { name: "감지된 검증 후보" }),

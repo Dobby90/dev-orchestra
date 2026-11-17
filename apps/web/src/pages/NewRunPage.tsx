@@ -138,7 +138,9 @@ export function NewRunPage() {
   }
   const choices = projects.data?.pages.flatMap((p) => p.items) ?? [];
   const validationCommands = Object.entries(
-    selected.data?.policy.tests.commands ?? {},
+    preview.data?.receipt.resolved_validation?.commands ??
+      selected.data?.policy.tests.commands ??
+      {},
   );
   const testCount = validationCommands.filter(
     ([, command]) => (command.kind ?? "test") === "test",
@@ -428,8 +430,9 @@ export function NewRunPage() {
               <section>
                 <h3>검증 설정</h3>
                 <p className="help">
-                  테스트 {testCount}개 · 빌드·정적 검사{" "}
-                  {validationCommands.length - testCount}개
+                  {validationCommands.length
+                    ? `테스트 ${testCount}개 · 빌드·정적 검사 ${validationCommands.length - testCount}개`
+                    : "자동 설정 · 실행 전 확인에서 기존 테스트 재사용 또는 테스트 환경 구성 계획을 확인합니다."}
                 </p>
                 <details key={selected.data.id}>
                   <summary>

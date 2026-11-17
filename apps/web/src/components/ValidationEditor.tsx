@@ -203,8 +203,8 @@ export function ValidationEditor({
       )}
       {Object.entries(value.commands ?? {}).length === 0 && (
         <p className="notice">
-          검증을 자동 감지하거나 도구를 직접 선택하세요. 테스트 검증이 하나 이상
-          필요합니다.
+          비워 두면 새 작업에서 검증을 자동 설정합니다. 직접 지정하려면 감지한
+          후보를 적용하거나 도구를 선택하세요.
         </p>
       )}
       {Object.entries(value.commands ?? {}).map(([id, command]) => (

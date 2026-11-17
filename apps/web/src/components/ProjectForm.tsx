@@ -215,6 +215,7 @@ export function ProjectForm({
       const value = JSON.parse(policy);
       if (!editablePolicy(value)) throw new Error();
       if (
+        Object.keys(value.tests.commands ?? {}).length > 0 &&
         !Object.values(value.tests.commands ?? {}).some(
           (c) => ((c as Schema["TestCommand"]).kind ?? "test") === "test",
         )
@@ -352,7 +353,15 @@ export function ProjectForm({
         hidden={step === 1}
         disabled={pending || step === 1}
       >
-        <legend>2 · 검증 정책</legend>
+        <legend>2 · 검증 설정</legend>
+        <p className="notice">
+          {Object.keys(parsed?.tests.commands ?? {}).length
+            ? "직접 지정한 검증 설정을 사용합니다."
+            : "자동 설정: 기존 테스트를 재사용하고, 테스트가 없으면 첫 작업에서 테스트 환경과 테스트를 구성합니다."}
+        </p>
+        <p className="help">
+          검증 명령과 테스트 경로는 새 작업의 실행 전 확인에서 확정합니다.
+        </p>
         {stale && (
           <label className="notice check-row">
             <input
@@ -365,16 +374,31 @@ export function ProjectForm({
         )}
         {parsed?.tests && (
           <>
-            <ValidationEditor
-              key={`${path}\0${base}`}
-              path={path}
-              base={base}
-              value={parsed.tests}
-              onChange={(tests) => {
-                if (!stale) setPolicySource(`${path}\0${base}`);
-                changePolicy({ tests });
-              }}
-            />
+            <details>
+              <summary>고급 설정 · 검증 직접 설정</summary>
+              <Button
+                type="button"
+                variant="secondary"
+                onClick={() => {
+                  setPolicySource(`${path}\0${base}`);
+                  changePolicy({
+                    tests: { commands: {}, write_paths: [], output_paths: [] },
+                  });
+                }}
+              >
+                자동 설정 사용
+              </Button>
+              <ValidationEditor
+                key={`${path}\0${base}`}
+                path={path}
+                base={base}
+                value={parsed.tests}
+                onChange={(tests) => {
+                  if (!stale) setPolicySource(`${path}\0${base}`);
+                  changePolicy({ tests });
+                }}
+              />
+            </details>
             <label>
               자동 수정 최대 횟수
               <input
@@ -448,10 +472,10 @@ export function ProjectForm({
             <dl>
               <dt>tests.commands</dt>
               <dd>
-                테스트 명령을 하나 이상 등록합니다. 명령 ID는
-                영문·숫자·밑줄·하이픈을 사용합니다. argv는 실행 파일과 인자를
-                나눈 배열이며 셸 문법은 사용할 수 없습니다. 실행 파일은 대상
-                프로젝트 환경에 맞게 지정하세요.
+                비워 두면 자동 설정합니다. 직접 지정할 때는 테스트 명령을 하나
+                이상 등록합니다. 명령 ID는 영문·숫자·밑줄·하이픈을 사용합니다.
+                argv는 실행 파일과 인자를 나눈 배열이며 셸 문법은 사용할 수
+                없습니다. 실행 파일은 대상 프로젝트 환경에 맞게 지정하세요.
               </dd>
               <dt>timeout_seconds · junit_report</dt>
               <dd>
