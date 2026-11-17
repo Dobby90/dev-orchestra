@@ -74,11 +74,6 @@ export const api = {
   dashboard: () => request<Schema["DashboardView"]>("/dashboard"),
   validationProfiles: () =>
     request<Schema["ValidationCandidate"][]>("/validation-profiles"),
-  detectValidation: (body: Schema["ValidationDetectInput"]) =>
-    request<Schema["ValidationDetection"]>("/project-validation/detect", {
-      method: "POST",
-      body: JSON.stringify(body),
-    }),
   directories: (path?: string) =>
     request<Schema["DirectoryView"]>("/project-directories", {
       method: "POST",

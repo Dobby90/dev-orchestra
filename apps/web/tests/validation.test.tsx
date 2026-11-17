@@ -24,19 +24,6 @@ const unit: Schema["ValidationCandidate"] = {
   write_paths: ["tests"],
   output_paths: ["build"],
 };
-const build: Schema["ValidationCandidate"] = {
-  ...unit,
-  id: "build_2",
-  label: ". · build",
-  command: {
-    ...unit.command,
-    kind: "check",
-    argv: ["npm", "run", "build"],
-    junit_report: null,
-  },
-  write_paths: [],
-  output_paths: ["dist"],
-};
 function mount(onSubmit = vi.fn()) {
   render(
     <QueryClientProvider client={createQueryClient()}>
@@ -48,62 +35,67 @@ function mount(onSubmit = vi.fn()) {
   return onSubmit;
 }
 
-it("pytest를 기본 적용하지 않고 감지 결과를 선택해 JSON 편집 없이 저장한다", async () => {
-  const detect = vi.spyOn(api, "detectValidation").mockResolvedValue({
-    base_sha: "a".repeat(40),
-    candidates: [unit, build],
-    warnings: [],
-  });
+it("자동 설정으로 등록할 때 수동 감지나 도구 선택이 필요하지 않다", async () => {
+  const profiles = vi.spyOn(api, "validationProfiles");
   const submit = mount();
-  expect(screen.queryByLabelText("실행 파일 (unit)")).not.toBeInTheDocument();
-  await userEvent.type(screen.getByLabelText("프로젝트 이름"), "Node 프로젝트");
+  await userEvent.type(screen.getByLabelText("프로젝트 이름"), "자동 프로젝트");
   await userEvent.type(
     screen.getByLabelText("저장소 절대 경로"),
     "/tmp/example",
   );
-  await userEvent.click(screen.getByRole("button", { name: "검증 자동 감지" }));
+  await userEvent.click(screen.getByText("고급 설정 · 검증 직접 설정"));
   expect(
-    (await screen.findAllByText(/감지 근거: package.json/))[0],
-  ).toBeVisible();
-  expect(detect).toHaveBeenCalledWith({
-    repository_path: "/tmp/example",
-    base_branch: "main",
-  });
-  expect(
-    screen.queryByLabelText("실행 파일 (node-test_1)"),
+    screen.queryByRole("button", { name: /감지/ }),
   ).not.toBeInTheDocument();
-  await userEvent.click(
-    screen.getByRole("button", { name: "선택한 검증 적용" }),
-  );
-  expect(screen.getByLabelText("실행 파일 (node-test_1)")).toHaveValue("npm");
+  expect(screen.queryByText("감지된 검증 후보")).not.toBeInTheDocument();
+  expect(profiles).not.toHaveBeenCalled();
   await userEvent.click(screen.getByRole("button", { name: "프로젝트 등록" }));
   expect(submit).toHaveBeenCalledWith(
     expect.objectContaining({
       policy: expect.objectContaining({
-        tests: expect.objectContaining({
-          commands: { [unit.id]: unit.command, [build.id]: build.command },
-          output_paths: ["build", "dist"],
-        }),
+        tests: { commands: {}, write_paths: [], output_paths: [] },
       }),
     }),
   );
 });
 
-it("빌드만 선택하면 적용을 차단하고 저장되지 않은 감지 결과는 경로 변경 시 폐기한다", async () => {
-  vi.spyOn(api, "detectValidation").mockResolvedValue({
-    base_sha: "a",
-    candidates: [unit, build],
-    warnings: [],
-  });
-  mount();
-  await userEvent.type(screen.getByLabelText("저장소 절대 경로"), "/tmp/a");
-  await userEvent.click(screen.getByRole("button", { name: "검증 자동 감지" }));
-  await userEvent.click(await screen.findByLabelText(unit.label));
+it("프로젝트 수정에서 기존 직접 설정을 유지하고 자동 설정으로 전환할 수 있다", async () => {
+  const submit = vi.fn();
+  render(
+    <MemoryRouter>
+      <ProjectForm
+        pending={false}
+        project={
+          {
+            id: "p1",
+            name: "기존 프로젝트",
+            repository_path: "/tmp/example",
+            default_base_branch: "main",
+            policy: initialPolicy,
+            version: 1,
+          } as Schema["ProjectView"]
+        }
+        onSubmit={submit}
+      />
+    </MemoryRouter>,
+  );
   expect(
-    screen.getByRole("button", { name: "선택한 검증 적용" }),
-  ).toBeDisabled();
-  await userEvent.type(screen.getByLabelText("저장소 절대 경로"), "b");
-  expect(screen.queryByText("감지된 검증 후보")).not.toBeInTheDocument();
+    screen.queryByRole("button", { name: /감지/ }),
+  ).not.toBeInTheDocument();
+  await userEvent.click(screen.getByRole("button", { name: "변경 사항 저장" }));
+  expect(submit).toHaveBeenLastCalledWith(
+    expect.objectContaining({ policy: initialPolicy }),
+  );
+  await userEvent.click(screen.getByText("고급 설정 · 검증 직접 설정"));
+  await userEvent.click(screen.getByRole("button", { name: "자동 설정 사용" }));
+  await userEvent.click(screen.getByRole("button", { name: "변경 사항 저장" }));
+  expect(submit).toHaveBeenLastCalledWith(
+    expect.objectContaining({
+      policy: expect.objectContaining({
+        tests: { commands: {}, write_paths: [], output_paths: [] },
+      }),
+    }),
+  );
 });
 
 it("Java 도구를 직접 선택하고 명령·보고서 경로를 폼으로 수정한다", async () => {
@@ -126,6 +118,7 @@ it("Java 도구를 직접 선택하고 명령·보고서 경로를 폼으로 수
     screen.getByLabelText("저장소 절대 경로"),
     "/tmp/example",
   );
+  await userEvent.click(screen.getByText("고급 설정 · 검증 직접 설정"));
   await userEvent.click(screen.getByRole("button", { name: "도구 직접 선택" }));
   await userEvent.selectOptions(
     await screen.findByRole("combobox", { name: /추가할 검증 도구/ }),
@@ -150,7 +143,7 @@ it("Java 도구를 직접 선택하고 명령·보고서 경로를 폼으로 수
   expect(screen.getByText(/기존 작업의 재개/)).toBeVisible();
 });
 
-it("빈 정책은 제출을 막고 고급 JSON 편집은 유지한다", async () => {
+it("자동 설정으로 등록하고 고급 JSON 편집도 유지한다", async () => {
   const submit = mount();
   await userEvent.type(screen.getByLabelText("프로젝트 이름"), "프로젝트");
   await userEvent.type(
@@ -158,10 +151,14 @@ it("빈 정책은 제출을 막고 고급 JSON 편집은 유지한다", async ()
     "/tmp/example",
   );
   await userEvent.click(screen.getByRole("button", { name: "프로젝트 등록" }));
-  expect(await screen.findByRole("alert")).toHaveTextContent(
-    "테스트 검증을 하나 이상",
+  expect(submit).toHaveBeenCalledWith(
+    expect.objectContaining({
+      policy: expect.objectContaining({
+        tests: { commands: {}, write_paths: [], output_paths: [] },
+      }),
+    }),
   );
-  expect(submit).not.toHaveBeenCalled();
+  submit.mockClear();
   await userEvent.click(screen.getByText("고급 설정 · 정책 JSON 직접 편집"));
   fireEvent.change(screen.getByLabelText("테스트·리뷰 정책 (JSON)"), {
     target: { value: JSON.stringify(initialPolicy) },

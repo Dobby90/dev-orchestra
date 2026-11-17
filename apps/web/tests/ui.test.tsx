@@ -424,6 +424,7 @@ describe("화면·위험 명령", () => {
   it("정책 가이드를 열고 Escape로 닫아도 폼을 제출하지 않는다", async () => {
     const onSubmit = vi.fn();
     wrap(<ProjectForm pending={false} onSubmit={onSubmit} />);
+    await userEvent.click(screen.getByText("고급 설정 · 정책 JSON 직접 편집"));
     await userEvent.click(
       screen.getByRole("button", { name: "정책 JSON 작성 가이드" }),
     );
@@ -1035,13 +1036,11 @@ it("새 작업의 프로젝트를 바꿔도 이전 연결 테스트 결과가 �
 });
 
 it("프로젝트 수정에서 브랜치를 조회해도 기존 선택을 유지하고 변경 시 정책을 재확인한다", async () => {
-  const inspect = vi
-    .spyOn(api, "inspectRepository")
-    .mockResolvedValue({
-      repository_path: p.repository_path,
-      branches: ["main", "develop"],
-      default_branch: "develop",
-    });
+  const inspect = vi.spyOn(api, "inspectRepository").mockResolvedValue({
+    repository_path: p.repository_path,
+    branches: ["main", "develop"],
+    default_branch: "develop",
+  });
   const submit = vi.fn();
   wrap(
     <ProjectForm

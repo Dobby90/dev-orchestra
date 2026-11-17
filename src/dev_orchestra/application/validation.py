@@ -5,6 +5,7 @@ import platform
 import posixpath
 import re
 import shlex
+import sys
 from pathlib import Path, PurePosixPath
 
 from dev_orchestra.application.errors import ApplicationError
@@ -526,9 +527,111 @@ def script_identity(argv):
     return None
 
 
-def complete_run_validation(config, info):
+def automatic_validation(info, spec=""):
+    """Resolve automatic policy from the committed tree before freezing the Run."""
+    from dev_orchestra.config import Tests
+
+    detected = detect_validation(info)
+    items = list(detected.candidates)
+    if not any(item.command.kind == "test" for item in items):
+        files = (
+            Git(info.repository_path)
+            .call("ls-tree", "-r", "--name-only", info.base_sha)
+            .splitlines()
+        )
+        packages = sorted(p for p in files if PurePosixPath(p).name == "package.json")
+        node_sources = any(
+            PurePosixPath(p).suffix in {".js", ".cjs", ".mjs", ".ts", ".tsx", ".jsx"} for p in files
+        )
+        if (
+            packages
+            or node_sources
+            or re.search(
+                r"\b(node|javascript|typescript|react|vue|next\.?js)\b|자바스크립트|타입스크립트|리액트",
+                spec,
+                re.I,
+            )
+        ):
+            directories = [str(PurePosixPath(p).parent) for p in packages] or ["."]
+            for index, directory in enumerate(directories):
+                item = candidate("node-test", directory)
+                item.id = f"bootstrap_node_{index}"
+                item.command.argv = [
+                    "node",
+                    "--test",
+                    "--test-reporter=junit",
+                    "--test-reporter-destination=build/unit.xml",
+                ]
+                manifest = str(PurePosixPath(directory) / "package.json")
+                if manifest in files:
+                    raw = Git(info.repository_path).call("show", f"{info.base_sha}:{manifest}")
+                    try:
+                        package = json.loads(raw)
+                        deps = package.get("devDependencies", {}) | package.get("dependencies", {})
+                    except (ValueError, TypeError, AttributeError):
+                        deps = {}
+                    if "vitest" in deps:
+                        item.id = f"bootstrap_vitest_{index}"
+                        item.command.argv = [
+                            "npm",
+                            "exec",
+                            "--no",
+                            "--",
+                            "vitest",
+                            "run",
+                            "--no-cache",
+                            "--reporter=junit",
+                            "--outputFile=build/unit.xml",
+                        ]
+                        prefix = "" if directory == "." else directory + "/"
+                        item.output_paths += [prefix + "node_modules/.vite-temp"]
+                typescript = any(PurePosixPath(p).suffix in {".ts", ".tsx"} for p in files) or bool(
+                    re.search(r"typescript|타입스크립트", spec, re.I)
+                )
+                if typescript and item.id.startswith("bootstrap_node_"):
+                    item.command.argv.insert(1, "--experimental-transform-types")
+                item.warnings = []
+                items.append(item)
+        elif any(PurePosixPath(p).suffix == ".java" for p in files) or re.search(
+            r"\bjava\b|자바(?!스크립트)", spec, re.I
+        ):
+            from dev_orchestra.infrastructure import java_bootstrap
+            from dev_orchestra.infrastructure.java import choose_project_jdk
+
+            item = candidate("pytest")
+            item.id = "bootstrap_java"
+            item.command.argv = [sys.executable, str(Path(java_bootstrap.__file__).resolve())]
+            item.command.junit_report = "build/junit.xml"
+            item.write_paths = ["src/test/java"]
+            item.output_paths = ["build"]
+            jdk = choose_project_jdk(lambda name: None)
+            if jdk:
+                item.command.env["JAVA_HOME"] = jdk
+            item.warnings = []
+            items.append(item)
+        else:
+            # A dependency-free baseline also works for an otherwise empty repository.
+            from dev_orchestra.infrastructure import unittest_bootstrap
+
+            item = candidate("pytest")
+            item.id = "bootstrap_unittest"
+            item.command.argv = [sys.executable, str(Path(unittest_bootstrap.__file__).resolve())]
+            item.command.junit_report = "build/junit.xml"
+            item.output_paths = ["build"]
+            item.warnings = []
+            items.append(item)
+    return Tests(
+        commands={item.id: item.command for item in items},
+        write_paths=list(dict.fromkeys(p for item in items for p in item.write_paths)),
+        output_paths=list(dict.fromkeys(p for item in items for p in item.output_paths)),
+    )
+
+
+def complete_run_validation(config, info, spec=""):
     """Complete derived outputs before freezing a new Run; never edit saved policies."""
     snapshot = config.model_copy(deep=True)
+    if not snapshot.tests.commands:
+        snapshot.tests = automatic_validation(info, spec)
     java_commands = [c for c in snapshot.tests.commands.values() if java_tool(c)]
     for command in java_commands:
         complete_java_command(command, snapshot.tests.output_paths, info)

@@ -194,7 +194,7 @@ class BackendService:
         info = self.projects.validate_repository(Path(p["repository_path"]), base)
         from dev_orchestra.application.validation import complete_run_validation
 
-        config = complete_run_validation(config, info)
+        config = complete_run_validation(config, info, self.spec_text(proposal.spec))
         rid = "run-" + uuid.uuid4().hex[:16]
         branch = proposal.feature_branch or config.project.branch_prefix + "/" + rid
         if not branch.startswith(config.project.branch_prefix + "/"):
@@ -224,6 +224,7 @@ class BackendService:
         token = raw + "." + hmac.new(self.key, raw.encode(), hashlib.sha256).hexdigest()
         return {
             **value,
+            "resolved_validation": config.tests.model_dump(mode="json"),
             "test_scope": proposal.test_scope,
             "test_scope_notice": (
                 "모델이 변경 코드와 관련 테스트를 분석해 자동 선택합니다. 필요한 경우 관련 모듈로 범위를 확대하고 이유를 기록합니다."

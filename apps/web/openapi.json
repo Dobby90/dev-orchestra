@@ -4562,6 +4562,16 @@
       },
       "PreviewView": {
         "properties": {
+          "resolved_validation": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Tests"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "agent_settings": {
             "anyOf": [
               {

@@ -9,41 +9,16 @@ type Candidate = Schema["ValidationCandidate"];
 const lines = (value: string) => value.split("\n").filter((v) => v.trim());
 
 export function ValidationEditor({
-  path,
-  base,
   value,
   onChange,
 }: {
-  path: string;
-  base: string;
   value: Tests;
   onChange: (value: Tests) => void;
 }) {
-  const [detection, setDetection] = useState<
-    Schema["ValidationDetection"] | null
-  >(null);
-  const [selected, setSelected] = useState<string[]>([]);
   const [profiles, setProfiles] = useState<Candidate[]>([]);
   const [busy, setBusy] = useState(false);
   const [notices, setNotices] = useState<string[]>([]);
   const [error, setError] = useState<Error | null>(null);
-  async function detect() {
-    setBusy(true);
-    setError(null);
-    setDetection(null);
-    try {
-      const result = await api.detectValidation({
-        repository_path: path,
-        base_branch: base,
-      });
-      setDetection(result);
-      setSelected(result.candidates.map((c) => c.id));
-    } catch (e) {
-      setError(e as Error);
-    } finally {
-      setBusy(false);
-    }
-  }
   async function manual() {
     setError(null);
     setBusy(true);
@@ -55,10 +30,9 @@ export function ValidationEditor({
       setBusy(false);
     }
   }
-  function apply(candidates: Candidate[], replace = false) {
+  function apply(candidates: Candidate[]) {
     setNotices([...new Set(candidates.flatMap((c) => c.warnings ?? []))]);
-    if (replace) setDetection(null);
-    const commands = replace ? {} : { ...value.commands };
+    const commands = { ...value.commands };
     for (const c of candidates) {
       let key = c.id;
       for (let n = 2; key in commands; n++) key = `${c.id}_${n}`;
@@ -68,13 +42,13 @@ export function ValidationEditor({
       commands,
       write_paths: [
         ...new Set([
-          ...(replace ? [] : (value.write_paths ?? [])),
+          ...(value.write_paths ?? []),
           ...candidates.flatMap((c) => c.write_paths),
         ]),
       ],
       output_paths: [
         ...new Set([
-          ...(replace ? [] : (value.output_paths ?? [])),
+          ...(value.output_paths ?? []),
           ...candidates.flatMap((c) => c.output_paths),
         ]),
       ],
@@ -92,18 +66,10 @@ export function ValidationEditor({
     <fieldset className="validation-editor">
       <legend>프로젝트 검증</legend>
       <p className="help">
-        기준 브랜치의 설정을 읽어 추천합니다. 감지 과정에서는 프로젝트 명령을
-        실행하지 않습니다.
+        기존 테스트는 새 작업에서 자동으로 재사용합니다. 실행 명령을 직접
+        지정해야 하는 경우에만 아래 설정을 변경하세요.
       </p>
       <div className="inline-actions">
-        <Button
-          type="button"
-          variant="secondary"
-          disabled={!path || !base || busy}
-          onClick={detect}
-        >
-          {busy ? "확인 중…" : detection ? "다시 감지" : "검증 자동 감지"}
-        </Button>
         <Button
           type="button"
           variant="secondary"
@@ -141,70 +107,10 @@ export function ValidationEditor({
           </span>
         </label>
       )}
-      {detection && (
-        <section className="notice validation-candidates">
-          <h3>감지된 검증 후보</h3>
-          <p className="help mono path">기준 커밋 {detection.base_sha}</p>
-          {detection.warnings.map((w, i) => (
-            <p key={i}>{w}</p>
-          ))}
-          {detection.candidates.map((c) => (
-            <div key={c.id}>
-              <label className="check-row">
-                <input
-                  type="checkbox"
-                  checked={selected.includes(c.id)}
-                  onChange={(e) =>
-                    setSelected(
-                      e.target.checked
-                        ? [...selected, c.id]
-                        : selected.filter((id) => id !== c.id),
-                    )
-                  }
-                />
-                {c.label}
-              </label>
-              <p className="help">감지 근거: {(c.evidence ?? []).join(", ")}</p>
-              <pre>{c.command.argv.join(" ")}</pre>
-              {(c.warnings ?? []).map((w, i) => (
-                <p className="help" key={i}>
-                  {w}
-                </p>
-              ))}
-            </div>
-          ))}
-          {detection.candidates.length > 0 && (
-            <>
-              <p className="help">
-                적용하면 아래 검증 목록과 테스트·출력 경로를 선택한 후보로
-                교체합니다. 저장 전까지 프로젝트 정책은 변경되지 않습니다.
-              </p>
-              <Button
-                type="button"
-                disabled={
-                  !detection.candidates.some(
-                    (c) =>
-                      selected.includes(c.id) &&
-                      (c.command.kind ?? "test") === "test",
-                  )
-                }
-                onClick={() =>
-                  apply(
-                    detection.candidates.filter((c) => selected.includes(c.id)),
-                    true,
-                  )
-                }
-              >
-                선택한 검증 적용
-              </Button>
-            </>
-          )}
-        </section>
-      )}
       {Object.entries(value.commands ?? {}).length === 0 && (
         <p className="notice">
-          검증을 자동 감지하거나 도구를 직접 선택하세요. 테스트 검증이 하나 이상
-          필요합니다.
+          비워 두면 새 작업에서 검증을 자동 설정합니다. 직접 지정하려면 도구를
+          선택하세요.
         </p>
       )}
       {Object.entries(value.commands ?? {}).map(([id, command]) => (

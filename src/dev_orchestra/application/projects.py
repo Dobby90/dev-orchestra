@@ -81,8 +81,6 @@ class ProjectService:
 
     def validate_policy(self, config: Config) -> Config:
         snapshot = Config.model_validate(config.model_dump())
-        if not snapshot.tests.commands:
-            raise ApplicationError("TESTS_REQUIRED", "configure at least one test command")
         if not {"critical", "high"} <= set(snapshot.review.blocking_severities):
             raise ApplicationError(
                 "BLOCKING_POLICY_REQUIRED", "critical and high must block approval"

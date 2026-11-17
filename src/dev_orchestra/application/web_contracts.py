@@ -350,6 +350,7 @@ class SpecContent(BaseModel):
 
 
 class PreviewView(BaseModel):
+    resolved_validation: Tests | None = None
     agent_settings: AgentSettings | None = None
     test_scope: Literal["full", "affected"] = "full"
     test_scope_notice: str = ""

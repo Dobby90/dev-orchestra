@@ -67,16 +67,13 @@ class RunService:
         if max_fixes is not None:
             config.workflow.max_fix_attempts = max_fixes
         config = Config.model_validate(config.model_dump())
-        if not config.tests.commands:
-            raise PipelineError(
-                "configure tests.commands with argv and junit_report before running"
-            )
         repo = repo.expanduser().resolve(strict=True)
         git = Git(repo)
         base = base or config.project.default_base_branch
         sha = git.baseline(base)
         from dev_orchestra.application.validation import complete_run_validation
 
+        spec_text = spec.expanduser().resolve(strict=True).read_text()
         config = complete_run_validation(
             config,
             RepositoryInfo(
@@ -85,8 +82,8 @@ class RunService:
                 base_branch=base,
                 base_sha=sha,
             ),
+            spec_text,
         )
-        spec_text = spec.expanduser().resolve(strict=True).read_text()
         if not spec_text.strip():
             raise PipelineError("PRD must not be empty")
         run_id = run_id or "run-" + uuid.uuid4().hex[:16]
