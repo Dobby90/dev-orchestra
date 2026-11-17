@@ -1702,18 +1702,12 @@ dd {
   height: 16px;
   flex-shrink: 0;
 }
-.validation-candidates,
 .validation-help {
   display: block;
 }
-.validation-candidates pre,
 .policy-summary pre {
   white-space: pre-wrap;
   overflow-wrap: anywhere;
-}
-.validation-candidates > div {
-  padding: 12px 0;
-  border-bottom: 1px solid var(--border);
 }
 
 .status-large {

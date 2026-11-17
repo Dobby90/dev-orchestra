@@ -706,7 +706,7 @@ test("CLI 시작·브라우저 종료·재접속·CLI 승인과 GUI 생성 교�
   ).toBe(f.base_sha);
 });
 
-test("검증 자동 감지: Node·Java 후보를 JSON 편집 없이 선택·저장한다", async ({
+test("자동 검증으로 등록하고 수정 화면에서 직접 설정을 저장한다", async ({
   page,
 }) => {
   const f = fixture();
@@ -738,18 +738,9 @@ for args in [('init','-b','main'),('config','user.name','GUI 검사'),('config',
   await page.getByRole("button", { name: "저장소 확인", exact: true }).click();
   await expect(page.getByText("Git 저장소 확인 완료")).toBeVisible();
   await page.getByRole("button", { name: "다음", exact: true }).click();
-  await page.getByText("고급 설정 · 검증 직접 설정", { exact: true }).click();
-  await page.getByRole("button", { name: "검증 자동 감지" }).click();
   await expect(
-    page.getByRole("heading", { name: "감지된 검증 후보" }),
-  ).toBeVisible();
-  await expect(
-    page.getByLabel("service · Maven 테스트", { exact: true }),
-  ).toBeChecked();
-  await expect(
-    page.getByLabel(". · test:browser (Playwright)", { exact: true }),
-  ).toBeChecked();
-  await page.getByRole("button", { name: "선택한 검증 적용" }).click();
+    page.getByRole("button", { name: "검증 자동 감지" }),
+  ).toHaveCount(0);
   await expect(page.getByText("고급 설정 · 정책 JSON 직접 편집")).toBeVisible();
   expect(
     await page
@@ -802,8 +793,18 @@ for args in [('init','-b','main'),('config','user.name','GUI 검사'),('config',
     path: "test-results/project-branch-loaded.png",
     fullPage: true,
   });
+  await page.getByText("고급 설정 · 검증 직접 설정", { exact: true }).click();
+  await expect(
+    page.getByRole("button", { name: "검증 자동 감지" }),
+  ).toHaveCount(0);
+  await page.getByRole("button", { name: "도구 직접 선택" }).click();
+  await page
+    .getByRole("combobox", { name: "추가할 검증 도구" })
+    .selectOption("maven");
+  await page.getByRole("button", { name: "변경 사항 저장" }).click();
+  await expect(page.getByText("변경 사항을 저장했습니다.")).toBeVisible();
   await page.getByRole("link", { name: "이 프로젝트에서 실행" }).click();
   await expect(page.getByRole("heading", { name: "검증 설정" })).toBeVisible();
   await page.getByText(/검증 명령 .*개 자세히 보기/).click();
-  await expect(page.getByText(/maven-build/).first()).toBeVisible();
+  await expect(page.getByText(/mvn/).first()).toBeVisible();
 });
