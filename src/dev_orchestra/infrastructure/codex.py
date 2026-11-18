@@ -247,7 +247,12 @@ class CodexClient:
                     if request.role == "tester"
                     else ["read_test_evidence"]
                     if request.role == "reviewer"
-                    else ["edit_file", "checkpoint_commit", "workspace_state"]
+                    else [
+                        "edit_file",
+                        "checkpoint_commit",
+                        "prepare_environment",
+                        "workspace_state",
+                    ]
                 ),
             }.items():
                 argv += ["-c", "mcp_servers.workspace." + key + "=" + json.dumps(value)]

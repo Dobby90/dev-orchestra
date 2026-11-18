@@ -119,14 +119,14 @@ def result_markdown(store, run, steps):
     issues = review.get("issue_states", review.get("issues", []))
     content += (
         table(
-            ["심각도", "위치", "상태", "문제", "해결 근거"],
+            ["심각도", "위치", "상태", "문제", "해결 근거·검증 대기 사유"],
             [
                 (
                     i["severity"],
                     f"{i['file']}:{i['line']}",
                     i.get("status", "unresolved"),
                     i["description"],
-                    i.get("resolution_evidence"),
+                    i.get("resolution_evidence") or i.get("status_note"),
                 )
                 for i in issues
             ],

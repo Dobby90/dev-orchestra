@@ -47,6 +47,10 @@ class ReadEvidence(Model):
 
 
 TOOLS = {
+    "prepare_environment": (
+        Empty,
+        "Prepare the declared devorchestra.environment.json Docker toolchain and project dependencies. The host installs tools without project source, disables repository install hooks, and writes genuinely generated new lockfiles through the editor. Does not execute tests or change validation policy. Call after writing manifests and before checkpointing lockfiles.",
+    ),
     "edit_file": (
         EditFile,
         "Write one UTF-8 file now. Supply SHA256 of its current bytes, or null for a new file. Existing tests require file/criterion_ids/reason evidence.",

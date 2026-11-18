@@ -338,6 +338,10 @@ class Runner:
                 }
                 for key in ["plan", "criteria", "test_result", "review_result"]:
                     context[key] = run.get(key)
+                if hasattr(self.tests, "host_tools"):
+                    context["host_tools"] = self.tests.host_tools(
+                        directory / "preflight" / "tools", lambda: self.store.get(run_id)["control"]
+                    )
                 if role == "planner":
                     context["planning_draft"] = run.get("planning_draft")
                 if role == "reviewer":

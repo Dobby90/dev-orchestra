@@ -19,6 +19,7 @@ HOSTS = {
     "registry.yarnpkg.com",
     "repo.maven.apache.org",
     "codeload.github.com",
+    "nodejs.org",
 }
 
 

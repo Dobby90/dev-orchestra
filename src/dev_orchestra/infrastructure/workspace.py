@@ -26,6 +26,7 @@ from dev_orchestra.infrastructure.commit_messages import describe_commit, format
 from dev_orchestra.infrastructure.files import contained, digest, write
 from dev_orchestra.infrastructure.git import Git
 from dev_orchestra.infrastructure.process import redact, sanitize
+from dev_orchestra.infrastructure.secret_files import public_environment_example, secret_path
 from dev_orchestra.infrastructure.store import Store
 
 DEPENDENCIES = {"node_modules", ".venv", "__pycache__", ".mypy_cache", ".ruff_cache"}
@@ -270,6 +271,49 @@ class WorkspaceSession:
         if self.snapshot() != self.data["files"]:
             raise PipelineError("unrecognized workspace changes preserved")
 
+    def prepare_environment(self):
+        """Prepare a declared container toolchain and acknowledge real generated lockfiles."""
+        self.reload()
+        self.guard()
+        if self.data["role"] not in {"developer", "fixer"} or self.data.get("metadata_only"):
+            raise PipelineError(
+                "environment preparation is restricted to active code-changing roles"
+            )
+        if self.data.get("testing"):
+            raise PipelineError("environment preparation is already in progress")
+        from dev_orchestra.infrastructure.containers import prepare_dependencies, specification
+
+        if specification(self.root) is None:
+            raise PipelineError(
+                "declare devorchestra.environment.json before preparing the environment"
+            )
+        self.data["testing"] = True
+        self.save()
+        try:
+            prepared = prepare_dependencies(
+                self.root,
+                Config.model_validate(self.store.get(self.run_id)["config"]).tests,
+                self.path.parent / "environment",
+                lambda: self.store.get(self.run_id)["control"],
+                generate_locks=True,
+            )
+        finally:
+            self.reload()
+            self.data["testing"] = False
+            self.save()
+        self.guard()
+        generated = []
+        for name, content in prepared["generated_lockfiles"].items():
+            current = self.data["files"].get(name)
+            self.edit_file(name, current["hash"] if current else None, content)
+            generated.append({"file": name, "sha256": digest(content.encode())})
+        return {
+            "image_id": prepared["image_id"],
+            "configuration_hash": prepared["configuration_hash"],
+            "generated_lockfiles": generated,
+            "summary": "도구·의존성 준비 완료. 테스트 통과 근거는 이후 Tester가 수집합니다.",
+        }
+
     def edit_file(self, file, expected_hash, content, test_change=None):
         """Replace one UTF-8 file, with CAS and requirement-bound test authorization."""
         self.reload()
@@ -281,9 +325,7 @@ class WorkspaceSession:
         path = contained(self.root, file)
         if str(path.relative_to(self.root)) != file or any(c.isspace() for c in file):
             raise PipelineError("unsupported workspace path")
-        if any(
-            p.startswith(".env") or Path(p).suffix in {".pem", ".key"} for p in Path(file).parts
-        ):
+        if secret_path(file) and not public_environment_example(file, content):
             raise PipelineError("secret file edit denied")
         if in_paths(file, self.data["outputs"]) or dependency_path(file):
             raise PipelineError("output file edits denied")

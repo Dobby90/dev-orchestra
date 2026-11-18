@@ -16,6 +16,19 @@ COMMIT_MESSAGES = (
 
 
 VALIDATION_POLICY = (
+    "For new tooling, prefer compatible versions already listed in host_tools rather than inventing version pins. "
+    "Preserve existing project pins unless an approved requirement changes them. When Docker is available, "
+    "prefer an isolated devorchestra.environment.json toolchain for integration tools such as PostgreSQL, Redis "
+    "or other Debian system packages. If host_tools.docker.ready is true, prepare missing supported tools in "
+    "that environment instead of asking the user to install native DB/Node/package tools. Its schema is "
+    "{schema_version:1,backend:'docker',image:'postgres:17-bookworm',"
+    "node:'<observed exact Node version>',pnpm:'<observed exact pnpm version>',packages:[]}; image must be a versioned official node/python/postgres/redis/mariadb/debian/ubuntu image "
+    "with apt-get support; Node/pnpm are optional exact versions and packages are literal apt package names. "
+    "Developer/Fixer must write manifests then call workspace.prepare_environment for real installation-generated "
+    "lockfiles before committing and finishing. Never fabricate a lockfile. The host builds tool images without "
+    "project source, installs dependencies from copied manifests without repository hooks, and executes the "
+    "unchanged test commands offline with read-only source and existing allowed output paths. Tool installation "
+    "does not prove feature compatibility or successful tests. Missing Docker/Colima must be reported as a prerequisite. "
     "Validation commands are language-independent, host-owned and immutable for this run. "
     "Never replace them with pytest or infer authorization to change them from resume answers. "
     "If repository tooling conflicts with configured commands, identify the conflicting command IDs and files, "

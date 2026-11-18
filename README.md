@@ -172,6 +172,29 @@ GUI의 프로젝트 설정이나 [config.example.yaml](config.example.yaml)을 �
 
 확정된 검증 정책에는 JUnit XML을 만드는 `kind: test` 명령이 하나 이상 필요합니다. 빌드·타입 검사 등은 `kind: check`로 추가할 수 있습니다. 테스트 0건·전체 건너뛰기·보고서 누락은 통과로 처리하지 않습니다. 명령은 셸 문자열 대신 `argv` 배열로 지정합니다.
 
+Node 프로젝트는 `.node-version`, `.nvmrc`, `package.json`의 `engines.node`에 선언된 정확한 버전을 호스트가 확인합니다. 정확한 버전 선언끼리 충돌하면 실행을 중단합니다. 현재 Node가 다르면 fnm에 이미 설치된 해당 버전을 선택하고, 의존성 준비와 테스트 자식 프로세스에 같은 실행 경로를 전달합니다. 버전 범위·별칭은 자동 선택하지 않으며 기존 실행 환경을 사용합니다. 런타임을 자동 설치하거나 로그인 셸 설정을 실행하지 않습니다. 선택한 Node 경로·버전은 preflight 기록에 남깁니다. 필요한 버전이 없으면 호스트에서 `fnm install 24.12.0`처럼 준비한 뒤 재개하세요.
+
+호스트의 `bootstrap_unittest`가 Python으로 시작해도 프로젝트에 `package.json`이 생기면 Node 의존성을 준비합니다. pnpm은 정확한 `packageManager` 버전, 실제 설치로 생성한 `pnpm-lock.yaml`, 호스트에 준비된 오프라인 store가 필요합니다. 호스트는 lockfile에 기록된 workspace 경로만 설치 대상으로 삼고 `--offline --frozen-lockfile --ignore-scripts --ignore-pnpmfile`로 설치합니다. 설치 스크립트가 필요한 패키지는 이 자동 준비 범위를 벗어나므로 호스트에서 별도로 준비해야 합니다. lockfile이나 캐시가 없으면 모델의 수정 회차를 사용하기 전에 `needs_input`으로 안내합니다. 새 프로젝트의 lockfile을 추측 생성하거나 실행 중인 Run의 검증 명령·출력 권한을 바꾸지 않습니다.
+
+비밀값 없는 `.env.example`은 호스트 도구로 작성하고 테스트에서 읽을 수 있습니다. 공개 기본값과 빈 자격 증명 항목만 허용하며 실제 `.env`, 기타 환경 파일과 키 파일은 계속 차단합니다. 리뷰어가 코드 수정을 확인해도 같은 SHA·revision의 테스트 통과 근거가 없으면 이슈는 미해결로 유지하고 검증 대기 사유를 화면과 보고서에 표시합니다.
+
+호스트는 실행 중 관찰한 Node·pnpm·Docker 등의 버전과 로컬 Docker 연결 상태를 역할 에이전트에 전달합니다. 새 프로젝트는 호환되는 설치 버전을 우선 사용하며, 기존 프로젝트의 버전 선언을 임의로 덮어쓰지 않습니다. PostgreSQL·Redis처럼 별도 도구가 필요한 검증은 Colima 등 로컬 Docker를 활용할 수 있습니다. 에이전트가 저장소 루트에 다음과 같은 `devorchestra.environment.json`을 작성하면 호스트가 검증 환경을 준비합니다. 아래 버전은 예시이며 실제 호스트 정보와 프로젝트 호환성에 맞춰 선택합니다.
+
+```json
+{
+  "schema_version": 1,
+  "backend": "docker",
+  "image": "postgres:17-bookworm",
+  "node": "24.12.0",
+  "pnpm": "11.25.0",
+  "packages": ["redis-server"]
+}
+```
+
+`image`는 `node`, `python`, `postgres`, `redis`, `mariadb`, `debian`, `ubuntu`의 버전 태그가 있는 공식 이미지이며 `apt-get`을 지원해야 합니다. `node`·`pnpm`은 선택적인 정확한 버전이고 `packages`는 추가할 Debian 계열 패키지 이름입니다. 도구 이미지에는 Python과 선언한 도구를 자동 설치합니다. Node·pnpm 아카이브는 공식 배포처의 체크섬을 검증하고, 실제 사용한 이미지 ID와 환경 설정 해시를 검증 근거에 남깁니다. Docker와 로컬 daemon은 미리 실행돼 있어야 하며 원격 Docker·임의 호스트 경로·특권 컨테이너는 허용하지 않습니다.
+
+Developer/Fixer는 패키지 설정을 작성한 뒤 `workspace.prepare_environment`로 실제 도구·의존성 설치와 lockfile 생성을 요청합니다. 설치 중에는 프로젝트 소스·사용자 설정·자격 증명을 연결하지 않고 복사한 패키지 명세만 제공하며 저장소 설치 hook은 실행하지 않습니다. 생성되거나 갱신된 lockfile은 기존 호스트 편집·선택 커밋 경계를 거칩니다. 이후 preflight는 고정된 lockfile로 준비하며 Tester는 기존 허용 명령 그대로 컨테이너에서 실행합니다. 테스트 중에는 외부 네트워크·Docker socket을 제공하지 않고 소스를 읽기 전용으로 연결하며 기존 출력 경로와 컨테이너 임시 영역에만 씁니다. DB 서버 등은 테스트 fixture가 컨테이너 내부에서 시작·종료합니다. 호스트는 종료·취소·Worker 중단 시 소유권이 일치하는 컨테이너만 정리하고 정리를 확인할 수 없으면 실행 슬롯 재사용을 차단합니다. 설치 성공과 도구 준비를 기능 검증 통과로 처리하지 않습니다.
+
 테스트 범위의 기본값은 전체 검사(`full`)입니다. 변경 영향 범위 검사(`affected`)는 누적 변경과 인수 조건에 따라 검사를 선택하고 호스트가 검증합니다. CLI에서는 `run --test-scope affected`로 지정합니다. 범위와 정책은 작업 생성 시 고정되며 이후 설정 변경은 새 작업에 적용됩니다.
 
 GUI **설정 → 에이전트 모델 설정**에서 공통·역할별 모델을 지정하고 새 작업에서 해당 작업에만 적용할 값을 바꿀 수 있습니다. 저장한 GUI 모델 설정은 같은 DB를 사용하는 CLI의 새 작업에도 적용되며 YAML의 모델 설정보다 우선합니다.
