@@ -3,11 +3,13 @@
 import json
 import logging
 import os
+from collections import Counter
 from contextlib import nullcontext
 from pathlib import Path
 
 from dev_orchestra.agents.contracts import ResponseError, validate_role
 from dev_orchestra.application.errors import ApplicationError
+from dev_orchestra.application.results import test_case_counts
 from dev_orchestra.application.test_changes import TestChangeService
 from dev_orchestra.application.validation import (
     is_test_source,
@@ -39,6 +41,28 @@ FILES = {
     "reviewer": "review-result.json",
     "fixer": "fix-result.json",
 }
+
+
+def transition_summary(run, target):
+    transition = run["state"], target
+    execution = (run.get("test_result") or {}).get("execution", {})
+    if transition == ("testing", "reviewing"):
+        counts = test_case_counts(execution.get("commands", []))
+        if counts["passed"] is not None:
+            return {"test_cases": counts}
+    if transition == ("reviewing", "fixing") and (review := run.get("review_result")):
+        issues = review.get("issue_states")
+        if issues is None:
+            issues = review.get("issues", [])
+        return {
+            "review_issues": dict(
+                Counter(
+                    i["severity"] for i in issues if i.get("status", "unresolved") == "unresolved"
+                )
+            ),
+            "test_failed": execution.get("passed") is False,
+        }
+    return None
 
 
 class Runner:
@@ -251,7 +275,10 @@ class Runner:
             logging.getLogger(f"devorchestra.{run_id}").info(
                 "Starting %s iteration %s at %s", role, iteration, sha
             )
-            self.store.update(run_id, STATES[role], next_role=role)
+            state = STATES[role]
+            self.store.update(
+                run_id, state, next_role=role, transition_summary=transition_summary(run, state)
+            )
             completed = [
                 s
                 for s in self.store.steps(run_id)

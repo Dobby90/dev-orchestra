@@ -21,6 +21,7 @@ MESSAGES = {
 STATE_TRANSITIONS = """
 WITH transitions AS (
  SELECT id,run_id,timestamp,json_extract(data,'$.state') AS state,
+ json_extract(data,'$.transition_summary') AS transition_summary,
  lag(json_extract(data,'$.state')) OVER (PARTITION BY run_id ORDER BY id) AS previous
  FROM events WHERE kind IN ('state','state.changed')
 )

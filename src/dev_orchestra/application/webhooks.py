@@ -34,7 +34,7 @@ STATE_LABELS = (
 WEBHOOK_TRANSITIONS = (
     STATE_TRANSITIONS
     + """
-SELECT t.id,t.run_id,t.timestamp AS occurred_at,t.state,t.previous,
+SELECT t.id,t.run_id,t.timestamp AS occurred_at,t.state,t.previous,t.transition_summary,
  json_extract(r.data,'$.name') AS run_name
 FROM transitions t LEFT JOIN runs r ON r.id=t.run_id
 WHERE (t.previous IS NULL OR t.previous != t.state)
@@ -59,6 +59,20 @@ def message(event):
         title = "단계 전환"
         previous = STATE_LABELS.get(event.get("previous"), "시작")
         description = f"진행: {previous} → {STAGES[state]}"
+        summary = json.loads(event.get("transition_summary") or "{}")
+        if (counts := summary.get("test_cases")) is not None:
+            description += (
+                f"\n테스트 {counts['total']}건 · 통과 {counts['passed']}건 / "
+                f"실패 {counts['failed']}건 / 건너뜀 {counts['skipped']}건"
+            )
+        if (counts := summary.get("review_issues")) is not None:
+            issues = " / ".join(
+                f"{severity.title()} {counts.get(severity, 0)}건"
+                for severity in ("critical", "high", "medium", "low")
+            )
+            description += f"\n미해결 리뷰 이슈 · {issues}"
+        if summary.get("test_failed"):
+            description += "\n테스트 단계 실패"
     else:
         title, description = MESSAGES[state]
     run_id = "".join(c for c in event["run_id"] if c.isalnum() or c in "-_.")[:200]

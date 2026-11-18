@@ -114,7 +114,9 @@ class Store:
                 for r in db.execute("SELECT id FROM runs ORDER BY rowid DESC").fetchall()
             ]
 
-    def update(self, run_id, state=None, expected_version=None, **changes):
+    def update(
+        self, run_id, state=None, expected_version=None, *, transition_summary=None, **changes
+    ):
         with self.connection() as db:
             if self._transaction.get() is None:
                 db.execute("BEGIN IMMEDIATE")
@@ -218,16 +220,14 @@ class Store:
                         "UPDATE operations SET status='applied',applied_at=? WHERE run_id=? AND kind=? AND status='accepted'",
                         (now(), run_id, kind),
                     )
-            self._event(
-                db,
-                run_id,
-                "state",
-                {
-                    "state": target,
-                    "role": data.get("next_role"),
-                    "iteration": data.get("iteration", 0),
-                },
-            )
+            event = {
+                "state": target,
+                "role": data.get("next_role"),
+                "iteration": data.get("iteration", 0),
+            }
+            if target != row["state"] and transition_summary is not None:
+                event["transition_summary"] = transition_summary
+            self._event(db, run_id, "state", event)
 
     def control(self, run_id, value, expected_version=None):
         if value not in {None, "pause", "cancel"}:

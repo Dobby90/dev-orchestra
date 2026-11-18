@@ -5,6 +5,8 @@ import threading
 from unittest.mock import MagicMock
 
 import pytest
+from test_workflow import FakeAgent, FakeTests
+from test_workflow import service as service
 
 from dev_orchestra.application.errors import ApplicationError
 from dev_orchestra.application.notifications import NotificationService
@@ -13,6 +15,7 @@ from dev_orchestra.application.webhooks import MESSAGES, WebhookService, message
 from dev_orchestra.infrastructure.locking import lock
 from dev_orchestra.infrastructure.store import Store
 from dev_orchestra.infrastructure.webhooks import WebhookError, send, validate_url
+from dev_orchestra.orchestration.runner import Runner
 
 URL = "https://mattermost.example/hooks/example-test-key"
 
@@ -315,6 +318,72 @@ def test_stage_transitions_are_webhook_only_and_keep_previous_across_cursor(
     page = NotificationService(hooks.store).page()
     assert page["unread_count"] == 1
     assert [item["state"] for item in page["items"]] == ["paused"]
+
+
+@pytest.mark.parametrize("test_failed", [False, True])
+def test_stage_webhooks_deliver_counts_from_each_completed_round(service, monkeypatch, test_failed):
+    svc, rid, _ = service
+    hooks = WebhookService(svc.store)
+    sent = MagicMock()
+    clock = [1000]
+    monkeypatch.setattr("dev_orchestra.application.webhooks.send", sent)
+    monkeypatch.setattr("dev_orchestra.application.webhooks.time.time", lambda: clock[0])
+    save(hooks)
+
+    class Tests(FakeTests):
+        rounds = 0
+
+        def run(self, *args):
+            self.rounds += 1
+            first = self.rounds == 1
+            failed = first and test_failed
+            status = "failed" if failed else "passed"
+            result = super().run(*args)
+            result.update(passed=not failed, status=status)
+            result["commands"][0].update(
+                total=5 if first else 7,
+                failed=int(failed),
+                skipped=int(first),
+                passed=not failed,
+                status=status,
+                exit_code=int(failed),
+            )
+            return result
+
+    Runner(svc.store, FakeAgent(block=0 if test_failed else 1), Tests()).execute(rid)
+    run = svc.store.get(rid)
+    assert run["state"] == "waiting_approval", run.get("error")
+
+    # Delivery starts after the second round has replaced the Run's current results.
+    for _ in range(3):
+        hooks.tick()
+    sent.side_effect = WebhookError("연결 실패")
+    hooks.tick()
+    first_text = sent.call_args.args[2]
+    assert "진행: 테스트 → 리뷰" in first_text
+    assert (
+        f"테스트 5건 · 통과 {4 - int(test_failed)}건 / 실패 {int(test_failed)}건 / 건너뜀 1건"
+        in first_text
+    )
+
+    sent.side_effect = None
+    clock[0] += 5
+    WebhookService(svc.store).tick()
+    assert sent.call_args.args[2] == first_text
+
+    for _ in range(5):
+        hooks.tick()
+    fixes = [call.args[2] for call in sent.call_args_list if "리뷰 → 수정" in call.args[2]]
+    assert len(fixes) == 1
+    assert (
+        f"미해결 리뷰 이슈 · Critical 0건 / High {int(not test_failed)}건 / Medium 0건 / Low 0건"
+        in fixes[0]
+    )
+    assert ("테스트 단계 실패" in fixes[0]) == test_failed
+    assert any(
+        "진행: 테스트 → 리뷰\n테스트 7건 · 통과 7건 / 실패 0건 / 건너뜀 0건" in call.args[2]
+        for call in sent.call_args_list
+    )
 
 
 @pytest.mark.parametrize("timestamp", ["2026-11-17T23:30:00.123456+00:00", "2026-11-17T23:30:00Z"])
