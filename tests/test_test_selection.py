@@ -10,7 +10,11 @@ from test_workspace import edit, start_session
 from test_workspace import setup as setup
 
 from dev_orchestra.agents.context import execution_summary, role_context
-from dev_orchestra.application.test_selection import selection_for_paths, verify_selection
+from dev_orchestra.application.test_selection import (
+    selection_for_paths,
+    verify_selection,
+    verify_tool_evidence,
+)
 from dev_orchestra.domain.models import (
     AgentRequest,
     Coverage,
@@ -112,6 +116,43 @@ def test_other_candidate_or_policy_cannot_reuse_success(mapped, mutation):
         payload["execution"]["commands"].pop()
     with pytest.raises(PipelineError):
         verify_selection(mapped, payload)
+
+
+@pytest.mark.parametrize("container", [True, False], ids=["docker", "file-adapter"])
+def test_tool_evidence_validates_junit_and_runtime_adapter_files(tmp_path, container):
+    evidence = tmp_path / "test-evidence"
+    evidence.mkdir()
+    junit = evidence / "unit.junit.xml"
+    junit.write_text('<testsuite><testcase name="one"/></testsuite>')
+    command = {"junit_path": str(junit), "junit_hash": digest(junit.read_bytes())}
+    if container:
+        command["runtime_adapters"] = ["docker"]
+        command["container_environment"] = {"image_id": "sha256:" + "b" * 64}
+        checked_file, error = junit, "JUnit evidence checksum mismatch"
+    else:
+        content = b"// Gradle init script"
+        sha = digest(content)
+        adapter = evidence / (sha[:16] + "-runtime.gradle")
+        adapter.write_bytes(content)
+        command["runtime_adapters"] = [{"adapter": "gradle-test-agent", "sha256": sha}]
+        checked_file, error = adapter, "runtime adapter checksum mismatch"
+    value = {"sha": "a" * 40, "revision": 0, "selection": {}, "execution": {"commands": [command]}}
+    raw = json.dumps(value).encode()
+    (evidence / "evidence.json").write_bytes(raw)
+    step = {"data": {"artifact": str(tmp_path / "result.json")}}
+    payload = {
+        "sha": value["sha"],
+        "revision": value["revision"],
+        "test_selection": value["selection"],
+        "execution": value["execution"],
+        "test_evidence_reference": {"id": evidence.name, "hash": digest(raw)},
+    }
+
+    verify_tool_evidence({}, step, payload)
+
+    checked_file.write_text("changed after execution")
+    with pytest.raises(PipelineError, match=error):
+        verify_tool_evidence({}, step, payload)
 
 
 def test_role_inputs_do_not_repeat_applied_patches_and_keep_review_obligations():

@@ -212,8 +212,12 @@ def verify_tool_evidence(run, step, payload):
             if digest(junit.read_bytes()) != command["junit_hash"]:
                 raise PipelineError("JUnit evidence checksum mismatch")
         for adapter in command.get("runtime_adapters", []):
-            files = list(path.parent.glob(adapter["sha256"][:16] + "-*"))
-            if not files or not any(
-                digest(file.read_bytes()) == adapter["sha256"] for file in files
-            ):
+            if adapter == "docker":
+                # Container metadata is already bound to the checksummed execution record.
+                continue
+            sha = adapter.get("sha256") if isinstance(adapter, dict) else None
+            if not isinstance(sha, str) or not sha:
+                raise PipelineError("invalid runtime adapter evidence")
+            files = list(path.parent.glob(sha[:16] + "-*"))
+            if not files or not any(digest(file.read_bytes()) == sha for file in files):
                 raise PipelineError("runtime adapter checksum mismatch")
