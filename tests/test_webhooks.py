@@ -9,7 +9,7 @@ import pytest
 from dev_orchestra.application.errors import ApplicationError
 from dev_orchestra.application.notifications import NotificationService
 from dev_orchestra.application.web_contracts import WebhookSettingsInput
-from dev_orchestra.application.webhooks import MESSAGES, WebhookService
+from dev_orchestra.application.webhooks import MESSAGES, WebhookService, message
 from dev_orchestra.infrastructure.locking import lock
 from dev_orchestra.infrastructure.store import Store
 from dev_orchestra.infrastructure.webhooks import WebhookError, send, validate_url
@@ -71,7 +71,8 @@ def test_each_existing_notification_delivered_once_with_safe_template(hooks, mon
     app, url, text = sent.call_args.args
     assert app == "mattermost" and url == URL
     assert MESSAGES[state][0] in text and MESSAGES[state][1] in text
-    assert "작업: run" in text and "알림 ID:" in text
+    assert "작업명: run" in text and "작업 ID: run" in text and "알림 ID:" in text
+    assert "[Dev Orchestra]" not in text
     assert hooks.get()["last_delivery"]["status"] == "sent"
     assert hooks.store.get("run") == run
 
@@ -142,7 +143,7 @@ def test_test_message_and_permanent_failure_never_retry_or_change_run(hooks, mon
     monkeypatch.setattr("dev_orchestra.application.webhooks.send", sent)
     settings = save(hooks, enabled=False)
     assert hooks.test(settings["version"])["last_delivery"]["status"] == "failed"
-    assert "연결 테스트" in sent.call_args.args[2]
+    assert sent.call_args.args[2].startswith("[연결 테스트]\n")
     save(hooks)
     hooks.store.update("run", "paused")
     before = hooks.store.get("run")
@@ -278,3 +279,151 @@ def test_transport_blocks_private_dns_without_connecting(monkeypatch):
     with pytest.raises(WebhookError):
         send("mattermost", URL, "test")
     connect.assert_not_called()
+
+
+@pytest.mark.parametrize("kind", ["state", "state.changed"])
+def test_stage_transitions_are_webhook_only_and_keep_previous_across_cursor(
+    hooks, monkeypatch, kind
+):
+    sent = MagicMock()
+    monkeypatch.setattr("dev_orchestra.application.webhooks.send", sent)
+    save(hooks)
+    states = [
+        "planning",
+        "developing",
+        "testing",
+        "reviewing",
+        "fixing",
+        "testing",
+        "reviewing",
+        "reporting",
+    ]
+    for state in states:
+        with hooks.store.connection() as db:
+            hooks.store._event(db, "run", kind, {"state": state})
+            hooks.store._event(db, "run", kind, {"state": state})
+        hooks.tick()
+    hooks.tick()
+    assert sent.call_count == len(states)
+    texts = [call.args[2] for call in sent.call_args_list]
+    assert "진행: 개발 → 테스트" in texts[2]
+    assert "진행: 수정 → 테스트" in texts[5]
+    assert all(text.startswith("[단계 전환]\n") for text in texts)
+    assert NotificationService(hooks.store).page()["unread_count"] == 0
+    hooks.store.update("run", "paused")
+    hooks.tick()
+    page = NotificationService(hooks.store).page()
+    assert page["unread_count"] == 1
+    assert [item["state"] for item in page["items"]] == ["paused"]
+
+
+@pytest.mark.parametrize("timestamp", ["2026-11-17T23:30:00.123456+00:00", "2026-11-17T23:30:00Z"])
+def test_message_shows_name_and_kst_with_date_rollover(timestamp):
+    text = message(
+        {
+            "id": 42,
+            "run_id": "RUN_ID",
+            "run_name": "로그인 오류 수정",
+            "state": "testing",
+            "previous": "developing",
+            "occurred_at": timestamp,
+        }
+    )
+    assert text == (
+        "[단계 전환]\n작업명: 로그인 오류 수정\n작업 ID: RUN_ID\n"
+        "진행: 개발 → 테스트\n발생 시각: 2026-11-18 08:30:00 (KST)\n알림 ID: 42"
+    )
+
+
+def test_name_is_safe_and_frozen_for_retry(hooks, monkeypatch):
+    sent = MagicMock(side_effect=WebhookError("연결 실패"))
+    monkeypatch.setattr("dev_orchestra.application.webhooks.send", sent)
+    clock = [1000]
+    monkeypatch.setattr("dev_orchestra.application.webhooks.time.time", lambda: clock[0])
+    save(hooks)
+    hooks.store.update(
+        "run", "paused", name="한글 **작업**\n@channel [링크](https://example.test) <tag>\x00"
+    )
+    hooks.tick()
+    first = sent.call_args.args[2]
+    assert "@channel" not in first and "<tag>" not in first and "\x00" not in first
+    assert "한글 \\*\\*작업\\*\\* ＠channel" in first
+    assert len(first.splitlines()) == 6
+    hooks.store.update("run", name="바뀐 작업명")
+    clock[0] += 5
+    WebhookService(hooks.store).tick()
+    assert sent.call_count == 2
+    assert sent.call_args.args[2] == first
+
+
+def test_upgrade_skips_old_stages_preserves_pending_and_existing_alerts(hooks, monkeypatch):
+    from dev_orchestra.infrastructure.files import write
+
+    sent = MagicMock(side_effect=WebhookError("연결 실패"))
+    monkeypatch.setattr("dev_orchestra.application.webhooks.send", sent)
+    clock = [1000]
+    monkeypatch.setattr("dev_orchestra.application.webhooks.time.time", lambda: clock[0])
+    save(hooks)
+    hooks.store.update("run", "paused", name="기존 작업")
+    hooks.tick()
+    saved = hooks._read()
+    saved.pop("stage_after")
+    saved["pending"]["event"].pop("run_name")
+    saved["pending"]["event"].pop("previous")
+    write(hooks.path, saved)
+    with hooks.store.connection() as db:
+        for state in ["developing", "testing", "needs_input"]:
+            hooks.store._event(db, "run", "state", {"state": state})
+    clock[0] += 5
+    sent.side_effect = None
+    WebhookService(hooks.store).tick()
+    assert hooks.get()["last_delivery"]["attempts"] == 2
+    assert "작업명: 기존 작업" in sent.call_args.args[2]
+    hooks.tick()
+    assert "[입력 필요]" in sent.call_args.args[2]
+    hooks.tick()
+    assert sent.call_count == 3  # No historical developing/testing alerts.
+    with hooks.store.connection() as db:
+        hooks.store._event(db, "run", "state", {"state": "queued"})
+        hooks.store._event(db, "run", "state", {"state": "testing"})
+    WebhookService(hooks.store).tick()
+    assert sent.call_count == 4
+    assert "진행: 대기 → 테스트" in sent.call_args.args[2]
+
+
+def test_transition_history_is_partitioned_by_run(hooks, monkeypatch):
+    sent = MagicMock()
+    monkeypatch.setattr("dev_orchestra.application.webhooks.send", sent)
+    save(hooks)
+    hooks.store.create({"id": "other", "name": "다른 작업"})
+    with hooks.store.connection() as db:
+        hooks.store._event(db, "run", "state", {"state": "developing"})
+        hooks.store._event(db, "other", "state", {"state": "fixing"})
+        hooks.store._event(db, "run", "state", {"state": "testing"})
+    for _ in range(3):
+        hooks.tick()
+    assert "작업명: 다른 작업" in sent.call_args_list[1].args[2]
+    assert "진행: 개발 → 테스트" in sent.call_args_list[2].args[2]
+
+
+def test_upgrade_without_pending_persists_stage_boundary_when_idle(hooks, monkeypatch):
+    from dev_orchestra.infrastructure.files import write
+
+    sent = MagicMock()
+    monkeypatch.setattr("dev_orchestra.application.webhooks.send", sent)
+    save(hooks)
+    saved = hooks._read()
+    saved.pop("stage_after")
+    write(hooks.path, saved)
+    with hooks.store.connection() as db:
+        hooks.store._event(db, "run", "state", {"state": "developing"})
+    hooks.tick()
+    sent.assert_not_called()
+    boundary = hooks._read()["stage_after"]
+    assert boundary > 0
+    with hooks.store.connection() as db:
+        hooks.store._event(db, "run", "state", {"state": "testing"})
+    WebhookService(hooks.store).tick()
+    sent.assert_called_once()
+    assert "진행: 개발 → 테스트" in sent.call_args.args[2]
+    assert hooks._read()["stage_after"] == boundary
