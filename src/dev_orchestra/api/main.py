@@ -84,7 +84,7 @@ from dev_orchestra.application.web_contracts import (
     WebhookTestInput,
 )
 from dev_orchestra.application.webhooks import WebhookService
-from dev_orchestra.config import ROLES, load_config
+from dev_orchestra.config import load_config
 from dev_orchestra.domain.models import PipelineError
 from dev_orchestra.infrastructure.locking import lock
 from dev_orchestra.infrastructure.migrations import upgrade
@@ -357,13 +357,7 @@ def create_app(config=None, allowed_roots=None, port=8000, static_directory=None
 
     @app.patch("/api/settings/agents", response_model=AgentSettingsView)
     def save_agent_settings(body: AgentSettingsInput):
-        explicit = any(
-            body.settings.for_role(role).model or body.settings.for_role(role).reasoning_effort
-            for role in ROLES
-        )
-        return agent_settings.save(
-            body.settings, body.expected_version, agent_settings.models() if explicit else []
-        )
+        return agent_settings.save(body.settings, body.expected_version)
 
     @app.get("/api/projects", response_model=ProjectPage)
     def projects(

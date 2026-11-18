@@ -20,7 +20,8 @@ THREAD = "11111111-1111-4111-8111-111111111111"
 OTHER = "22222222-2222-4222-8222-222222222222"
 
 
-def test_explicit_resume_and_missing_session_fallback_preserve_usage(setup, tmp_path):
+@pytest.mark.parametrize("tier", [None, "fast"])
+def test_explicit_resume_and_missing_session_fallback_preserve_usage(setup, tmp_path, tier):
     session, request = start_session(setup)
     mode = tmp_path / "mode"
     mode.write_text("ok")
@@ -32,6 +33,7 @@ if 'sandbox' in sys.argv: raise SystemExit(0)
 assert '--last' not in sys.argv
 assert '--ephemeral' not in sys.argv
 assert sys.argv[sys.argv.index('--sandbox')+1]=='read-only'
+assert [arg for arg in sys.argv if arg.startswith('service_tier=')] == {([f'service_tier="{tier}"'] if tier else [])!r}
 result=Path(sys.argv[sys.argv.index('--output-last-message')+1])
 prompt=sys.stdin.read()
 result.with_name('received-prompt.txt').write_text(prompt)
@@ -46,7 +48,7 @@ print(json.dumps({{'type':'turn.completed','usage':{{'input_tokens':10,'cached_i
 result.write_text(json.dumps({{'summary':'done','questions':[],'no_change_reason':'existing implementation satisfies requirements'}}))
 """)
     stub.chmod(0o755)
-    client = CodexClient(Codex(command=str(stub)))
+    client = CodexClient(Codex(command=str(stub), roles={"developer": {"service_tier": tier}}))
     request.context["prd"] = "FULL_REQUIREMENTS_MARKER" * 3000
     client.run_workspace(request, session.path.parent, session)
     assert session_id(session, client.config.for_role("developer")) == THREAD
@@ -70,6 +72,7 @@ result.write_text(json.dumps({{'summary':'done','questions':[],'no_change_reason
     client.run_workspace(request, session.path.parent, session)
     assert session_id(session, client.config.for_role("developer")) == OTHER
     telemetry = json.loads((session.path.parent / "telemetry.json").read_text())
+    assert telemetry.get("service_tier") == tier
     assert telemetry["usage"] == {"input_tokens": 30, "cached_input_tokens": 9, "output_tokens": 6}
     assert telemetry["completed_turns"] == 3 and telemetry["usage_status"] == "partial"
     assert len(list((session.path.parent / "calls").glob("call-*"))) == 4

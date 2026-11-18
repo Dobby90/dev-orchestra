@@ -5,6 +5,7 @@ codex:
   command: codex
   model: null
   reasoning_effort: null
+  service_tier: null # Codex 기본값(null), 일반(default), 패스트(fast)
   # 역할별 null 값은 공통 기본값을 상속합니다.
   roles: {}
   timeout_seconds: 1800

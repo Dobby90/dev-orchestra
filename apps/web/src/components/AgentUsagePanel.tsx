@@ -1,6 +1,7 @@
 import { useQuery } from "@tanstack/react-query";
 import { api } from "../api/resources";
 import type { Schema } from "../api/types";
+import { agentSpeedLabel } from "./AgentSpeedSelect";
 import { ErrorNotice, Loading, roles } from "./common";
 
 const labels = {
@@ -60,6 +61,7 @@ export function AgentUsagePanel({ rid }: { rid: string }) {
               <th>에이전트</th>
               <th>설정 모델</th>
               <th>추론 강도</th>
+              <th>설정 속도</th>
             </tr>
           </thead>
           <tbody>
@@ -68,6 +70,7 @@ export function AgentUsagePanel({ rid }: { rid: string }) {
                 <td>{roles[role] ?? role}</td>
                 <td>{options.model ?? "Codex 기본값 사용"}</td>
                 <td>{options.reasoning_effort ?? "Codex 기본값 사용"}</td>
+                <td>{agentSpeedLabel(options.service_tier)}</td>
               </tr>
             ))}
           </tbody>
@@ -94,7 +97,7 @@ export function AgentUsagePanel({ rid }: { rid: string }) {
           <thead>
             <tr>
               <th>에이전트 · 시도</th>
-              <th>설정 모델 · 추론</th>
+              <th>설정 모델 · 추론 · 속도</th>
               <th>토큰 사용량</th>
               <th>Codex 소요 시간</th>
             </tr>
@@ -112,7 +115,8 @@ export function AgentUsagePanel({ rid }: { rid: string }) {
                 </td>
                 <td>
                   {attempt.model ?? "Codex 기본값"} ·{" "}
-                  {attempt.reasoning_effort ?? "기본값"}
+                  {attempt.reasoning_effort ?? "기본값"} ·{" "}
+                  {agentSpeedLabel(attempt.service_tier)}
                 </td>
                 <td>
                   {labels[attempt.usage_status]}

@@ -464,6 +464,9 @@ describe("화면·위험 명령", () => {
       base_sha: "b".repeat(40),
       project_version: 0,
       agent_settings_hash: "settings",
+      agent_settings: {
+        roles: { developer: { model: "task-model", service_tier: "fast" } },
+      },
       proposal_hash: "h",
       expires: Date.now() / 1000 + 300,
       preview_token: "receipt",
@@ -511,6 +514,7 @@ describe("화면·위험 명령", () => {
       }),
     );
     expect(screen.getByRole("dialog", { name: "실행 미리보기" })).toBeVisible();
+    expect(screen.getByText(/developer.*패스트/)).toBeVisible();
     expect(screen.getByText(/개발 후 확정 · 후보 커밋/)).toBeVisible();
     await userEvent.keyboard("{Escape}");
     expect(screen.queryByRole("dialog")).not.toBeInTheDocument();

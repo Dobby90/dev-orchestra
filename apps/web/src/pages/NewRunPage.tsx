@@ -15,6 +15,7 @@ import { Heading, ErrorNotice } from "../components/common";
 import { Button } from "../components/ui/button";
 import { Modal } from "../components/ui/dialog";
 import { RunAgentSettings } from "../components/RunAgentSettings";
+import { agentSpeedLabel } from "../components/AgentSpeedSelect";
 import { useDraftField, useClearDraft } from "../hooks/runDraft";
 import { PrdGuide } from "../components/PrdGuide";
 import {
@@ -521,14 +522,15 @@ export function NewRunPage() {
             <dd className="mono path">{preview.data.receipt.base_sha}</dd>
             {preview.data.receipt.agent_settings && (
               <>
-                <dt>에이전트 모델·추론 강도</dt>
+                <dt>에이전트 모델·추론 강도·속도</dt>
                 <dd>
                   {Object.entries(
                     preview.data.receipt.agent_settings.roles ?? {},
                   ).map(([role, options]) => (
                     <p key={role}>
                       {role}: {options.model ?? "Codex 기본값"} ·{" "}
-                      {options.reasoning_effort ?? "Codex 기본값"}
+                      {options.reasoning_effort ?? "Codex 기본값"} ·{" "}
+                      {agentSpeedLabel(options.service_tier)}
                     </p>
                   ))}
                 </dd>

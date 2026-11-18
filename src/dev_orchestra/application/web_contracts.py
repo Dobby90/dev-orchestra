@@ -28,6 +28,7 @@ class AgentSettingsView(BaseModel):
 class CodexModelView(BaseModel):
     model: str
     reasoning_efforts: list[str]
+    supports_fast: bool = False
 
 
 class CodexModelPage(BaseModel):

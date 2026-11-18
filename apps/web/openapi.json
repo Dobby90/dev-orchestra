@@ -2832,6 +2832,21 @@
             ],
             "title": "Reasoning Effort"
           },
+          "service_tier": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "default",
+                  "fast"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Service Tier"
+          },
           "usage": {
             "anyOf": [
               {
@@ -2932,6 +2947,21 @@
               }
             ],
             "title": "Reasoning Effort"
+          },
+          "service_tier": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "default",
+                  "fast"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Service Tier"
           }
         },
         "additionalProperties": false,
@@ -2963,6 +2993,21 @@
               }
             ],
             "title": "Reasoning Effort"
+          },
+          "service_tier": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "default",
+                  "fast"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Service Tier"
           },
           "roles": {
             "additionalProperties": {
@@ -3392,6 +3437,11 @@
             },
             "type": "array",
             "title": "Reasoning Efforts"
+          },
+          "supports_fast": {
+            "type": "boolean",
+            "title": "Supports Fast",
+            "default": false
           }
         },
         "type": "object",

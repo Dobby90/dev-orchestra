@@ -161,7 +161,8 @@ GUI의 프로젝트 설정이나 [config.example.yaml](config.example.yaml)을 �
 | --- | --- |
 | `project.default_base_branch` | 기본 기준 브랜치 |
 | `codex.model`, `codex.reasoning_effort` | 공통 모델과 추론 강도 |
-| `codex.roles` | 역할별 모델·추론 강도 재정의 |
+| `codex.service_tier` | 공통 실행 속도. `null`은 Codex 기본값, `default`는 일반, `fast`는 패스트 |
+| `codex.roles` | 역할별 모델·추론 강도·속도 재정의 |
 | `workflow.max_fix_attempts` | 자동 수정 한도 |
 | `tests.commands` | 호스트가 실행할 명령의 인자·작업 경로·제한 시간·JUnit 경로 |
 | `tests.write_paths` | Tester가 편집할 수 있는 테스트 경로 |
@@ -199,7 +200,7 @@ Developer/Fixer는 패키지 설정을 작성한 뒤 `workspace.prepare_environm
 
 테스트 범위의 기본값은 전체 검사(`full`)입니다. 변경 영향 범위 검사(`affected`)는 누적 변경과 인수 조건에 따라 검사를 선택하고 호스트가 검증합니다. CLI에서는 `run --test-scope affected`로 지정합니다. 범위와 정책은 작업 생성 시 고정되며 이후 설정 변경은 새 작업에 적용됩니다.
 
-GUI **설정 → 에이전트 모델 설정**에서 공통·역할별 모델을 지정하고 새 작업에서 해당 작업에만 적용할 값을 바꿀 수 있습니다. 저장한 GUI 모델 설정은 같은 DB를 사용하는 CLI의 새 작업에도 적용되며 YAML의 모델 설정보다 우선합니다.
+GUI **설정 → 에이전트 모델 설정**에서 공통·역할별 모델, 추론 강도, 속도를 지정하고 새 작업에서 해당 작업에만 적용할 값을 바꿀 수 있습니다. 패스트는 선택한 모델이 지원할 때 사용할 수 있으며, 일반 속도보다 사용량을 더 많이 소모합니다. 저장한 GUI 설정은 같은 DB를 사용하는 CLI의 새 작업에도 적용되며 YAML의 모델 설정보다 우선합니다.
 
 기본 저장 위치는 `~/.devorchestra`입니다. 저장 위치는 대상 저장소 외부에 두어야 하며, YAML의 상대 저장 경로는 설정 파일 위치를 기준으로 해석합니다.
 

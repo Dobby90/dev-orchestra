@@ -18,8 +18,12 @@ from dev_orchestra.infrastructure.codex import CodexClient
 from dev_orchestra.infrastructure.codex_catalog import list_models
 
 MODELS = [
-    {"model": "test-standard", "reasoning_efforts": ["low", "medium", "high"]},
-    {"model": "test-review", "reasoning_efforts": ["high", "xhigh"]},
+    {
+        "model": "test-standard",
+        "reasoning_efforts": ["low", "medium", "high"],
+        "supports_fast": True,
+    },
+    {"model": "test-review", "reasoning_efforts": ["high", "xhigh"], "supports_fast": False},
 ]
 
 
@@ -35,8 +39,13 @@ def test_settings_persist_new_runs_only_and_preserve_execution_policy(web, catal
     settings = {
         "model": "test-standard",
         "reasoning_effort": "medium",
+        "service_tier": "fast",
         "roles": {
-            "reviewer": {"model": "test-review", "reasoning_effort": "xhigh"},
+            "reviewer": {
+                "model": "test-review",
+                "reasoning_effort": "xhigh",
+                "service_tier": "default",
+            },
             "tester": {"model": None, "reasoning_effort": "low"},
         },
     }
@@ -49,6 +58,7 @@ def test_settings_persist_new_runs_only_and_preserve_execution_policy(web, catal
     assert AgentSettingsService(svc.config).get()["settings"].model == "test-standard"
     assert svc.config.codex.model is None
     assert svc.store.get(original_id)["config"]["codex"]["model"] is None
+    assert "service_tier" not in svc.store.get(original_id)["config"]["codex"]
     proposal = {
         "name": "테스트 작업",
         "project_id": p["id"],
@@ -64,14 +74,17 @@ def test_settings_persist_new_runs_only_and_preserve_execution_policy(web, catal
     run = svc.store.get(response.json()["run_id"])
     configured = Codex.model_validate(run["config"]["codex"])
     assert configured.for_role("developer").model == "test-standard"
+    assert configured.for_role("developer").service_tier == "fast"
     assert configured.for_role("tester").reasoning_effort == "low"
     assert configured.for_role("reviewer").model == "test-review"
+    assert configured.for_role("reviewer").service_tier == "default"
     assert configured.command == svc.config.codex.command
     assert configured.timeout_seconds == svc.config.codex.timeout_seconds
     assert run["config"]["git"] == svc.config.git.model_dump()
     # CLI creation also reads saved workspace defaults; existing runs never re-resolve.
     new_id = svc.create(repo, Path(svc.store.get(original_id)["directory"]) / "spec.md")
     assert svc.store.get(new_id)["config"]["codex"]["model"] == "test-standard"
+    assert svc.store.get(new_id)["config"]["codex"]["service_tier"] == "fast"
     assert svc.store.get(original_id)["config"]["codex"]["model"] is None
 
 
@@ -118,6 +131,13 @@ def test_settings_conflicts_validation_csrf_and_preview_staleness(web, catalog):
         ).status_code
         == 422
     )
+    assert (
+        c.patch(
+            "/api/settings/agents",
+            json={**body, "settings": {"model": "test-review", "service_tier": "fast"}},
+        ).status_code
+        == 422
+    )
     assert c.patch("/api/settings/agents", json=body).status_code == 200
     assert c.patch("/api/settings/agents", json=body).status_code == 412
     response = c.post(
@@ -143,6 +163,7 @@ import json,sys
 from pathlib import Path
 assert sys.argv[sys.argv.index('--model')+1]=='test-review'
 assert 'model_reasoning_effort="xhigh"' in sys.argv
+assert 'service_tier="fast"' in sys.argv
 assert '--ignore-user-config' in sys.argv
 assert sys.argv[sys.argv.index('--sandbox')+1]=='read-only'
 sys.stdin.read()
@@ -157,7 +178,13 @@ sys.exit({rc})
             command=str(script),
             model="test-standard",
             reasoning_effort="medium",
-            roles={"reviewer": {"model": "test-review", "reasoning_effort": "xhigh"}},
+            roles={
+                "reviewer": {
+                    "model": "test-review",
+                    "reasoning_effort": "xhigh",
+                    "service_tier": "fast",
+                }
+            },
         )
     )
     request = AgentRequest(
@@ -176,6 +203,7 @@ sys.exit({rc})
         client.run(request, directory)
     data = json.loads((directory / "telemetry.json").read_text())
     assert data["model"] == "test-review"
+    assert data["service_tier"] == "fast"
     assert data["usage"]["cached_input_tokens"] == 70
     assert data["usage"]["input_tokens"] == 100
     assert data["usage_status"] == ("partial" if rc else "reported")
@@ -256,13 +284,20 @@ for line in sys.stdin:
     if req['method']=='initialize': result={{}}
     else:
         cursor=req['params'].get('cursor')
-        result={{'data':[{{'model':'test-review' if cursor else 'test-standard','supportedReasoningEfforts':[{{'reasoningEffort':'high'}}]}}],'nextCursor':None if cursor else 'next'}}
+        options={{'supportedReasoningEfforts':[{{'reasoningEffort':'high'}}]}}
+        if cursor:
+            rows=[dict(options,model='test-review'),
+                  dict(options,model='test-legacy',additionalSpeedTiers=['fast'])]
+        else:
+            rows=[dict(options,model='test-standard',serviceTiers=[{{'id':'priority'}}])]
+        result={{'data':rows,'nextCursor':None if cursor else 'next'}}
     print(json.dumps({{'id':req['id'],'result':result}}),flush=True)
 """)
     script.chmod(0o700)
     assert list_models(str(script)) == [
-        {"model": "test-standard", "reasoning_efforts": ["high"]},
-        {"model": "test-review", "reasoning_efforts": ["high"]},
+        {"model": "test-standard", "reasoning_efforts": ["high"], "supports_fast": True},
+        {"model": "test-review", "reasoning_efforts": ["high"], "supports_fast": False},
+        {"model": "test-legacy", "reasoning_efforts": ["high"], "supports_fast": True},
     ]
 
 
@@ -273,7 +308,13 @@ def test_run_override_isolated_and_bound_to_preview(web, catalog):
     settings = {
         "model": "test-standard",
         "reasoning_effort": "medium",
-        "roles": {"reviewer": {"model": "test-review", "reasoning_effort": "xhigh"}},
+        "roles": {
+            "reviewer": {
+                "model": "test-standard",
+                "reasoning_effort": "high",
+                "service_tier": "fast",
+            }
+        },
     }
     proposal = {
         "name": "작업별 설정",
@@ -284,7 +325,13 @@ def test_run_override_isolated_and_bound_to_preview(web, catalog):
     preview = c.post(f"/api/projects/{p['id']}/run-previews", json=proposal)
     assert preview.status_code == 200, preview.text
     assert preview.json()["agent_settings"]["roles"]["reviewer"] == settings["roles"]["reviewer"]
-    changed = {**proposal, "agent_settings": {"model": "test-review"}}
+    changed = {
+        **proposal,
+        "agent_settings": {
+            **settings,
+            "roles": {"reviewer": {**settings["roles"]["reviewer"], "service_tier": "default"}},
+        },
+    }
     response = c.post(
         "/api/runs",
         json={**changed, "preview_token": preview.json()["preview_token"]},
@@ -299,7 +346,7 @@ def test_run_override_isolated_and_bound_to_preview(web, catalog):
     assert response.status_code == 202, response.text
     run = svc.store.get(response.json()["run_id"])
     assert run["config"]["codex"]["model"] == "test-standard"
-    assert run["config"]["codex"]["roles"]["reviewer"]["reasoning_effort"] == "xhigh"
+    assert run["config"]["codex"]["roles"]["reviewer"] == settings["roles"]["reviewer"]
     assert c.get("/api/settings/agents").json() == before
     assert svc.store.get(original_id)["config"]["codex"]["model"] is None
 
@@ -309,6 +356,13 @@ def test_run_override_isolated_and_bound_to_preview(web, catalog):
     [
         {"model": "unknown-model"},
         {"model": "test-review", "reasoning_effort": "low"},
+        {"service_tier": "fast"},
+        {"model": "test-review", "service_tier": "fast"},
+        {
+            "model": "test-standard",
+            "service_tier": "fast",
+            "roles": {"reviewer": {"model": "test-review"}},
+        },
         {"command": "untrusted"},
     ],
 )

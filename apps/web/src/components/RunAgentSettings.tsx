@@ -1,6 +1,7 @@
 import { useMutation } from "@tanstack/react-query";
 import { api } from "../api/resources";
 import type { Schema } from "../api/types";
+import { AgentSpeedSelect, agentSpeedLabel } from "./AgentSpeedSelect";
 import { ErrorNotice, roles } from "./common";
 import { Button } from "./ui/button";
 
@@ -28,7 +29,7 @@ export function RunAgentSettings({
   const models = catalog.data?.items ?? [];
   return (
     <fieldset>
-      <legend>에이전트 모델·추론 강도</legend>
+      <legend>에이전트 모델·추론 강도·속도</legend>
       <p className="help">
         기본 설정을 사용하거나 이번 작업에만 적용할 설정을 지정합니다. 생성
         후에는 저장된 설정을 유지합니다.
@@ -58,6 +59,8 @@ export function RunAgentSettings({
             const label = role ? roles[role] : "공통 기본값";
             const effectiveModel = options.model ?? (role ? value.model : null);
             const model = models.find((m) => m.model === effectiveModel);
+            const effectiveTier =
+              options.service_tier ?? (role ? value.service_tier : null);
             const update = (options: Schema["AgentOptions"]) =>
               onChange(
                 role
@@ -126,12 +129,31 @@ export function RunAgentSettings({
                     ))}
                   </select>
                 </label>
+                <AgentSpeedSelect
+                  label={label}
+                  value={options.service_tier}
+                  inherit={!!role}
+                  disabled={!catalog.data || catalog.isPending}
+                  supportsFast={!!model?.supports_fast}
+                  onChange={(service_tier) =>
+                    update({ ...options, service_tier })
+                  }
+                />
                 <p className="help">
                   적용: {effectiveModel ?? "Codex 기본값"} · 추론{" "}
                   {options.reasoning_effort ??
                     (role ? value.reasoning_effort : null) ??
-                    "Codex 기본값"}
+                    "Codex 기본값"}{" "}
+                  · 속도 {agentSpeedLabel(effectiveTier)}
                 </p>
+                {catalog.data &&
+                  effectiveTier === "fast" &&
+                  !model?.supports_fast && (
+                    <p className="help text-amber">
+                      패스트 모드를 지원하는 모델을 선택하거나 속도를 일반으로
+                      바꿔 주세요.
+                    </p>
+                  )}
               </fieldset>
             );
           })}
