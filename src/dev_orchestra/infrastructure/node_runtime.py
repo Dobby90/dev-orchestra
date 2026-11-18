@@ -12,7 +12,7 @@ from dev_orchestra.infrastructure.files import contained, digest, write
 from dev_orchestra.infrastructure.process import environment, execute
 
 EXACT_VERSION = re.compile(r"v?(\d+\.\d+\.\d+)")
-NODE_TOOLS = {"npm", "npx", "node", "pnpm", "yarn"}
+NODE_TOOLS = {"npm", "npx", "node", "pnpm", "yarn", "vitest", "playwright"}
 
 
 def node_project(worktree, command):

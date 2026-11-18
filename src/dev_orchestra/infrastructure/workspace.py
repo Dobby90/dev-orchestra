@@ -99,6 +99,11 @@ class WorkspaceSession:
             "changes": {},
             "commits": [],
         }
+        if request.role == "tester" and not run["config"]["tests"]["commands"]:
+            from dev_orchestra.application.validation import run_test_policy, run_test_policy_hash
+
+            run_test_policy(run)
+            data["validation_hash"] = run_test_policy_hash(run)
         path = Path(directory) / "workspace-session.json"
         write(path, data)
         session = cls(path, store, _run_id=run["id"])
@@ -254,6 +259,12 @@ class WorkspaceSession:
                 }
             )
             != self.data["task_hash"]
+            or (
+                self.data["role"] == "tester"
+                and not run["config"]["tests"]["commands"]
+                and self.data.get("validation_hash")
+                != (run.get("candidate_validation") or {}).get("hash")
+            )
         ):
             raise PipelineError("workspace Run ownership or policy changed")
         if run["control"]:

@@ -161,8 +161,10 @@ def test_preparation_failure_releases_edit_lock_but_preserves_source(setup, monk
     assert session.data["testing"] is False and not (session.root / "package-lock.json").exists()
 
 
-@pytest.mark.parametrize("hooked", [False, True])
-def test_online_installer_receives_only_sanitized_manifests(tmp_path, monkeypatch, hooked):
+@pytest.mark.parametrize(("hooked", "deferred"), [(False, False), (False, True), (True, False)])
+def test_online_installer_receives_only_sanitized_manifests(
+    tmp_path, monkeypatch, hooked, deferred
+):
     from dev_orchestra.config import TestCommand as Command
     from dev_orchestra.config import Tests as Commands
 
@@ -208,7 +210,9 @@ def test_online_installer_receives_only_sanitized_manifests(tmp_path, monkeypatc
 
     monkeypatch.setattr(containers, "command", install)
     config = Commands(
-        commands={"unit": Command(argv=["node", "test.js"], junit_report="build/junit.xml")}
+        commands={}
+        if deferred
+        else {"unit": Command(argv=["node", "test.js"], junit_report="build/junit.xml")}
     )
     if hooked:
         with pytest.raises(PipelineError, match="unsupported package manager hooks"):

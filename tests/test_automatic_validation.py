@@ -4,37 +4,41 @@ import json
 import subprocess
 import sys
 import xml.etree.ElementTree as ET
+from pathlib import Path
 
 import pytest
 from test_backend_api import web as web
 from test_validation_policy import commit_files
+from test_workflow import FakeAgent, WorkerRunner
 from test_workflow import service as service
+from test_workspace import setup as setup
 
 from dev_orchestra.application.projects import ProjectService
-from dev_orchestra.application.validation import complete_run_validation
+from dev_orchestra.application.validation import automatic_validation, complete_run_validation
 from dev_orchestra.config import Config
+from dev_orchestra.domain.models import Coverage, WorkspaceResult, WorkspaceTestResult
 from dev_orchestra.infrastructure import unittest_bootstrap
 
 
 def resolve(repo, spec=""):
     info = ProjectService().validate_repository(repo, "main")
-    return complete_run_validation(Config(), info, spec)
+    return Config(tests=automatic_validation(info, spec))
 
 
 def test_existing_tests_are_reused_and_manual_policy_is_preserved(service):
     svc, rid, repo = service
     commit_files(repo, {"package.json": json.dumps({"scripts": {"test": "vitest run"}})})
-    config = resolve(repo)
+    info = ProjectService().validate_repository(repo, "main")
+    config = complete_run_validation(Config(), info)
     assert any("npm" == cmd.argv[0] for cmd in config.tests.commands.values())
     assert not any(key.startswith("bootstrap_") for key in config.tests.commands)
     original = svc.config.model_dump()
-    info = ProjectService().validate_repository(repo, "main")
     assert complete_run_validation(svc.config, info).tests == svc.config.tests
     assert svc.config.model_dump() == original
     assert svc.store.get(rid)["config"]["tests"]["commands"]
 
 
-def test_empty_project_registration_preview_submission_freezes_bootstrap(web):
+def test_first_run_preview_and_submission_defer_commands(web):
     client, svc, _, repo, _ = web
     # The fixture has no configured runner manifest; remove its test files in a new commit.
     from dev_orchestra.infrastructure.git import Git
@@ -62,7 +66,8 @@ def test_empty_project_registration_preview_submission_freezes_bootstrap(web):
     preview = client.post(f"/api/projects/{project['id']}/run-previews", json=proposal)
     assert preview.status_code == 200, preview.text
     receipt = preview.json()
-    assert "bootstrap_unittest" in receipt["resolved_validation"]["commands"]
+    assert receipt["resolved_validation"]["commands"] == {}
+    assert "build" in receipt["resolved_validation"]["output_paths"]
     submitted = client.post(
         "/api/runs",
         json={**proposal, "preview_token": receipt["preview_token"]},
@@ -72,6 +77,167 @@ def test_empty_project_registration_preview_submission_freezes_bootstrap(web):
     run = svc.store.get(submitted.json()["run_id"])
     assert run["config"]["tests"] == receipt["resolved_validation"]
     assert not client.get(f"/api/projects/{project['id']}").json()["policy"]["tests"]["commands"]
+
+
+def test_first_candidate_runs_vitest_and_playwright_with_real_junit(setup, tmp_path, monkeypatch):
+    import shutil
+
+    from dev_orchestra.application.test_selection import verify_selection
+    from dev_orchestra.config import Tests as Commands
+    from dev_orchestra.domain.models import PipelineError
+    from dev_orchestra.infrastructure import coordination, test_runner
+    from dev_orchestra.infrastructure.git import Git
+
+    modules = Path(__file__).resolve().parents[1] / "node_modules"
+    if not shutil.which("npm") or not all(
+        (modules / ".bin" / runner).is_file() for runner in ("vitest", "playwright")
+    ):
+        pytest.skip("Local npm, Vitest and Playwright required")
+    svc, old_id, repo = setup
+    (repo / "main.py").unlink()
+    (repo / "tests/test_main.py").unlink()
+    commit_files(
+        repo,
+        {
+            ".gitignore": "node_modules/\n",
+            "docs/plan.md": "TypeScript arithmetic with Vitest and Playwright",
+        },
+    )
+    svc.config.tests = Commands()
+    spec = Path(svc.store.get(old_id)["directory"]) / "spec.md"
+    spec.write_text("docs/plan.md 기획을 보고 첫 단계를 개발해줘")
+    rid = svc.create(repo, spec, test_scope="affected")
+    frozen = svc.store.get(rid)["config"]["tests"]
+    assert frozen["commands"] == {}
+    # This fixture tests the runner transition independently of the plan-confirmation UI.
+    svc.store.update(rid, plan_approval_required=False)
+
+    testcase = {
+        "unit": "tests/sum.test.ts",
+        "browser": "tests/sum.spec.ts",
+    }
+
+    class Agent(FakeAgent):
+        def run_workspace(self, request, directory, session, stop):
+            if request.role == "developer":
+                assert not request.context["test_commands"]
+                assert request.context["validation_policy"]["resolve_after_development"]
+                if not request.context["workspace_resume"]["continuing"]:
+                    session.edit_file(
+                        "sum.ts", None, "export const add = (value: number) => value + 1;"
+                    )
+                    return WorkspaceResult(summary="동작 구현", commit_message="덧셈 동작 추가")
+                assert (
+                    "동작 테스트 파일이 없습니다"
+                    in request.context["workspace_resume"]["remaining"]
+                )
+                assert not request.context["workspace_resume"]["metadata_only"]
+                files = {
+                    "package.json": json.dumps(
+                        {
+                            "name": "first-app",
+                            "type": "module",
+                            "devDependencies": {"vitest": "*", "@playwright/test": "*"},
+                        }
+                    ),
+                    "vitest.config.ts": "export default {test:{include:['tests/*.test.ts']}}",
+                    "playwright.config.ts": "export default {testDir:'./tests',testMatch:'*.spec.ts'}",
+                    testcase["unit"]: (
+                        "import {test,expect} from 'vitest'; import {add} from '../sum'; "
+                        "test('adds one', () => expect(add(3)).toBe(4));"
+                    ),
+                    testcase["browser"]: (
+                        "import {test,expect} from '@playwright/test'; import {add} from '../sum'; "
+                        "test('exposes incremented value', () => expect(add(4)).toBe(5));"
+                    ),
+                }
+                for path, content in files.items():
+                    session.edit_file(path, None, content)
+                return WorkspaceResult(summary="첫 구현", commit_message="덧셈과 동작 테스트 추가")
+            policy = session.test_policy()
+            plan = [
+                {
+                    "command_id": key,
+                    "files": [testcase["browser" if "playwright" in command["argv"] else "unit"]],
+                    "reason": "새 덧셈 동작을 검증합니다.",
+                }
+                for key, command in policy["available_commands"].items()
+            ]
+            ids = [item["command_id"] for item in plan]
+            assert len(ids) == 2
+            result = session.run_tests(ids, test_plan=plan)
+            return WorkspaceTestResult(
+                summary="첫 커밋의 검증 결과",
+                test_evidence_id=result["evidence_id"],
+                command_ids=ids,
+                coverage=[Coverage(criterion_id="AC1", command_ids=ids)],
+            )
+
+    class LocalRunners:
+        def prepare(self, worktree, config, *args):
+            assert len(config.commands) == 2
+            local = worktree / "node_modules"
+            local.mkdir(exist_ok=True)
+            for name in (".bin", "vitest", "@playwright"):
+                if not (local / name).exists():
+                    (local / name).symlink_to(modules / name, target_is_directory=True)
+
+        def run(self, *args):
+            return test_runner.TestRunner().run(*args)
+
+    environment = test_runner.environment
+    monkeypatch.setattr(coordination, "host_root", lambda: tmp_path / "resources")
+    monkeypatch.setattr(
+        test_runner,
+        "environment",
+        lambda: (
+            environment() | {"npm_config_offline": "true", "npm_config_update_notifier": "false"}
+        ),
+    )
+    monkeypatch.setattr(test_runner, "sandbox_command", lambda *args, **kwargs: args[3])
+    WorkerRunner(svc.store, Agent(), LocalRunners()).execute(rid)
+    run = svc.store.get(rid)
+    assert run["state"] == "waiting_approval", run.get("error")
+    assert run["config"]["tests"] == frozen
+    assert run["candidate_validation"]["sha"] == Git(Path(run["worktree"])).sha()
+    selection = run["test_result"]["test_selection"]
+    assert selection["policy_hash"] == run["candidate_validation"]["hash"]
+    evidence = run["test_result"]["execution"]["commands"]
+    assert len(evidence) == 2
+    assert all(row["total"] == 1 and row["junit_hash"] for row in evidence)
+    assert all(item["files"] for item in selection["test_plan"])
+    verify_selection(run, run["test_result"])
+    run["candidate_validation"]["commands"].clear()
+    with pytest.raises(PipelineError, match="근거가 일치하지 않습니다"):
+        verify_selection(run, run["test_result"])
+
+
+def test_missing_candidate_runner_reports_configuration_without_running_tests(setup):
+    from dev_orchestra.config import Tests as Commands
+    from dev_orchestra.infrastructure.git import Git
+
+    svc, old_id, repo = setup
+    (repo / "main.py").unlink()
+    (repo / "tests/test_main.py").unlink()
+    Git(repo).commit("기획 단계 준비")
+    svc.config.tests = Commands()
+    spec = Path(svc.store.get(old_id)["directory"]) / "spec.md"
+    rid = svc.create(repo, spec)
+    svc.store.update(rid, plan_approval_required=False)
+
+    class Agent(FakeAgent):
+        def run_workspace(self, request, directory, session, stop):
+            assert request.role == "developer"
+            session.edit_file("package.json", None, '{"scripts":{"test":"echo nothing"}}')
+            session.edit_file("tests/example.test.ts", None, "import {test} from 'custom-runner';")
+            return WorkspaceResult(summary="구현", commit_message="패키지 설정 추가")
+
+    WorkerRunner(svc.store, Agent(), object()).execute(rid)
+    run = svc.store.get(rid)
+    assert run["state"] == "needs_input"
+    assert "후보 커밋에서 지원하는 테스트 설정" in run["error"]
+    assert "candidate_validation" not in run
+    assert all(step["role"] != "tester" for step in svc.store.steps(rid))
 
 
 def test_new_node_project_gets_dependency_free_runner(service):

@@ -145,6 +145,8 @@ export function NewRunPage() {
   const testCount = validationCommands.filter(
     ([, command]) => (command.kind ?? "test") === "test",
   ).length;
+  const deferredValidation =
+    !!preview.data?.receipt.resolved_validation && !validationCommands.length;
   return (
     <>
       <Link className="back-link" to="/">
@@ -432,37 +434,39 @@ export function NewRunPage() {
                 <p className="help">
                   {validationCommands.length
                     ? `테스트 ${testCount}개 · 빌드·정적 검사 ${validationCommands.length - testCount}개`
-                    : "자동 설정 · 실행 전 확인에서 기존 테스트 재사용 또는 테스트 환경 구성 계획을 확인합니다."}
+                    : "자동 설정 · 기존 검증을 탐지하고, 구성된 검증이 없으면 개발 후 후보 커밋에서 명령을 확정합니다."}
                 </p>
-                <details key={selected.data.id}>
-                  <summary>
-                    검증 명령 {validationCommands.length}개 자세히 보기
-                  </summary>
-                  <div
-                    className="new-run-validation-commands"
-                    tabIndex={0}
-                    role="region"
-                    aria-label="검증 명령 목록"
-                  >
-                    {validationCommands.map(([id, command]) => (
-                      <div key={id}>
-                        <strong>
-                          {id} ·{" "}
-                          {(command.kind ?? "test") === "test"
-                            ? "테스트"
-                            : "빌드·정적 검사"}
-                        </strong>
-                        <pre>{command.argv.join(" ")}</pre>
-                        <p className="help">
-                          작업 경로: {command.working_directory ?? "."}
-                          {command.junit_report
-                            ? ` · JUnit: ${command.junit_report}`
-                            : ""}
-                        </p>
-                      </div>
-                    ))}
-                  </div>
-                </details>
+                {validationCommands.length > 0 && (
+                  <details key={selected.data.id}>
+                    <summary>
+                      검증 명령 {validationCommands.length}개 자세히 보기
+                    </summary>
+                    <div
+                      className="new-run-validation-commands"
+                      tabIndex={0}
+                      role="region"
+                      aria-label="검증 명령 목록"
+                    >
+                      {validationCommands.map(([id, command]) => (
+                        <div key={id}>
+                          <strong>
+                            {id} ·{" "}
+                            {(command.kind ?? "test") === "test"
+                              ? "테스트"
+                              : "빌드·정적 검사"}
+                          </strong>
+                          <pre>{command.argv.join(" ")}</pre>
+                          <p className="help">
+                            작업 경로: {command.working_directory ?? "."}
+                            {command.junit_report
+                              ? ` · JUnit: ${command.junit_report}`
+                              : ""}
+                          </p>
+                        </div>
+                      ))}
+                    </div>
+                  </details>
+                )}
                 <Link to={`/projects/${selected.data.id}`}>
                   프로젝트 검증 설정 열기
                 </Link>
@@ -536,6 +540,15 @@ export function NewRunPage() {
                 ? "변경 영향 범위 테스트"
                 : "전체 테스트"}
             </dd>
+            {deferredValidation && (
+              <>
+                <dt>검증 명령</dt>
+                <dd>
+                  개발 후 확정 · 후보 커밋의 코드와 테스트 설정을 자동으로
+                  탐지합니다.
+                </dd>
+              </>
+            )}
             <dt>최대 수정 횟수</dt>
             <dd>
               {preview.data.proposal.max_fix_attempts ??

@@ -344,6 +344,8 @@ def prepare_dependencies(worktree, config, directory, stop=lambda: None, *, gene
     from dev_orchestra.infrastructure.node_runtime import node_pin, node_project
 
     roots = {root for item in config.commands.values() if (root := node_project(worktree, item))}
+    if generate_locks and not config.commands and contained(worktree, "package.json").is_file():
+        roots.add(worktree)
     generated = {}
     tracked = [name for name in Git(worktree).call("ls-files", "-z").split("\0") if name]
     for root in roots:

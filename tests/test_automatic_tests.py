@@ -101,24 +101,30 @@ def test_symlink_target_denied(candidate):
 
 
 @pytest.mark.parametrize(
-    "script,expected",
+    "manager,script,expected",
     [
-        ("test", "node"),
-        ("browser", "./node_modules/.bin/playwright"),
-        ("unit", "./node_modules/.bin/vitest"),
+        ("npm", "test", "node"),
+        ("npm", "browser", "./node_modules/.bin/playwright"),
+        ("npm", "unit", "./node_modules/.bin/vitest"),
+        ("pnpm", "browser", "./node_modules/.bin/playwright"),
+        ("pnpm", "unit", "./node_modules/.bin/vitest"),
     ],
 )
-def test_npm_file_adapters_replace_full_targets_preserve_reporters(candidate, script, expected):
+def test_package_file_adapters_replace_full_targets_preserve_reporters(
+    candidate, manager, script, expected
+):
     svc, rid, repo = candidate
     run = svc.store.get(rid)
     target = "tests/selected.test.mjs" if script == "test" else "tests/browser.spec.ts"
-    argv = ["npm", "run", script]
+    argv = [manager, "run", script]
     if script == "test":
         argv.insert(
             1, "--node-options=--test-reporter=junit --test-reporter-destination=build/results.xml"
         )
     else:
-        argv += ["--", "--reporter=junit"]
+        if manager == "npm":
+            argv += ["--"]
+        argv += ["--reporter=junit"]
     run["config"]["tests"]["commands"]["unit"]["argv"] = argv
     selection = select_tests(run, repo, run["base_sha"], plan=plan([target]))
     actual = selection["resolved_commands"]["unit"]["argv"]
