@@ -142,12 +142,12 @@ def verify_intent(data, intent, git, parent, *, pending=False):
     }
     marker = f"DevOrchestra-Checkpoint: {data['run_id']}:{data['step_id']}:{intent['request_id']}"
     message_format = intent.get("commit_message_format", 1)
-    if message_format not in {1, 2}:
+    if message_format not in {1, 2, 3}:
         raise PipelineError("unsupported workspace commit message format")
     message = (
-        format_branch_commit(intent["message"], data["branch"])
-        if message_format == 2
-        else intent["message"].strip()
+        intent["message"].strip()
+        if message_format == 1
+        else format_branch_commit(intent["message"], data["branch"], version=message_format)
     )
     if (
         intent["parent"] != parent

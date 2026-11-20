@@ -281,6 +281,7 @@ class WorkspaceSession:
             raise PipelineError("unexpected staged changes preserved")
         if self.snapshot() != self.data["files"]:
             raise PipelineError("unrecognized workspace changes preserved")
+        return run
 
     def prepare_environment(self):
         """Prepare a declared container toolchain and acknowledge real generated lockfiles."""
@@ -442,8 +443,14 @@ class WorkspaceSession:
             self.acknowledge(intent)
             self.guard()
             return {"sha": intent["sha"], "parent": intent["parent"], "tree": intent["tree"]}
-        formatted_message = format_branch_commit(message, self.data["branch"])
-        self.guard()
+        run = self.guard()
+        # Use the Run's stored prefix so changes in startup config do not affect it.
+        message_format = (
+            3 if run["config"].get("project", {}).get("branch_prefix") == "feature" else 2
+        )
+        formatted_message = format_branch_commit(
+            message, self.data["branch"], version=message_format
+        )
         if expected_sha != self.data["current_sha"]:
             raise PipelineError("checkpoint expected HEAD mismatch")
         changed = self.changed_files()
@@ -481,7 +488,7 @@ class WorkspaceSession:
             },
             "policy_hash_version": self.data.get("policy_hash_version", 1),
             "request_hash": checksum(args),
-            "commit_message_format": 2,
+            "commit_message_format": message_format,
             "parent": expected_sha,
             "tree": tree,
             "commit_message": commit_message,

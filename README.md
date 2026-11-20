@@ -160,6 +160,7 @@ GUI의 프로젝트 설정이나 [config.example.yaml](config.example.yaml)을 �
 | 설정 | 의미 |
 | --- | --- |
 | `project.default_base_branch` | 기본 기준 브랜치 |
+| `project.branch_prefix` | 작업 브랜치 접두사. 기본값 `feature`에서는 `feature/RUN_ID`로 생성 |
 | `codex.model`, `codex.reasoning_effort` | 공통 모델과 추론 강도 |
 | `codex.service_tier` | 공통 실행 속도. `null`은 Codex 기본값, `default`는 일반, `fast`는 패스트 |
 | `codex.roles` | 역할별 모델·추론 강도·속도 재정의 |

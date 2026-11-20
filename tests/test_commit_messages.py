@@ -42,14 +42,25 @@ def test_legacy_response_fallback_describes_files():
     ],
 )
 def test_branch_prefix_preserves_description(branch, message, expected):
-    assert format_branch_commit(message, branch) == expected
+    assert format_branch_commit(message, branch, version=2) == expected
+
+
+@pytest.mark.parametrize("message", ["응답 개선", "[task/subtask] 응답 개선"])
+def test_feature_prefix_formats_subject_once(message):
+    assert (
+        format_branch_commit(message, "feature/task/subtask", version=3)
+        == "[task/subtask] 응답 개선"
+    )
 
 
 @pytest.mark.parametrize("message", ["[한글] English only", "[한글] 자동 개발: 작업"])
-@pytest.mark.parametrize("branch", ["feature/codex/한글", "feature/ai/한글"])
-def test_branch_prefix_cannot_bypass_subject_validation(message, branch):
+@pytest.mark.parametrize(
+    ("branch", "version"),
+    [("feature/codex/한글", 2), ("feature/ai/한글", 2), ("feature/한글", 3)],
+)
+def test_branch_prefix_cannot_bypass_subject_validation(message, branch, version):
     with pytest.raises(PipelineError, match="concrete Korean subject"):
-        format_branch_commit(message, branch)
+        format_branch_commit(message, branch, version=version)
 
 
 def test_workspace_commit_uses_description_and_metadata(service):
@@ -155,13 +166,14 @@ def test_prefixed_checkpoint_retry_and_recovery(setup, role):
         )
 
 
-def test_legacy_checkpoint_recovery_keeps_original_message(setup, monkeypatch):
+@pytest.mark.parametrize("version", [1, 2])
+def test_legacy_checkpoint_recovery_keeps_original_message(setup, monkeypatch, version):
     session, _ = start_session(setup)
     edit(session, "main.py", "first\n")
-    # Reproduce a checkpoint written before branch prefixes were introduced.
+    # Reproduce the original subject on a feature branch created by an older Run.
     monkeypatch.setattr(
         "dev_orchestra.infrastructure.workspace.format_branch_commit",
-        lambda message, branch: message,
+        lambda message, branch, **kwargs: message,
     )
     session.checkpoint_commit(
         "legacy",
@@ -171,5 +183,8 @@ def test_legacy_checkpoint_recovery_keeps_original_message(setup, monkeypatch):
         "첫 기능",
     )
     intent = dict(session.data["commits"][0])
-    intent.pop("commit_message_format")
+    if version == 1:
+        intent.pop("commit_message_format")
+    else:
+        intent["commit_message_format"] = version
     verify_intent(session.data, intent, session.git, intent["parent"])

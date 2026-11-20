@@ -1601,7 +1601,7 @@ export interface components {
             policy: components["schemas"]["Policy"];
             /**
              * Branch Prefix
-             * @default feature/codex
+             * @default feature
              */
             branch_prefix: string;
             /** Version */

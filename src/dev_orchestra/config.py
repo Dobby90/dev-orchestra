@@ -8,10 +8,12 @@ from pydantic import Field, StringConstraints, model_serializer, model_validator
 
 from dev_orchestra.domain.models import Model
 
+DEFAULT_BRANCH_PREFIX = "feature"
+
 
 class Project(Model):
     default_base_branch: str = "main"
-    branch_prefix: str = "feature/codex"
+    branch_prefix: str = DEFAULT_BRANCH_PREFIX
 
 
 Role = Literal["planner", "developer", "tester", "reviewer", "fixer"]
