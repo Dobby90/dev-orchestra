@@ -391,6 +391,10 @@ def create_app(config=None, allowed_roots=None, port=8000, static_directory=None
     def archive_project(pid: str, request: Request):
         return backend.change_project(pid, version(request, pid, "project"))
 
+    @app.post("/api/projects/{pid}/repository/reverify", response_model=ProjectView)
+    def reverify_repository(pid: str, request: Request):
+        return backend.reverify_project(pid, version(request, pid, "project"))
+
     @app.get("/api/projects/{pid}/git", response_model=GitSettingsView)
     def git_settings(pid: str):
         return delivery.view(pid)

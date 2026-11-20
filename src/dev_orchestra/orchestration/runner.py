@@ -9,6 +9,8 @@ from pathlib import Path
 
 from dev_orchestra.agents.contracts import ResponseError, validate_role
 from dev_orchestra.application.errors import ApplicationError
+from dev_orchestra.application.handoff import repository_identity, same_repository
+from dev_orchestra.application.projects import ProjectService, verify_registered_directory
 from dev_orchestra.application.results import test_case_counts
 from dev_orchestra.application.test_changes import TestChangeService
 from dev_orchestra.application.validation import (
@@ -110,6 +112,9 @@ class Runner:
                         QueueService(self.store).running(*claim)
                         self.validate_registered_repository(run)
                     execution_contract(run)
+                    if expected := run.get("repository_identity"):
+                        if not same_repository(expected, repository_identity(run["repo"])):
+                            raise PipelineError("Run repository identity changed; files preserved")
                     with self.store.connection() as db:
                         if db.execute("SELECT version FROM schema_version").fetchone()[0] != 6:
                             raise PipelineError(
@@ -151,17 +156,14 @@ class Runner:
                 (run["id"],),
             ).fetchone()
         if project:
-            from dev_orchestra.application.projects import ProjectService
-
             info = ProjectService([Path(project["repository_path"]).parent]).validate_repository(
                 Path(project["repository_path"]), run["base"]
             )
-            stat = info.git_common_directory.stat()
-            if run["repo"] != str(info.repository_path) or json.loads(project["identity"]) != {
-                "device": stat.st_dev,
-                "inode": stat.st_ino,
-            }:
+            if run["repo"] != str(info.repository_path):
                 raise PipelineError("registered repository identity changed")
+            verify_registered_directory(
+                info, project["git_common_directory"], json.loads(project["identity"])
+            )
 
     def _execute(self, run_id):
         run = self.store.get(run_id)

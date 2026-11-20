@@ -1,19 +1,95 @@
 import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { ApiError } from "../api/client";
 import { api } from "../api/resources";
-import type { Schema } from "../api/types";
+import type { Project, Schema } from "../api/types";
 import { ErrorNotice, Loading } from "./common";
 import { Button } from "./ui/button";
+import { Modal } from "./ui/dialog";
 
-export function ProjectGitSettings({ pid }: { pid: string }) {
+export function ProjectGitSettings({
+  pid,
+  project,
+}: {
+  pid: string;
+  project?: Project;
+}) {
+  const client = useQueryClient();
+  const [confirming, setConfirming] = useState(false);
   const query = useQuery({
     queryKey: ["project-git", pid],
     queryFn: () => api.gitSettings(pid),
   });
+  const reverify = useMutation({
+    mutationFn: (value: Project) => api.reverifyRepository(value),
+    onSuccess: async (value) => {
+      client.setQueryData(["project", pid], value);
+      setConfirming(false);
+      await Promise.all([
+        client.invalidateQueries({ queryKey: ["project-git", pid] }),
+        client.invalidateQueries({ queryKey: ["projects"] }),
+        client.invalidateQueries({ queryKey: ["run"] }),
+        client.invalidateQueries({ queryKey: ["push"] }),
+      ]);
+    },
+    onError: () => client.invalidateQueries({ queryKey: ["project", pid] }),
+  });
+  const needsReverification =
+    query.error instanceof ApiError &&
+    query.error.code === "REPOSITORY_REVERIFY_REQUIRED";
   if (query.isPending) return <Loading />;
-  if (query.error)
-    return <ErrorNotice error={query.error} retry={() => query.refetch()} />;
-  return <GitForm key={query.data.version} pid={pid} value={query.data} />;
+  return (
+    <>
+      {query.error ? (
+        <ErrorNotice
+          error={query.error}
+          retry={needsReverification ? undefined : () => query.refetch()}
+        />
+      ) : (
+        <GitForm key={query.data.version} pid={pid} value={query.data} />
+      )}
+      {reverify.isSuccess && (
+        <p role="status">저장소 등록 정보를 확인했습니다.</p>
+      )}
+      {project &&
+        (needsReverification ||
+          (!query.error && project.repository_identity_legacy)) && (
+          <section className="panel panel-body">
+            <p>
+              이 Mac이 재부팅된 뒤에도 Git 설정을 사용하려면 저장소를 다시
+              확인하세요.
+            </p>
+            <Button
+              type="button"
+              variant="secondary"
+              disabled={reverify.isPending}
+              onClick={() => {
+                reverify.reset();
+                setConfirming(true);
+              }}
+            >
+              저장소 다시 확인
+            </Button>
+            <Modal
+              open={confirming}
+              onOpenChange={setConfirming}
+              title="같은 저장소인지 확인해 주세요"
+              description="표시된 경로의 Git 저장소가 처음 등록한 저장소와 같으면 확인해 주세요. 기존 프로젝트와 Git 계정 설정은 유지됩니다."
+            >
+              <p className="mono path">{project.repository_path}</p>
+              {reverify.error && <ErrorNotice error={reverify.error} />}
+              <Button
+                type="button"
+                disabled={reverify.isPending}
+                onClick={() => reverify.mutate(project)}
+              >
+                {reverify.isPending ? "확인 중…" : "같은 저장소로 확인"}
+              </Button>
+            </Modal>
+          </section>
+        )}
+    </>
+  );
 }
 
 function GitForm({
@@ -66,6 +142,12 @@ function GitForm({
         Git 설정은 변경하지 않습니다. 토큰이 없으면 기존 SSH·credential helper를
         사용합니다.
       </p>
+      {!value.remotes.length && (
+        <p className="notice">
+          선택 가능한 Push 원격이 없습니다. 로컬 저장소에 Push 주소가 하나인 Git
+          원격을 설정한 뒤 이 탭을 다시 열어 주세요.
+        </p>
+      )}
       <form
         className="form-grid"
         onSubmit={(e) => {

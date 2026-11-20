@@ -215,6 +215,23 @@ export interface paths {
         patch: operations["patch_project_api_projects__pid__patch"];
         trace?: never;
     };
+    "/api/projects/{pid}/repository/reverify": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Reverify Repository */
+        post: operations["reverify_repository_api_projects__pid__repository_reverify_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/projects/{pid}/git": {
         parameters: {
             query?: never;
@@ -1596,6 +1613,11 @@ export interface components {
             name: string;
             /** Repository Path */
             repository_path: string;
+            /**
+             * Repository Identity Legacy
+             * @default false
+             */
+            repository_identity_legacy: boolean;
             /** Default Base Branch */
             default_base_branch: string;
             policy: components["schemas"]["Policy"];
@@ -3027,6 +3049,37 @@ export interface operations {
                 "application/json": components["schemas"]["ProjectPatch"];
             };
         };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProjectView"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    reverify_repository_api_projects__pid__repository_reverify_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                pid: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
         responses: {
             /** @description Successful Response */
             200: {

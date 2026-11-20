@@ -27,6 +27,7 @@ const p: Project = {
   id: "prj-1",
   name: "프로젝트",
   repository_path: "/tmp/repo",
+  repository_identity_legacy: false,
   default_base_branch: "main",
   branch_prefix: "custom/tasks",
   version: 0,

@@ -103,6 +103,11 @@ export const api = {
       method: "DELETE",
       headers: version("project", p.id, p.version),
     }),
+  reverifyRepository: (p: Project) =>
+    request<Project>(`/projects/${id(p.id)}/repository/reverify`, {
+      method: "POST",
+      headers: version("project", p.id, p.version),
+    }),
   branches: (pid: string) =>
     request<Schema["BranchPage"]>(`/projects/${id(pid)}/branches`),
   runs: (params: URLSearchParams) =>

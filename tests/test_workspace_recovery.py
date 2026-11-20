@@ -4,14 +4,17 @@ import json
 from pathlib import Path
 
 import pytest
+from test_git_delivery import mounted_volume as mounted_volume
 from test_workflow import FakeAgent, FakeTests
 from test_workflow import WorkerRunner as Runner
 from test_workspace import checkpoint, edit, start_session
 from test_workspace import setup as setup
 
 from dev_orchestra.agents.contracts import ResponseError
+from dev_orchestra.application.backend import BackendService
 from dev_orchestra.application.plan_approval import binding, decide
-from dev_orchestra.application.workspace_recovery import inspect_workspace
+from dev_orchestra.application.web_contracts import ProjectCreate
+from dev_orchestra.application.workspace_recovery import inspect_workspace, recover_workspace
 from dev_orchestra.domain.models import (
     Coverage,
     PipelineError,
@@ -21,6 +24,7 @@ from dev_orchestra.domain.models import (
 )
 from dev_orchestra.infrastructure.files import digest
 from dev_orchestra.infrastructure.git import Git
+from dev_orchestra.infrastructure.locking import lock
 
 
 def planned(setup, agent, tests):
@@ -255,6 +259,59 @@ def test_unverified_recovery_blocks_and_preserves_files(setup, change):
     with pytest.raises(PipelineError):
         inspect_workspace(svc.store, svc.store.get(rid))
     assert (session.root / "main.py").exists()
+
+
+@pytest.mark.parametrize("tampered", [False, True])
+def test_project_reverification_preserves_checkpoint_binding(setup, mounted_volume, tampered):
+    svc, rid, repo = setup
+    backend = BackendService(svc, [], b"test")
+    p = backend.register(
+        ProjectCreate(
+            name="재확인 테스트",
+            repository_path=str(repo.resolve()),
+            policy={"tests": svc.config.tests.model_dump(mode="json")},
+        )
+    )
+    with svc.store.connection() as db:
+        old = json.loads(db.execute("SELECT identity FROM projects").fetchone()[0])
+    svc.store.update(
+        rid,
+        repository_identity={"common": str(Git(repo).common()), **old},
+        plan_approval_required=False,
+    )
+    session, _ = start_session(setup)
+    edit(session, "main.py", "보존된 작업\n")
+    svc.store.interrupt_steps(rid, "test interruption")
+    svc.store.update(rid, "paused")
+    run = svc.store.get(rid)
+    reference = run["workspace_checkpoint"]
+    snapshot = Path(run["directory"]) / reference["snapshot"]
+    initial = snapshot.read_bytes()
+    mounted_volume.update(device=43, uuid="volume-a")
+    with pytest.raises(PipelineError, match="identity mismatch"):
+        inspect_workspace(svc.store, run)
+    if tampered:
+        (session.root / "main.py").write_text("외부 변경\n")
+
+    assert backend.reverify_project(p["id"], p["version"])["id"] == p["id"]
+    run = svc.store.get(rid)
+    assert run["workspace_checkpoint"] == reference
+    assert snapshot.read_bytes() == initial
+    if tampered:
+        assert not run.get("workspace_identity_confirmation")
+        with pytest.raises(PipelineError):
+            svc.resume(rid)
+        assert (session.root / "main.py").read_text() == "외부 변경\n"
+        return
+
+    mounted_volume["device"] = 44
+    svc.resume(rid)
+    with lock(Path(run["directory"]) / "execution.lock"):
+        resumed = recover_workspace(svc.store, svc.store.get(rid))
+    assert resumed.data["step_id"] == reference["step_id"]
+    assert resumed.data["worktree_identity"]["volume_uuid"] == "volume-a"
+    assert (resumed.root / "main.py").read_text() == "보존된 작업\n"
+    assert snapshot.read_bytes() == initial
 
 
 def test_unacknowledged_file_write_is_preserved_but_not_adopted(setup, monkeypatch):

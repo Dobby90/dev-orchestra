@@ -4,26 +4,30 @@ import shlex
 from pathlib import Path
 
 from dev_orchestra.domain.models import PipelineError
+from dev_orchestra.infrastructure.filesystem_identity import directory_identity, same_directory
 from dev_orchestra.infrastructure.git import Git
 
 
 def repository_identity(repo):
     common = Git(Path(repo)).common().resolve(strict=True)
-    stat = common.stat()
-    return {"common": str(common), "device": stat.st_dev, "inode": stat.st_ino}
+    return {"common": str(common), **directory_identity(common)}
+
+
+def same_repository(expected, current):
+    return expected.get("common") == current["common"] and same_directory(expected, current)
 
 
 def verify_branch(run, sha, *, worktree=True):
     original = Git(Path(run["repo"]))
     identity = repository_identity(run["repo"])
-    if run.get("repository_identity", identity) != identity:
+    if not same_repository(run.get("repository_identity", identity), identity):
         raise PipelineError("local handoff repository identity changed; files preserved")
     if original.call("show-ref", "--verify", "--hash", "refs/heads/" + run["branch"]) != sha:
         raise PipelineError("local handoff branch differs from approved candidate; files preserved")
     if worktree:
         git = Git(Path(run["worktree"]))
         if (
-            repository_identity(run["worktree"]) != identity
+            not same_repository(identity, repository_identity(run["worktree"]))
             or git.call("symbolic-ref", "-q", "HEAD") != "refs/heads/" + run["branch"]
             or git.sha() != sha
         ):

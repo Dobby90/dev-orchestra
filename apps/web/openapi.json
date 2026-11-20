@@ -605,6 +605,45 @@
         }
       }
     },
+    "/api/projects/{pid}/repository/reverify": {
+      "post": {
+        "summary": "Reverify Repository",
+        "operationId": "reverify_repository_api_projects__pid__repository_reverify_post",
+        "parameters": [
+          {
+            "name": "pid",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Pid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProjectView"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/projects/{pid}/git": {
       "get": {
         "summary": "Git Settings",
@@ -4829,6 +4868,11 @@
           "repository_path": {
             "type": "string",
             "title": "Repository Path"
+          },
+          "repository_identity_legacy": {
+            "type": "boolean",
+            "title": "Repository Identity Legacy",
+            "default": false
           },
           "default_base_branch": {
             "type": "string",

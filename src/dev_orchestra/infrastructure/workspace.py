@@ -24,6 +24,7 @@ from dev_orchestra.domain.models import (
 )
 from dev_orchestra.infrastructure.commit_messages import describe_commit, format_branch_commit
 from dev_orchestra.infrastructure.files import contained, digest, write
+from dev_orchestra.infrastructure.filesystem_identity import directory_identity
 from dev_orchestra.infrastructure.git import Git
 from dev_orchestra.infrastructure.process import redact, sanitize
 from dev_orchestra.infrastructure.secret_files import public_environment_example, secret_path
@@ -61,8 +62,6 @@ class WorkspaceSession:
             "tester",
         }:
             raise PipelineError("workspace editing is restricted to developer/tester/fixer")
-        from dev_orchestra.application.workspace_recovery import file_identity
-
         git = Git(Path(run["worktree"]))
         if git.sha() != request.input_sha or git.call("diff", "--cached", "--name-only"):
             raise PipelineError("workspace session requires unchanged HEAD and empty index")
@@ -76,8 +75,8 @@ class WorkspaceSession:
             "repo": run["repo"],
             "branch": run["branch"],
             "common": str(git.common().resolve()),
-            "worktree_identity": file_identity(run["worktree"]),
-            "common_identity": file_identity(git.common()),
+            "worktree_identity": directory_identity(run["worktree"]),
+            "common_identity": directory_identity(git.common()),
             "git_link_hash": digest((Path(run["worktree"]) / ".git").read_bytes()),
             "role": request.role,
             "iteration": request.iteration,

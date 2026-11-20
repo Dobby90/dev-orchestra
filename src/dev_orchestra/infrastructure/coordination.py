@@ -14,6 +14,7 @@ from pathlib import Path
 
 from dev_orchestra.domain.models import PipelineError, StopRequested
 from dev_orchestra.infrastructure.files import write
+from dev_orchestra.infrastructure.filesystem_identity import directory_identity, same_directory
 from dev_orchestra.infrastructure.locking import OwnershipError, lock
 from dev_orchestra.infrastructure.process_owner import alive, ensure_stopped, identity
 
@@ -93,6 +94,12 @@ def run_directory(directory):
     )
 
 
+def _matches_owner_directory(expected, path):
+    if isinstance(expected, list) and len(expected) == 2:
+        expected = {"device": expected[0], "inode": expected[1]}
+    return same_directory(expected, directory_identity(path))
+
+
 def _cleanup_owner(path, directory):
     if not path.exists():
         return
@@ -101,12 +108,11 @@ def _cleanup_owner(path, directory):
         if record["protocol"] != PROTOCOL:
             raise ValueError()
         previous = Path(record["directory"])
-        stat = previous.stat()
         if (
             not previous.is_absolute()
             or not previous.is_dir()
             or previous.is_symlink()
-            or record["directory_identity"] != [stat.st_dev, stat.st_ino]
+            or not _matches_owner_directory(record["directory_identity"], previous)
             or not isinstance(record["owner"], dict)
         ):
             raise ValueError()
@@ -115,11 +121,10 @@ def _cleanup_owner(path, directory):
     if alive(record["owner"]):
         raise OwnershipError("resource owner is still alive")
     previous_run = Path(record.get("run_directory", str(previous)))
-    stat = previous_run.stat()
-    if record.get("run_directory_identity", [stat.st_dev, stat.st_ino]) != [
-        stat.st_dev,
-        stat.st_ino,
-    ]:
+    if not previous_run.is_dir() or (
+        "run_directory_identity" in record
+        and not _matches_owner_directory(record["run_directory_identity"], previous_run)
+    ):
         raise PipelineError("resource Run directory identity changed")
     current_run = run_directory(directory) if directory is not None else None
     with nullcontext() if previous_run == current_run else lock(previous_run / "execution.lock"):
@@ -176,15 +181,11 @@ def _slot(root, directory, stop, limit, waiting):
                                 "protocol": PROTOCOL,
                                 "owner": identity(os.getpid()),
                                 "directory": str(directory),
-                                "directory_identity": [
-                                    directory.stat().st_dev,
-                                    directory.stat().st_ino,
-                                ],
+                                "directory_identity": directory_identity(directory),
                                 "run_directory": str(run_directory(directory)),
-                                "run_directory_identity": [
-                                    run_directory(directory).stat().st_dev,
-                                    run_directory(directory).stat().st_ino,
-                                ],
+                                "run_directory_identity": directory_identity(
+                                    run_directory(directory)
+                                ),
                             },
                         )
                     except BaseException:
