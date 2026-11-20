@@ -199,8 +199,12 @@ def delete(
 
 @app.command()
 @guarded
-def report(ctx: typer.Context, run_id: str):
-    typer.echo(ctx.obj.report(run_id))
+def report(
+    ctx: typer.Context,
+    run_id: str,
+    detailed: bool = typer.Option(False, "--detailed", help="원문과 상세 검증 근거 조회"),
+):
+    typer.echo(ctx.obj.report(run_id, detailed=detailed))
 
 
 @app.command()

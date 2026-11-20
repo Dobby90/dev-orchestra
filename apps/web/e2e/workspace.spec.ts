@@ -697,7 +697,7 @@ test("CLI 시작·브라우저 종료·재접속·CLI 승인과 GUI 생성 교�
   ).toBeVisible();
   await reopened.getByRole("tab", { name: "최종 보고서" }).click();
   await expect(
-    reopened.getByText(/completed/, { exact: false }).first(),
+    reopened.getByRole("heading", { name: "인계", exact: true }),
   ).toBeVisible();
   expect(
     execFileSync("git", ["-C", repo, "rev-parse", "HEAD"], {

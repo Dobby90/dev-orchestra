@@ -360,8 +360,12 @@ class RunService:
     def status(self, run_id):
         return self.recovery.status(run_id)
 
-    def report(self, run_id):
+    def report(self, run_id, *, detailed=False):
         run = self.store.get(run_id)
+        if detailed:
+            from dev_orchestra.application.reporting import result_markdown
+
+            return result_markdown(self.store, run, self.store.steps(run_id), detailed=True)
         self.refresh_report(run_id)
         path = Path(run["directory"]) / "final-report.md"
         if not path.exists():

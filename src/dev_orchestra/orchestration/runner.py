@@ -958,54 +958,6 @@ class Runner:
         from dev_orchestra.application.reporting import result_markdown
 
         content = result_markdown(self.store, run, steps)
-        content += "\n## 승인·인계 정보\n\n" + "\n".join(
-            f"- **{k}**: {v}" for k, v in summary.items()
-        )
-        from dev_orchestra.application.handoff import handoff_markdown
-
-        content += handoff_markdown(run)
-        content += "\n\n리뷰 범위: Run 누적 변경과 직접 영향을 받는 코드·호출부·기존 미해결 이슈.\n"
-        content += "\n\n## 테스트 범위\n\n요청 범위: " + run.get("test_scope", "full")
-        selection = (run.get("test_result") or {}).get("test_selection")
-        if selection:
-            content += "\n\n실제 범위: " + selection["actual_scope"]
-            content += "\n\n실행 명령: " + ", ".join(selection["included"])
-            content += "\n\n미실행 명령: " + (", ".join(selection["excluded"]) or "없음")
-            content += "\n\n" + "\n".join(selection["reasons"])
-            content += "\n\n" + "\n".join(
-                key + ": " + value for key, value in selection.get("command_reasons", {}).items()
-            )
-        if run.get("test_change_records"):
-            content += "\n\n## 기존 테스트 변경\n\n최종 승인 전에 전체 Diff와 다음 변경 근거를 확인하세요.\n\n"
-            for record in run["test_change_records"]:
-                for change in record["changes"]:
-                    content += f"- `{change['file']}` ({', '.join(change['criterion_ids'])}): {change['reason']}\n"
-        content += "\n\n## 부록: 원문 요구사항\n\n" + run["spec"]
-        if run.get("directives"):
-            content += "\n\n## 부록: 사용자 수정 요청\n\n" + "\n\n".join(run["directives"])
-        content += "\n\n## 부록: 구현·검증 이력\n\n"
-        for step in steps:
-            content += f"- {step['role']} iteration={step['iteration']} attempt={step['attempt']} {step['status']} SHA={step['output_sha']}\n"
-            from dev_orchestra.application.progress import role_progress
-
-            progress = role_progress(self.store, run, step)
-            for commit in progress["commits"]:
-                content += f"  - 작업 단위 커밋 `{commit['sha']}`: {commit['summary']} (저장 완료, 검증 통과와 별도)\n"
-            if progress["checkpoint_sha"]:
-                content += f"  - 마지막 복구 지점 `{progress['checkpoint_sha']}` · 보존 변경 {progress['preserved_changes']}개 · 재개 방식 {progress['recovery']}\n"
-        content += (
-            "\n## 부록: 원본 테스트·리뷰 결과\n\n```json\n"
-            + json.dumps(
-                {"tests": run.get("test_result"), "review": run.get("review_result")},
-                indent=2,
-                ensure_ascii=False,
-            )
-            + "\n```\n"
-        )
-        content += (
-            "\n\n자동 리뷰는 결함 부재를 보장하지 않습니다. Push·Merge는 자동 수행하지 않습니다.\n"
-        )
-        content = redact(content)
         write(Path(run["directory"]) / "metadata.json", summary)
         write(Path(run["directory"]) / "final-report.md", content)
         from dev_orchestra.application.results import Results

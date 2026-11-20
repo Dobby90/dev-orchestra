@@ -198,20 +198,7 @@ class Results:
                 for index, i in enumerate(payload.get("issues", []))
             ]
         if step_id is None and payload.get("schema_version") == 2:
-            from dev_orchestra.application.reviews import Reviews
-
-            current = {i["issue_id"]: i for i in Reviews(self.store).issues(run_id)}
-            issues = [
-                dict(
-                    i,
-                    status=current[i["issue_id"]]["status"],
-                    resolution_evidence=None,
-                    status_note="사용자 분류",
-                )
-                if i["issue_id"] in current and current[i["issue_id"]]["status"] != i["status"]
-                else i
-                for i in issues
-            ]
+            issues = self.current_review_issues(run_id, issues)
         base.update(
             status="available",
             summary=payload.get("summary", ""),
@@ -219,6 +206,22 @@ class Results:
             legacy_incomplete=payload.get("schema_version") != 2,
         )
         return base
+
+    def current_review_issues(self, run_id, issues):
+        from dev_orchestra.application.reviews import Reviews
+
+        current = {i["issue_id"]: i["status"] for i in Reviews(self.store).issues(run_id)}
+        return [
+            dict(
+                i,
+                status=current[i["issue_id"]],
+                resolution_evidence=None,
+                status_note="사용자 분류",
+            )
+            if i["issue_id"] in current and current[i["issue_id"]] != i["status"]
+            else i
+            for i in issues
+        ]
 
     def save_snapshot(self, run_id, sha):
         if not self.enabled():

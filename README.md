@@ -134,6 +134,7 @@ cp config.example.yaml config.yaml
 기획을 수정하려면 `revise-plan RUN_ID --plan-hash PLAN_HASH --reason "수정할 내용"`을 사용합니다. 일반 `resume`은 기획 승인을 대신하지 않습니다.
 
 최종 승인 대기에 도달하면 보고서와 테스트·리뷰·Diff를 검토한 뒤 승인합니다.
+최종 보고서에는 변경 요약, 검증 결과, 승인 전 확인 항목이 표시됩니다. 웹에서는 보고서 아래의 링크로 테스트·코드 리뷰·변경 내용·요구사항을 열 수 있습니다. CLI에서 원문과 상세 근거가 필요하면 `report RUN_ID --detailed`를 사용합니다.
 
 ```sh
 .venv/bin/devorchestra --config config.yaml report RUN_ID
