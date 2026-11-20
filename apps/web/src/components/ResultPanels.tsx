@@ -293,6 +293,9 @@ export function ReviewPanel({
                 </p>
                 <p>{item.evidence}</p>
                 <p className="subtle">제안: {item.suggestion}</p>
+                {item.status_note && (
+                  <p className="notice">{item.status_note}</p>
+                )}
                 {item.resolution_evidence && (
                   <div className="notice">
                     <ShieldCheck size={16} />

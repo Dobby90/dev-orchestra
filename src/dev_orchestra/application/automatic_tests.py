@@ -6,7 +6,7 @@ import shlex
 from pathlib import Path, PurePosixPath
 
 from dev_orchestra.application.test_changes import checksum
-from dev_orchestra.config import Config
+from dev_orchestra.application.validation import run_test_policy, run_test_policy_hash
 from dev_orchestra.domain.models import PipelineError, TestTarget
 from dev_orchestra.infrastructure.git import Git
 
@@ -43,7 +43,14 @@ def targeted_argv(run, candidate, command, files):
         if not content:
             raise PipelineError("test target is empty")
     argv = list(command.argv)
-    if Path(argv[0]).name == "npm":
+    manager = Path(argv[0]).name
+    exec_prefix = []
+    if manager in {"npm", "pnpm", "yarn"} and argv[1:2] == ["exec"]:
+        prefix = 4 if manager == "npm" and argv[2:4] == ["--no", "--"] else 2
+        exec_prefix, argv = argv[:prefix], argv[prefix:]
+        if not argv:
+            raise PipelineError("test runner missing after package manager exec")
+    elif manager in {"npm", "pnpm", "yarn"}:
         try:
             index = argv.index("run")
             if any(not arg.startswith("--node-options=") for arg in argv[1:index]):
@@ -56,7 +63,7 @@ def targeted_argv(run, candidate, command, files):
             runner = shlex.split(text)
             if runner[0] == "npx":
                 runner = runner[1:]
-            if runner[0] in {"playwright", "vitest"}:
+            if runner and runner[0] in {"playwright", "vitest"}:
                 runner[0] = "./node_modules/.bin/" + runner[0]
             node_options = [
                 option
@@ -75,10 +82,10 @@ def targeted_argv(run, candidate, command, files):
             )
             # Preserve npm lifecycle behavior: targeting scripts with hooks needs a dedicated command.
             if "pre" + script in package["scripts"] or "post" + script in package["scripts"]:
-                raise ValueError("npm lifecycle hooks")
+                raise ValueError("package manager lifecycle hooks")
         except (ValueError, KeyError, IndexError) as error:
             raise PipelineError(
-                "cannot safely filter npm script; select this command with files=[] and explain why"
+                "cannot safely filter package script; select this command with files=[] and explain why"
             ) from error
     executable = Path(argv[0]).name
     prefix = 1
@@ -87,10 +94,10 @@ def targeted_argv(run, candidate, command, files):
         executable = "pytest"
     elif executable == "node" and "--test" not in argv:
         raise PipelineError("node target requires --test")
-    elif executable in {"playwright", "vitest"}:
-        if argv[1:2] not in (["test"], ["run"]):
-            raise PipelineError("test runner requires test/run subcommand")
+    elif (executable, argv[1:2]) in (("playwright", ["test"]), ("vitest", ["run"])):
         prefix = 2
+    elif executable == "playwright" or executable == "vitest" and "--run" not in argv:
+        raise PipelineError("test runner requires test/run subcommand")
     if executable not in {"pytest", "node", "playwright", "vitest"}:
         raise PipelineError(
             "runner has no safe file adapter; select files=[] with an expansion reason"
@@ -132,6 +139,7 @@ def targeted_argv(run, candidate, command, files):
         "--strict-config",
         "--test",
         "--run",
+        "--no-cache",
         "--no-file-parallelism",
         "--bail",
     }
@@ -156,11 +164,11 @@ def targeted_argv(run, candidate, command, files):
         result.extend(re.escape(name) + "$" for name in files)
     else:
         result.extend(files)
-    return result
+    return exec_prefix + result
 
 
 def model_selection(run, candidate, paths, plan=None, input_error=None):
-    tests = Config.model_validate(run["config"]).tests
+    tests = run_test_policy(run)
     if input_error:
         raise PipelineError(
             "cannot analyze cumulative changes; refusing automatic full test fallback"
@@ -234,7 +242,7 @@ def model_selection(run, candidate, paths, plan=None, input_error=None):
         "base_sha": run["base_sha"],
         "candidate_sha": candidate,
         "revision": run.get("revision", 0),
-        "policy_hash": checksum(run["config"]["tests"]),
+        "policy_hash": run_test_policy_hash(run),
         "criteria_hash": checksum(run.get("criteria", [])),
         "commands_hash": checksum(commands),
         "test_plan": [item.model_dump() for item in targets],

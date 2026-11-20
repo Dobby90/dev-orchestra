@@ -3,7 +3,7 @@
 from fnmatch import fnmatchcase
 
 from dev_orchestra.application.test_changes import checksum
-from dev_orchestra.config import Config
+from dev_orchestra.application.validation import run_test_policy, run_test_policy_hash
 from dev_orchestra.domain.models import PipelineError
 from dev_orchestra.infrastructure.git import Git
 
@@ -16,7 +16,7 @@ def selection_for_paths(run, candidate, paths, input_error=None, plan=None):
     if automatic(run):
         return model_selection(run, candidate, paths, plan, input_error)
 
-    tests = Config.model_validate(run["config"]).tests
+    tests = run_test_policy(run)
     scope = run.get("test_scope", "full")
     if scope not in {"full", "affected"}:
         raise PipelineError("unsupported test scope")
@@ -109,7 +109,7 @@ def selection_for_paths(run, candidate, paths, input_error=None, plan=None):
         "base_sha": run["base_sha"],
         "candidate_sha": candidate,
         "revision": run.get("revision", 0),
-        "policy_hash": checksum(run["config"]["tests"]),
+        "policy_hash": run_test_policy_hash(run),
         "criteria_hash": checksum(run.get("criteria", [])),
         "commands_hash": checksum({key: tests.commands[key].model_dump() for key in selected}),
     }
@@ -128,7 +128,7 @@ def select_tests(run, worktree, candidate, plan=None):
 
 
 def selected_config(run, selection):
-    config = Config.model_validate(run["config"]).tests
+    config = run_test_policy(run)
     return config.model_copy(
         update={
             "commands": {
@@ -165,15 +165,10 @@ def verify_selection(run, payload):
     actual = [item.get("command_id") for item in execution.get("commands", [])]
     if set(actual) != set(selection["included"]) or len(actual) != len(set(actual)):
         raise PipelineError("test execution does not cover the host required command set")
+    commands = selected_config(run, selection).commands
     for command in execution.get("commands", []):
-        policy = (
-            selection["resolved_commands"]
-            if selection.get("selector_version") == 2
-            else run["config"]["tests"]["commands"]
-        )[command["command_id"]]
-        if command.get("argv") != policy["argv"] or command.get("kind", "test") != policy.get(
-            "kind", "test"
-        ):
+        policy = commands[command["command_id"]]
+        if command.get("argv") != policy.argv or command.get("kind", "test") != policy.kind:
             raise PipelineError("test execution command differs from immutable policy")
 
 
@@ -217,8 +212,12 @@ def verify_tool_evidence(run, step, payload):
             if digest(junit.read_bytes()) != command["junit_hash"]:
                 raise PipelineError("JUnit evidence checksum mismatch")
         for adapter in command.get("runtime_adapters", []):
-            files = list(path.parent.glob(adapter["sha256"][:16] + "-*"))
-            if not files or not any(
-                digest(file.read_bytes()) == adapter["sha256"] for file in files
-            ):
+            if adapter == "docker":
+                # Container metadata is already bound to the checksummed execution record.
+                continue
+            sha = adapter.get("sha256") if isinstance(adapter, dict) else None
+            if not isinstance(sha, str) or not sha:
+                raise PipelineError("invalid runtime adapter evidence")
+            files = list(path.parent.glob(sha[:16] + "-*"))
+            if not files or not any(digest(file.read_bytes()) == sha for file in files):
                 raise PipelineError("runtime adapter checksum mismatch")

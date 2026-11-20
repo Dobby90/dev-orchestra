@@ -330,6 +330,7 @@ def test_mcp_dispatch_rejects_extra_fields_and_arbitrary_tools(setup):
     assert {tool["name"] for tool in definitions["tools"]} == {
         "edit_file",
         "checkpoint_commit",
+        "prepare_environment",
         "workspace_state",
     }
     result = dispatch(
@@ -386,7 +387,7 @@ def call(method, params=None):
     assert 'error' not in response, response
     return response['result']
 assert call('initialize')['protocolVersion'] == '2024-11-05'
-assert len(call('tools/list')['tools']) == 3
+assert len(call('tools/list')['tools']) == 4
 result = call('tools/call', {{'name': 'edit_file', 'arguments': {{
     'file': 'ignored.py', 'expected_hash': None, 'content': 'actual host edit\\n'
 }}}})

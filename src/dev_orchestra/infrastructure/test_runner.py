@@ -18,6 +18,7 @@ from dev_orchestra.infrastructure.process import (
     execution_scope,
     sanitize,
 )
+from dev_orchestra.infrastructure.secret_files import readable_environment_example, secret_path
 
 
 def sandbox_command(worktree, outputs, scratch, argv, network="none", *, browser=False):
@@ -62,7 +63,8 @@ def sandbox_command(worktree, outputs, scratch, argv, network="none", *, browser
             profile += '(allow network-inbound (local ip "localhost:*"))'
             profile += '(allow network-outbound (remote ip "localhost:*"))'
         for item in worktree.rglob("*"):
-            if item.name.startswith(".env") or item.suffix in {".pem", ".key"}:
+            relative = item.relative_to(worktree)
+            if secret_path(relative) and not readable_environment_example(item, relative):
                 profile += "(deny file-read* " + sub(item) + ")"
         return ["/usr/bin/sandbox-exec", "-p", profile, *argv]
     if platform.system() == "Linux" and shutil.which("bwrap"):
@@ -176,6 +178,11 @@ def junit_bundle(reports):
 
 class TestRunner:
     __test__ = False
+
+    def host_tools(self, directory, stop=lambda: None):
+        from dev_orchestra.infrastructure.containers import host_tools
+
+        return host_tools(directory, stop)
 
     def prepare(self, worktree, config, directory, stop=lambda: None):
         from dev_orchestra.infrastructure.dependencies import prepare_dependencies
@@ -305,16 +312,48 @@ class TestRunner:
                         "JAVA_TOOL_OPTIONS": f'-Duser.home="{scratch}" -Djava.io.tmpdir="{scratch}"',
                     }
                     env.update(command.env)
+                    from dev_orchestra.infrastructure.containers import run_arguments, toolchain
                     from dev_orchestra.infrastructure.java import java_environment
 
-                    env.update(java_environment(worktree, command))
-                    runtime_argv, adapters = runtime_command(worktree, command, directory, env)
-                    result["runtime_argv"] = runtime_argv
-                    result["runtime_adapters"] = adapters
-                    options = {"browser": True} if "PLAYWRIGHT_BROWSERS_PATH" in command.env else {}
-                    argv = sandbox_command(
-                        worktree, outputs, scratch, runtime_argv, command.network, **options
-                    )
+                    prepared = toolchain(worktree, directory, stop)
+                    if prepared:
+                        argv, owner_env = run_arguments(
+                            worktree,
+                            worktree,
+                            outputs,
+                            scratch,
+                            command.argv,
+                            prepared,
+                            directory,
+                            cwd=cwd,
+                            extra_env=command.env,
+                        )
+                        env.update(owner_env)
+                        result["runtime_argv"] = command.argv
+                        result["runtime_adapters"] = ["docker"]
+                        result["container_environment"] = {
+                            k: v for k, v in prepared.items() if k != "docker"
+                        }
+                    else:
+                        env.update(java_environment(worktree, command))
+                        from dev_orchestra.infrastructure.node_runtime import (
+                            node_environment,
+                            node_project,
+                        )
+
+                        if root := node_project(worktree, command):
+                            node_env, runtime = node_environment(root, directory, stop)
+                            env.update(node_env)
+                            result["node_runtime"] = runtime
+                        runtime_argv, adapters = runtime_command(worktree, command, directory, env)
+                        result["runtime_argv"] = runtime_argv
+                        result["runtime_adapters"] = adapters
+                        options = (
+                            {"browser": True} if "PLAYWRIGHT_BROWSERS_PATH" in command.env else {}
+                        )
+                        argv = sandbox_command(
+                            worktree, outputs, scratch, runtime_argv, command.network, **options
+                        )
                     rc, output = execute(
                         argv,
                         cwd,

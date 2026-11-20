@@ -6,7 +6,13 @@ from typing import Annotated, Any, Literal
 from pydantic import BaseModel, ConfigDict, Field, SecretStr, model_validator
 
 from dev_orchestra.application.contracts import RunName, RunSummary
-from dev_orchestra.config import AgentOptions, AgentSettings, TestCommand, Tests
+from dev_orchestra.config import (
+    DEFAULT_BRANCH_PREFIX,
+    AgentOptions,
+    AgentSettings,
+    TestCommand,
+    Tests,
+)
 from dev_orchestra.domain.models import State
 from dev_orchestra.infrastructure.agent_usage import AgentTelemetry, TokenUsage
 
@@ -28,6 +34,7 @@ class AgentSettingsView(BaseModel):
 class CodexModelView(BaseModel):
     model: str
     reasoning_efforts: list[str]
+    supports_fast: bool = False
 
 
 class CodexModelPage(BaseModel):
@@ -206,7 +213,7 @@ class ProjectView(BaseModel):
     repository_path: str
     default_base_branch: str
     policy: Policy
-    branch_prefix: str = "feature/codex"
+    branch_prefix: str = DEFAULT_BRANCH_PREFIX
     version: int
     created_at: str
     updated_at: str

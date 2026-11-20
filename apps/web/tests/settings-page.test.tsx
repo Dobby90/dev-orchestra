@@ -20,7 +20,13 @@ it("서비스 상태를 첫 탭으로 표시하고 전환해도 미저장 모델
     last_delivery: null,
   });
   vi.spyOn(api, "codexModels").mockResolvedValue({
-    items: [{ model: "test-model", reasoning_efforts: ["high"] }],
+    items: [
+      {
+        model: "test-model",
+        reasoning_efforts: ["high"],
+        supports_fast: false,
+      },
+    ],
   });
   const save = vi.spyOn(api, "saveAgentSettings");
   render(

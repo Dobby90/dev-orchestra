@@ -9,8 +9,9 @@ import sys
 from pathlib import Path, PurePosixPath
 
 from dev_orchestra.application.errors import ApplicationError
+from dev_orchestra.application.test_changes import checksum
 from dev_orchestra.application.web_contracts import ValidationCandidate, ValidationDetection
-from dev_orchestra.config import TestCommand
+from dev_orchestra.config import TestCommand, Tests
 from dev_orchestra.domain.models import PipelineError
 from dev_orchestra.infrastructure.dependencies import vite_cache_output
 from dev_orchestra.infrastructure.files import relative_path
@@ -246,7 +247,7 @@ def profiles():
     return [candidate(key, label=label) for key, label in labels.items()]
 
 
-def detect_validation(info):
+def detect_validation(info, *, supported_only=False):
     git = Git(info.repository_path)
     # Git blobs avoid following repository symlinks and ignore uncommitted source changes.
     entries = git.call("ls-tree", "-rlz", info.base_sha).split("\0")
@@ -331,6 +332,7 @@ def detect_validation(info):
                         "npm",
                     )
                 dependencies = package.get("devDependencies", {}) | package.get("dependencies", {})
+                runners = set()
                 for script, value in scripts.items():
                     if not isinstance(value, str) or not isinstance(script, str):
                         continue
@@ -354,6 +356,14 @@ def detect_validation(info):
                         argv = [pm, "run", script]
                         separator = ["--"] if pm == "npm" else []
                         tokens = script_tokens(value)
+                        runner = tokens[0] if tokens else None
+                        if supported_only and not (
+                            (runner == "playwright" and tokens[1:2] == ["test"])
+                            or (runner in {"vitest", "jest"} and runner in dependencies)
+                            or (runner == "node" and "--test" in tokens)
+                        ):
+                            continue
+                        runners.add(runner)
                         if tokens and tokens[0] == "playwright":
                             item = add(
                                 "playwright",
@@ -402,6 +412,38 @@ def detect_validation(info):
                                         "--cacheDirectory=build/jest-cache",
                                     ]
                                     item.warnings = []
+                if supported_only:
+                    # A new project can declare the runner and its configuration
+                    # without exposing a package script.
+                    exec_argv = ["npm", "exec", "--no", "--"] if pm == "npm" else [pm, "exec"]
+                    for runner, dependency, subcommand, profile in (
+                        ("vitest", "vitest", "run", "node-test"),
+                        ("playwright", "@playwright/test", "test", "playwright"),
+                    ):
+                        if runner in runners or dependency not in dependencies:
+                            continue
+                        configs = [
+                            name
+                            for ext in ("ts", "mts", "cts", "js", "mjs", "cjs")
+                            if prefix + (name := f"{runner}.config.{ext}") in files
+                        ]
+                        if not configs:
+                            continue
+                        argv = [
+                            *exec_argv,
+                            runner,
+                            subcommand,
+                            "--config",
+                            configs[0],
+                            "--reporter=junit",
+                        ]
+                        if runner == "vitest":
+                            argv += ["--no-cache", "--outputFile=build/unit.xml"]
+                        item = add(profile, path, argv=argv, label=f"{directory} · {runner}")
+                        item.evidence.append(prefix + configs[0])
+                        if runner == "vitest":
+                            item.output_paths.append(prefix + "node_modules/.vite-temp")
+                            item.warnings = []
             except (ValueError, TypeError, AttributeError):
                 warnings.append(f"{path}: package.json 형식을 확인해 주세요.")
         elif name == "pom.xml":
@@ -443,6 +485,25 @@ def detect_validation(info):
         if tests:
             item = candidate("pytest", evidence=tests[:5], label=". · pytest")
             item.id = "pytest_discovered"
+            if supported_only and all(
+                re.fullmatch(r"tests/test[^/]*\.py", path)
+                and files[path][1] <= 262144
+                and re.search(
+                    r"(?m)^\s*(?:from unittest\b|import unittest\b)",
+                    git.call("cat-file", "blob", files[path][0]),
+                )
+                for path in tests
+            ):
+                from dev_orchestra.infrastructure import unittest_bootstrap
+
+                item.id = "bootstrap_unittest"
+                item.label = ". · unittest"
+                item.command.argv = [
+                    sys.executable,
+                    str(Path(unittest_bootstrap.__file__).resolve()),
+                ]
+                item.output_paths = ["build"]
+                item.warnings = []
             found.append(item)
     # Aggregate root Java builds can write per-module results. Authorize only known
     # module output directories; every glob match is checked against these at runtime.
@@ -527,11 +588,19 @@ def script_identity(argv):
     return None
 
 
-def automatic_validation(info, spec=""):
-    """Resolve automatic policy from the committed tree before freezing the Run."""
-    from dev_orchestra.config import Tests
+def is_test_source(path):
+    return bool(
+        re.search(
+            r"(?:^|/)(?:test[^/]*\.py|[^/]+_test\.py|[^/]+\.(?:test|spec)\.[cm]?[jt]sx?"
+            r"|[^/]+Tests?\.java|Test[^/]*\.java)$",
+            path,
+        )
+    )
 
-    detected = detect_validation(info)
+
+def automatic_validation(info, spec="", *, detected=None):
+    """Resolve automatic policy from the committed tree before freezing the Run."""
+    detected = detected or detect_validation(info)
     items = list(detected.candidates)
     if not any(item.command.kind == "test" for item in items):
         files = (
@@ -627,18 +696,49 @@ def automatic_validation(info, spec=""):
     )
 
 
-def complete_run_validation(config, info, spec=""):
-    """Complete derived outputs before freezing a new Run; never edit saved policies."""
+def complete_run_validation(config, info):
+    """Freeze manual or existing test policy, or reserve paths for first development."""
     snapshot = config.model_copy(deep=True)
+    detected = None
     if not snapshot.tests.commands:
-        snapshot.tests = automatic_validation(info, spec)
+        detected = detect_validation(info)
+        if not any(item.command.kind == "test" for item in detected.candidates):
+            names = Git(info.repository_path).call(
+                "ls-tree", "-r", "--name-only", "-z", info.base_sha
+            )
+            files = [PurePosixPath(name) for name in names.split("\0") if name]
+            outputs = [
+                *snapshot.tests.output_paths,
+                "build",
+                "dist",
+                "target",
+                ".pytest_cache",
+                ".devorchestra-cache",
+                "test-results",
+                "playwright-report",
+                "node_modules/.vite-temp",
+                "node_modules/.cache",
+                *(p for item in detected.candidates for p in item.output_paths),
+            ]
+            snapshot.tests = Tests(
+                write_paths=list(
+                    dict.fromkeys([*snapshot.tests.write_paths, "tests", "e2e", "src/test"])
+                ),
+                output_paths=[
+                    path
+                    for path in dict.fromkeys(outputs)
+                    if not any(file.is_relative_to(PurePosixPath(path)) for file in files)
+                ],
+            )
+            return snapshot
+        snapshot.tests = automatic_validation(info, detected=detected)
     java_commands = [c for c in snapshot.tests.commands.values() if java_tool(c)]
     for command in java_commands:
         complete_java_command(command, snapshot.tests.output_paths, info)
     selected = [c for c in snapshot.tests.commands.values() if script_identity(c.argv)]
     if not selected:
         return snapshot
-    detected = detect_validation(info)
+    detected = detected or detect_validation(info)
     for command in selected:
         for item in detected.candidates:
             if command.working_directory != item.command.working_directory or script_identity(
@@ -652,6 +752,105 @@ def complete_run_validation(config, info, spec=""):
                 ):
                     snapshot.tests.output_paths.append(output)
     return snapshot
+
+
+def validation_binding(run):
+    return {key: run.get(key, 0) for key in ("revision", "iteration")}
+
+
+def resolve_candidate_validation(run, sha):
+    """Record commands once for the first Tester entry of a revision and iteration."""
+    from dev_orchestra.application.contracts import RepositoryInfo
+
+    binding = validation_binding(run)
+    previous = run.get("candidate_validation")
+    if previous and all(previous.get(key) == value for key, value in binding.items()):
+        run_test_policy(run)
+        if (
+            previous["sha"] != sha
+            and Git(Path(run["repo"])).call("merge-base", previous["sha"], sha) != previous["sha"]
+        ):
+            raise PipelineError("자동 검증을 확정한 커밋이 현재 후보의 이력에 없습니다.")
+        return previous
+
+    repo = Path(run["repo"])
+    git = Git(repo)
+    info = RepositoryInfo(
+        repository_path=repo,
+        git_common_directory=git.common(),
+        base_branch=run["base"],
+        base_sha=sha,
+    )
+    detected = detect_validation(info, supported_only=True)
+    entries = git.call("ls-tree", "-rlz", sha).split("\0")
+    sources = []
+    for entry in filter(None, entries):
+        metadata, name = entry.split("\t", 1)
+        mode, kind, oid, size = metadata.split()
+        if kind == "blob" and mode != "120000" and is_test_source(name):
+            sources.append((name, oid, int(size)))
+    if not sources:
+        raise PipelineError("후보 커밋에 개발 단계에서 작성한 테스트 파일이 없습니다.")
+    if not any(item.command.kind == "test" for item in detected.candidates) and not any(
+        name.endswith(".java")
+        or size <= 262144
+        and re.search(r"""['"](?:node:test|vitest)['"]""", git.call("cat-file", "blob", oid))
+        for name, oid, size in sources[:64]
+    ):
+        raise PipelineError(
+            "후보 커밋에서 지원하는 테스트 설정을 찾지 못했습니다. "
+            "Node 프로젝트는 package.json에 단발 테스트 스크립트 또는 "
+            "Vitest·Playwright 의존성과 설정 파일을 선언하세요."
+        )
+    frozen = Tests.model_validate(run["config"]["tests"])
+    detected_tests = automatic_validation(info, detected=detected)
+    for command in detected_tests.commands.values():
+        if java_tool(command):
+            complete_java_command(command, detected_tests.output_paths, info)
+    missing = [
+        path
+        for path in detected_tests.output_paths
+        if not any(
+            PurePosixPath(path).is_relative_to(PurePosixPath(allowed))
+            for allowed in frozen.output_paths
+        )
+    ]
+    if missing:
+        raise PipelineError(
+            "자동 감지한 검증에 허용되지 않은 출력 경로가 필요합니다: " + ", ".join(missing)
+        )
+    snapshot = {
+        **binding,
+        "sha": sha,
+        "policy_hash": checksum(run["config"]["tests"]),
+        "commands": {
+            key: command.model_dump(mode="json") for key, command in detected_tests.commands.items()
+        },
+    }
+    return snapshot | {"hash": checksum(snapshot)}
+
+
+def run_test_policy(run):
+    frozen = run["config"]["tests"]
+    if frozen["commands"]:
+        return Tests.model_validate(frozen)
+    record = run.get("candidate_validation")
+    if (
+        not record
+        or any(record.get(key) != value for key, value in validation_binding(run).items())
+        or record.get("policy_hash") != checksum(frozen)
+        or record.get("hash") != checksum({k: v for k, v in record.items() if k != "hash"})
+        or not record.get("commands")
+    ):
+        raise PipelineError(
+            "후보 커밋의 자동 검증 명령이 확정되지 않았거나 근거가 일치하지 않습니다."
+        )
+    return Tests.model_validate(frozen | {"commands": record["commands"]})
+
+
+def run_test_policy_hash(run):
+    frozen = run["config"]["tests"]
+    return checksum(frozen) if frozen["commands"] else run["candidate_validation"]["hash"]
 
 
 def committed_java_files(info, directory):

@@ -928,6 +928,8 @@ export interface components {
             model?: string | null;
             /** Reasoning Effort */
             reasoning_effort?: string | null;
+            /** Service Tier */
+            service_tier?: ("default" | "fast") | null;
             usage?: components["schemas"]["TokenUsage"] | null;
             /**
              * Usage Status
@@ -961,6 +963,8 @@ export interface components {
             model?: string | null;
             /** Reasoning Effort */
             reasoning_effort?: string | null;
+            /** Service Tier */
+            service_tier?: ("default" | "fast") | null;
         };
         /** AgentSettings */
         AgentSettings: {
@@ -968,6 +972,8 @@ export interface components {
             model?: string | null;
             /** Reasoning Effort */
             reasoning_effort?: string | null;
+            /** Service Tier */
+            service_tier?: ("default" | "fast") | null;
             /** Roles */
             roles?: {
                 [key: string]: components["schemas"]["AgentOptions"];
@@ -1115,6 +1121,11 @@ export interface components {
             model: string;
             /** Reasoning Efforts */
             reasoning_efforts: string[];
+            /**
+             * Supports Fast
+             * @default false
+             */
+            supports_fast: boolean;
         };
         /** CommandView */
         CommandView: {
@@ -1590,7 +1601,7 @@ export interface components {
             policy: components["schemas"]["Policy"];
             /**
              * Branch Prefix
-             * @default feature/codex
+             * @default feature
              */
             branch_prefix: string;
             /** Version */

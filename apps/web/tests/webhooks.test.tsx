@@ -50,6 +50,7 @@ describe("웹훅 알림 설정", () => {
     });
     const client = mount();
     expect(await screen.findByLabelText("알림 앱")).toHaveValue("mattermost");
+    expect(screen.getByText(/단계 전환과 입력 필요/)).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "테스트 발송" })).toBeDisabled();
     fireEvent.click(screen.getByLabelText("웹훅 알림 사용"));
     expect(

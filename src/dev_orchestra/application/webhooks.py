@@ -1,26 +1,87 @@
 """Durable workspace webhook delivery, independent of browser reads and Run execution."""
 
 import json
+import re
 import threading
 import time
 import uuid
 from contextlib import contextmanager
+from datetime import datetime
+from zoneinfo import ZoneInfo
 
 from dev_orchestra.application.errors import ApplicationError
-from dev_orchestra.application.notifications import MESSAGES, TRANSITIONS
+from dev_orchestra.application.notification_events import MESSAGES, STATE_TRANSITIONS
 from dev_orchestra.infrastructure.files import write
 from dev_orchestra.infrastructure.locking import OwnershipError, lock
 from dev_orchestra.infrastructure.store import now
 from dev_orchestra.infrastructure.webhooks import APPS, WebhookError, send, validate_url
 
+STAGES = {
+    "planning": "기획",
+    "developing": "개발",
+    "testing": "테스트",
+    "reviewing": "리뷰",
+    "fixing": "수정",
+    "reporting": "결과 정리",
+}
+STATE_LABELS = (
+    STAGES
+    | {"queued": "대기", "preparing": "준비"}
+    | {key: value[0] for key, value in MESSAGES.items()}
+)
+
+# Compute previous state over the entire history before applying channel/cursor filters.
+WEBHOOK_TRANSITIONS = (
+    STATE_TRANSITIONS
+    + """
+SELECT t.id,t.run_id,t.timestamp AS occurred_at,t.state,t.previous,t.transition_summary,
+ json_extract(r.data,'$.name') AS run_name
+FROM transitions t LEFT JOIN runs r ON r.id=t.run_id
+WHERE (t.previous IS NULL OR t.previous != t.state)
+AND (t.state IN ('needs_input','paused','waiting_approval','waiting_plan_approval','failed')
+ OR (t.id>? AND t.state IN ('planning','developing','testing','reviewing','fixing','reporting')))
+AND t.id>? ORDER BY t.id LIMIT 1
+"""
+)
+
+
+def display_name(value, fallback):
+    # Keep human names while neutralizing Markdown, mentions, HTML and control characters.
+    name = " ".join(str(value or fallback).split())
+    name = "".join(c for c in name if c.isprintable())[:100]
+    name = name.replace("@", "＠").replace("<", "＜").replace(">", "＞")
+    return re.sub(r"([\\`*_{}\[\]()!|~])", r"\\\1", name) or fallback
+
 
 def message(event):
-    title, description = MESSAGES[event["state"]]
-    # Run IDs are identifiers, never a source of Markdown, mentions or extra lines.
+    state = event["state"]
+    if state in STAGES:
+        title = "단계 전환"
+        previous = STATE_LABELS.get(event.get("previous"), "시작")
+        description = f"진행: {previous} → {STAGES[state]}"
+        summary = json.loads(event.get("transition_summary") or "{}")
+        if (counts := summary.get("test_cases")) is not None:
+            description += (
+                f"\n테스트 {counts['total']}건 · 통과 {counts['passed']}건 / "
+                f"실패 {counts['failed']}건 / 건너뜀 {counts['skipped']}건"
+            )
+        if (counts := summary.get("review_issues")) is not None:
+            issues = " / ".join(
+                f"{severity.title()} {counts.get(severity, 0)}건"
+                for severity in ("critical", "high", "medium", "low")
+            )
+            description += f"\n미해결 리뷰 이슈 · {issues}"
+        if summary.get("test_failed"):
+            description += "\n테스트 단계 실패"
+    else:
+        title, description = MESSAGES[state]
     run_id = "".join(c for c in event["run_id"] if c.isalnum() or c in "-_.")[:200]
+    name = display_name(event.get("run_name"), run_id)
+    occurred = datetime.fromisoformat(event["occurred_at"].replace("Z", "+00:00"))
+    occurred = occurred.astimezone(ZoneInfo("Asia/Seoul")).strftime("%Y-%m-%d %H:%M:%S (KST)")
     return (
-        f"[Dev Orchestra][{title}]\n작업: {run_id}\n{description}\n"
-        f"발생 시각: {event['occurred_at']}\n알림 ID: {event['id']}"
+        f"[{title}]\n작업명: {name}\n작업 ID: {run_id}\n{description}\n"
+        f"발생 시각: {occurred}\n알림 ID: {event['id']}"
     )
 
 
@@ -82,6 +143,7 @@ class WebhookService:
                 app=body.app,
                 url=url,
                 cursor=cursor,
+                stage_after=cursor,
                 pending=None,
                 last_delivery=None,
             )
@@ -97,7 +159,7 @@ class WebhookService:
                 raise ApplicationError("VALIDATION_ERROR", "웹훅 URL을 먼저 저장해 주세요.")
             self._deliver(
                 saved,
-                "[Dev Orchestra][연결 테스트]\n웹훅 테스트 알림입니다. 실제 작업 상태는 변경되지 않습니다.",
+                "[연결 테스트]\n웹훅 테스트 알림입니다. 실제 작업 상태는 변경되지 않습니다.",
                 None,
                 1,
             )
@@ -127,17 +189,33 @@ class WebhookService:
                 saved = self._read()
                 if not saved["enabled"]:
                     return
+                if "stage_after" not in saved:
+                    # Enable new stage alerts from this upgrade onward without losing old alerts.
+                    with self.store.connection() as db:
+                        saved["stage_after"] = db.execute(
+                            "SELECT coalesce(max(id),0) FROM events"
+                        ).fetchone()[0]
+                    write(self.path, saved)
                 pending = saved["pending"]
                 if pending is None:
                     with self.store.connection() as db:
                         event = db.execute(
-                            TRANSITIONS + " AND id>? ORDER BY id LIMIT 1", (saved["cursor"],)
+                            WEBHOOK_TRANSITIONS,
+                            (saved["stage_after"], saved["cursor"]),
                         ).fetchone()
                     if event is None:
                         return
                     pending = {"event": dict(event), "attempts": 0, "retry_at": 0}
                 if pending["retry_at"] > time.time():
                     return
+                if "run_name" not in pending["event"]:
+                    # Upgrade an already pending legacy alert once, then keep its name on retry.
+                    with self.store.connection() as db:
+                        row = db.execute(
+                            "SELECT json_extract(data,'$.name') FROM runs WHERE id=?",
+                            (pending["event"]["run_id"],),
+                        ).fetchone()
+                    pending["event"]["run_name"] = row[0] if row else None
                 pending["attempts"] += 1
                 saved["pending"] = pending
                 # Persist attempt before HTTP, allowing bounded recovery after a process crash.

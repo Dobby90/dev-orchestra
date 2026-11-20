@@ -82,7 +82,6 @@ class RunService:
                 base_branch=base,
                 base_sha=sha,
             ),
-            spec_text,
         )
         if not spec_text.strip():
             raise PipelineError("PRD must not be empty")

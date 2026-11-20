@@ -194,7 +194,7 @@ class BackendService:
         info = self.projects.validate_repository(Path(p["repository_path"]), base)
         from dev_orchestra.application.validation import complete_run_validation
 
-        config = complete_run_validation(config, info, self.spec_text(proposal.spec))
+        config = complete_run_validation(config, info)
         rid = "run-" + uuid.uuid4().hex[:16]
         branch = proposal.feature_branch or config.project.branch_prefix + "/" + rid
         if not branch.startswith(config.project.branch_prefix + "/"):
@@ -236,7 +236,7 @@ class BackendService:
                 "roles": {role: config.codex.for_role(role).model_dump() for role in ROLES}
             },
             "spec_sha256": hashlib.sha256(text.encode()).hexdigest(),
-            "validation_warnings": policy_warnings(config, info),
+            "validation_warnings": policy_warnings(config, info) if config.tests.commands else [],
         }
 
     def submit(self, command, idem_key):

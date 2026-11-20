@@ -1,4 +1,4 @@
-"""Prepare locked npm dependencies offline, without executing install scripts."""
+"""Prepare locked Node dependencies offline, without executing install scripts."""
 
 import json
 import re
@@ -10,7 +10,9 @@ from dev_orchestra.infrastructure.files import contained, digest, write
 from dev_orchestra.infrastructure.git import Git
 from dev_orchestra.infrastructure.java import prepare_java
 from dev_orchestra.infrastructure.node_dependencies import prepare_npm_cache, prepare_yarn
+from dev_orchestra.infrastructure.node_runtime import node_environment, node_project
 from dev_orchestra.infrastructure.playwright import browser_cache, prepare_browsers
+from dev_orchestra.infrastructure.pnpm import prepare_pnpm
 from dev_orchestra.infrastructure.process import environment, execute, sanitize
 from dev_orchestra.infrastructure.test_runner import sandbox_command
 
@@ -41,6 +43,10 @@ def read_package(path):
 
 def prepare_dependencies(worktree, config, directory, stop=lambda: None):
     worktree = worktree.resolve()
+    from dev_orchestra.infrastructure.containers import prepare_dependencies as prepare_container
+
+    if prepare_container(worktree, config, directory, stop) is not None:
+        return
     prepare_java(worktree, config, directory, stop)
     roots = {}
     for command_id, command in config.commands.items():
@@ -61,31 +67,8 @@ def prepare_dependencies(worktree, config, directory, stop=lambda: None):
                     f"PLAYWRIGHT_BROWSERS_PATH directory does not exist: {browsers}. "
                     "Prepare browsers at the configured path and resume."
                 )
-        tool = Path(command.argv[0]).name
-        if tool not in {"npm", "npx", "node", "pnpm", "yarn"}:
-            continue
-        cwd = (
-            worktree
-            if command.working_directory == "."
-            else contained(worktree, command.working_directory)
-        )
-        candidates = [cwd, *cwd.parents]
-        candidates = [p for p in candidates if p.is_relative_to(worktree)]
-        packages = [p for p in candidates if (p / "package.json").exists()]
-        if not packages:
-            continue
-        root = next(
-            (
-                p
-                for p in packages
-                if any(
-                    (p / lock).exists()
-                    for lock in ("package-lock.json", "yarn.lock", "pnpm-lock.yaml")
-                )
-            ),
-            packages[0],
-        )
-        roots.setdefault(root, []).append(command_id)
+        if root := node_project(worktree, command):
+            roots.setdefault(root, []).append(command_id)
     if not roots:
         prepare_browsers(worktree, config, directory, stop)
         return
@@ -101,6 +84,7 @@ def prepare_dependencies(worktree, config, directory, stop=lambda: None):
         try:
             manifest = contained(worktree, (root / "package.json").relative_to(worktree).as_posix())
             package = read_package(manifest)
+            node_env, _ = node_environment(root, directory, stop)
             for command_id in command_ids:
                 command = config.commands[command_id]
                 if "run" in command.argv:
@@ -150,7 +134,10 @@ def prepare_dependencies(worktree, config, directory, stop=lambda: None):
                 "packageManager", "yarn" if (root / "yarn.lock").is_file() else "npm"
             ).split("@", 1)[0]
             if manager == "yarn":
-                prepare_yarn(worktree, root, package, directory, tracked, stop)
+                prepare_yarn(worktree, root, package, directory, tracked, stop, node_env=node_env)
+                continue
+            if manager == "pnpm":
+                prepare_pnpm(worktree, root, package, directory, tracked, stop, node_env=node_env)
                 continue
             if manager != "npm" or not lockfile.is_file():
                 if modules.is_dir():
@@ -196,13 +183,17 @@ def prepare_dependencies(worktree, config, directory, stop=lambda: None):
                 install = previous["fingerprint"] != fingerprint or not previous.get("ready")
             with tempfile.TemporaryDirectory(prefix="devorchestra-dependencies-") as temp:
                 scratch = Path(temp).resolve()
-                env = environment() | {
-                    "HOME": str(scratch),
-                    "TMPDIR": str(scratch),
-                    "TMP": str(scratch),
-                    "TEMP": str(scratch),
-                    "NPM_CONFIG_USERCONFIG": "/dev/null",
-                }
+                env = (
+                    environment()
+                    | node_env
+                    | {
+                        "HOME": str(scratch),
+                        "TMPDIR": str(scratch),
+                        "TMP": str(scratch),
+                        "TEMP": str(scratch),
+                        "NPM_CONFIG_USERCONFIG": "/dev/null",
+                    }
+                )
                 common = [
                     "--offline",
                     "--ignore-scripts",
@@ -223,7 +214,7 @@ def prepare_dependencies(worktree, config, directory, stop=lambda: None):
                     )
                     for output in outputs:
                         output.mkdir(parents=True, exist_ok=True)
-                    prepare_npm_cache(worktree, locked, directory, stop)
+                    prepare_npm_cache(worktree, locked, directory, stop, node_env=node_env)
                     argv = sandbox_command(worktree, outputs, scratch, ["npm", "ci", *common])
                     rc, output = execute(
                         argv,

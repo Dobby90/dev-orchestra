@@ -118,6 +118,43 @@ it("보존된 Diff의 binary·잘림과 텍스트 안전성을 표시한다", as
   expect(document.querySelector("script")).toBeNull();
 });
 
+it("코드 수정 확인 후 테스트 검증 대기 사유를 미해결 상태와 함께 표시한다", async () => {
+  vi.spyOn(api, "reviews").mockResolvedValue({
+    status: "available",
+    step_id: 2,
+    sha: "a".repeat(40),
+    revision: 0,
+    summary: "review",
+    issues: [
+      {
+        id: "model1",
+        issue_id: "issue-host",
+        severity: "medium",
+        file: "a.py",
+        line: 1,
+        description: "입력 검증",
+        evidence: "기존 오류",
+        suggestion: "검증",
+        status: "unresolved",
+        source_sha: "a".repeat(40),
+        resolution_evidence: null,
+        status_note: "코드 수정 확인, 동일 SHA·revision 테스트 통과 근거 대기",
+      },
+    ],
+    history: [],
+    legacy_incomplete: false,
+    blocking_severities: ["critical", "high"],
+  });
+  wrap(<ReviewPanel rid="r" version={3} revision={0} canClassify={false} />);
+  expect(
+    await screen.findByText(
+      "코드 수정 확인, 동일 SHA·revision 테스트 통과 근거 대기",
+    ),
+  ).toBeVisible();
+  expect(screen.getByText("미해결")).toBeVisible();
+  expect(screen.queryByText("독립 재검증으로 해결")).not.toBeInTheDocument();
+});
+
 it.each([
   ["affected", "영향 범위 검사", false],
   ["full", "전체 검사", true],

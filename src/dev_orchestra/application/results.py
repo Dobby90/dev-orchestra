@@ -13,6 +13,17 @@ from dev_orchestra.infrastructure.process import sanitize
 from dev_orchestra.infrastructure.store import now
 
 
+def test_case_counts(commands):
+    test_commands = [c for c in commands if c.get("kind", "test") == "test"]
+    counts = {field: None for field in ("total", "passed", "failed", "skipped")}
+    for field in ("total", "failed", "skipped"):
+        if test_commands and all(isinstance(c.get(field), int) for c in test_commands):
+            counts[field] = sum(c[field] for c in test_commands)
+    if all(counts[field] is not None for field in ("total", "failed", "skipped")):
+        counts["passed"] = counts["total"] - counts["failed"] - counts["skipped"]
+    return counts
+
+
 class Results:
     def __init__(self, store):
         self.store = store
@@ -146,12 +157,7 @@ class Results:
             legacy_incomplete=not complete,
             duration_seconds=execution.get("duration_seconds"),
         )
-        test_commands = [c for c in commands if c.get("kind", "test") == "test"]
-        for field in ("total", "failed", "skipped"):
-            if test_commands and all(isinstance(c.get(field), int) for c in test_commands):
-                base[field] = sum(c[field] for c in test_commands)
-        if all(base[field] is not None for field in ("total", "failed", "skipped")):
-            base["passed"] = base["total"] - base["failed"] - base["skipped"]
+        base.update(test_case_counts(commands))
         base["failures"] = [f for c in commands for f in c.get("failure_details", [])]
         return base
 

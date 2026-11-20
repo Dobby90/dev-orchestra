@@ -2,6 +2,7 @@ import { useState, type FormEvent } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "../api/resources";
 import type { Schema } from "../api/types";
+import { AgentSpeedSelect, agentSpeedLabel } from "./AgentSpeedSelect";
 import { ErrorNotice, Loading, roles } from "./common";
 import { Button } from "./ui/button";
 
@@ -92,6 +93,8 @@ function SettingsEditor({
       (!model || !model.reasoning_efforts.includes(options.reasoning_effort))
     )
       return "선택한 모델에서 지원하는 추론 강도를 지정해 주세요.";
+    if (options.service_tier === "fast" && !model?.supports_fast)
+      return "패스트 모드를 지원하는 모델을 선택하거나 속도를 일반으로 바꿔 주세요.";
     return "";
   }
   const invalid = catalog.data
@@ -103,6 +106,7 @@ function SettingsEditor({
             model: override?.model ?? value.model,
             reasoning_effort:
               override?.reasoning_effort ?? value.reasoning_effort,
+            service_tier: override?.service_tier ?? value.service_tier,
           });
         }),
       ].find(Boolean)
@@ -178,12 +182,23 @@ function SettingsEditor({
             ))}
           </select>
         </label>
+        <AgentSpeedSelect
+          label={label}
+          value={options.service_tier}
+          inherit={!!role}
+          disabled={!catalog.data || catalog.isPending}
+          supportsFast={!!model?.supports_fast}
+          onChange={(service_tier) =>
+            update(role, { ...options, service_tier })
+          }
+        />
         {role && (
           <p className="help">
             적용: {effectiveModel ?? "Codex 기본값"} · 추론{" "}
             {options.reasoning_effort ??
               value.reasoning_effort ??
-              "Codex 기본값"}
+              "Codex 기본값"}{" "}
+            · 속도 {agentSpeedLabel(options.service_tier ?? value.service_tier)}
           </p>
         )}
       </fieldset>
@@ -210,12 +225,15 @@ function SettingsEditor({
         </Button>
       </div>
       <p className="help">
-        모델 목록을 불러오면 Codex가 제공하는 모델과 지원 추론 강도를 선택할 수
-        있습니다. 이 조회는 모델 작업을 실행하지 않습니다.
+        모델 목록에서 지원하는 추론 강도와 속도를 선택할 수 있습니다. 패스트는
+        같은 모델의 일반 속도보다 사용량을 더 많이 소모합니다.
       </p>
       {catalog.error && <ErrorNotice error={catalog.error} />}
       <div className="agent-default-panel">{row(null)}</div>
-      <div className="agent-role-matrix" aria-label="역할별 모델과 추론 강도">
+      <div
+        className="agent-role-matrix"
+        aria-label="역할별 모델, 추론 강도, 속도"
+      >
         {roleIds.map(row)}
       </div>
       {invalid && (

@@ -52,36 +52,46 @@ class AgentSettingsService:
         return {"version": digest(raw), "settings": settings}
 
     def apply(self, config):
-        snapshot = config.model_dump()
-        snapshot["codex"].update(self.get()["settings"].model_dump())
-        return type(config).model_validate(snapshot)
+        return self.with_settings(config, self.get()["settings"])
 
     def override(self, config, settings):
-        explicit = any(
-            settings.for_role(role).model or settings.for_role(role).reasoning_effort
-            for role in ROLES
-        )
-        self.validate(settings, self.models() if explicit else [])
-        snapshot = config.model_dump()
-        snapshot["codex"].update(settings.model_dump())
-        return type(config).model_validate(snapshot)
+        self.validate(settings)
+        return self.with_settings(config, settings)
 
     @staticmethod
-    def validate(settings, models):
-        by_model = {m["model"]: m for m in models}
-        for effective in [settings, *(settings.for_role(role) for role in ROLES)]:
-            if effective.model and effective.model not in by_model:
-                raise ApplicationError("VALIDATION_ERROR", "model is not in the Codex catalog")
-            if effective.reasoning_effort:
-                model = by_model.get(effective.model) if effective.model else None
-                if model is None or effective.reasoning_effort not in model["reasoning_efforts"]:
-                    raise ApplicationError(
-                        "VALIDATION_ERROR",
-                        "select a model supporting the requested reasoning effort",
-                    )
+    def with_settings(config, settings):
+        snapshot = config.model_dump()
+        snapshot["codex"] = config.codex.model_dump(exclude=set(AgentSettings.model_fields)) | (
+            settings.model_dump()
+        )
+        return type(config).model_validate(snapshot)
 
-    def save(self, settings, expected_version, models):
-        self.validate(settings, models)
+    def validate(self, settings):
+        effective_settings = [settings, *(settings.for_role(role) for role in ROLES)]
+        needs_catalog = any(
+            options.model or options.reasoning_effort or options.service_tier == "fast"
+            for options in effective_settings
+        )
+        models = self.models() if needs_catalog else []
+        by_model = {m["model"]: m for m in models}
+        for effective in effective_settings:
+            model = by_model.get(effective.model)
+            if effective.model and model is None:
+                raise ApplicationError("VALIDATION_ERROR", "model is not in the Codex catalog")
+            if effective.reasoning_effort and (
+                model is None or effective.reasoning_effort not in model["reasoning_efforts"]
+            ):
+                raise ApplicationError(
+                    "VALIDATION_ERROR",
+                    "select a model supporting the requested reasoning effort",
+                )
+            if effective.service_tier == "fast" and (not model or not model.get("supports_fast")):
+                raise ApplicationError(
+                    "VALIDATION_ERROR", "패스트 모드를 지원하는 모델을 선택해 주세요."
+                )
+
+    def save(self, settings, expected_version):
+        self.validate(settings)
         with lock(self.path.with_suffix(".lock"), wait=True):
             if self.get()["version"] != expected_version:
                 raise ApplicationError("VERSION_CONFLICT", "agent settings changed")

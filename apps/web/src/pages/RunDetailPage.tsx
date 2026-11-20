@@ -543,6 +543,32 @@ function RunDetailBody({ rid }: { rid: string }) {
       {registered && r.state === "completed" && (
         <RunPushPanel run={r} actionContainer={pushActions} />
       )}
+      <section className="panel timeline-panel">
+        <div className="panel-heading">
+          <h2>워크플로 타임라인</h2>
+          <span className="subtle text-small">
+            회차·시도별 이력 보존 · 단계 완료와 검증 통과를 구분합니다.
+          </span>
+        </div>
+        {steps.isPending ? (
+          <Loading />
+        ) : steps.error ? (
+          <ErrorNotice error={steps.error} retry={() => steps.refetch()} />
+        ) : (
+          <WorkflowTimeline
+            run={r}
+            items={steps.data.items}
+            onSelect={(tab, step) => {
+              setParams({ tab, step: String(step) });
+              requestAnimationFrame(() =>
+                document
+                  .querySelector(".results-panel")
+                  ?.scrollIntoView({ block: "start" }),
+              );
+            }}
+          />
+        )}
+      </section>
       <section className="panel results-panel">
         <Tabs.Root
           value={
@@ -698,32 +724,6 @@ function RunDetailBody({ rid }: { rid: string }) {
         </Tabs.Root>
       </section>
       <RunHandoffPanel run={r} />
-      <section className="panel timeline-panel">
-        <div className="panel-heading">
-          <h2>워크플로 타임라인</h2>
-          <span className="subtle text-small">
-            회차·시도별 이력 보존 · 단계 완료와 검증 통과를 구분합니다.
-          </span>
-        </div>
-        {steps.isPending ? (
-          <Loading />
-        ) : steps.error ? (
-          <ErrorNotice error={steps.error} retry={() => steps.refetch()} />
-        ) : (
-          <WorkflowTimeline
-            run={r}
-            items={steps.data.items}
-            onSelect={(tab, step) => {
-              setParams({ tab, step: String(step) });
-              requestAnimationFrame(() =>
-                document
-                  .querySelector(".results-panel")
-                  ?.scrollIntoView({ block: "start" }),
-              );
-            }}
-          />
-        )}
-      </section>
       <Modal
         open={!!action}
         onOpenChange={(value) => {

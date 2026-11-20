@@ -16,9 +16,9 @@ export function WebhookSettingsForm() {
     <section className="panel panel-body" aria-label="웹훅 알림 설정">
       <h2>웹훅 알림</h2>
       <p className="subtle">
-        입력 필요·일시중지·기획 승인 대기·최종 승인 대기·실패 알림을 선택한
-        앱에도 발송합니다. 브라우저를 닫아도 API 또는 Dispatcher가 실행 중이면
-        발송됩니다.
+        단계 전환과 입력 필요·일시중지·기획 승인 대기·최종 승인 대기·실패 알림을
+        선택한 앱으로 발송합니다. 브라우저를 닫아도 API 또는 Dispatcher가 실행
+        중이면 발송됩니다.
       </p>
       {saved && <p role="status">웹훅 설정을 저장했습니다.</p>}
       {query.isPending ? (

@@ -3,11 +3,19 @@
 import json
 import logging
 import os
+from collections import Counter
 from contextlib import nullcontext
 from pathlib import Path
 
 from dev_orchestra.agents.contracts import ResponseError, validate_role
+from dev_orchestra.application.errors import ApplicationError
+from dev_orchestra.application.results import test_case_counts
 from dev_orchestra.application.test_changes import TestChangeService
+from dev_orchestra.application.validation import (
+    is_test_source,
+    resolve_candidate_validation,
+    run_test_policy,
+)
 from dev_orchestra.application.workspace_recovery import WorkspaceBlocked
 from dev_orchestra.config import Config
 from dev_orchestra.domain.execution import execution_contract, writes_workspace
@@ -33,6 +41,28 @@ FILES = {
     "reviewer": "review-result.json",
     "fixer": "fix-result.json",
 }
+
+
+def transition_summary(run, target):
+    transition = run["state"], target
+    execution = (run.get("test_result") or {}).get("execution", {})
+    if transition == ("testing", "reviewing"):
+        counts = test_case_counts(execution.get("commands", []))
+        if counts["passed"] is not None:
+            return {"test_cases": counts}
+    if transition == ("reviewing", "fixing") and (review := run.get("review_result")):
+        issues = review.get("issue_states")
+        if issues is None:
+            issues = review.get("issues", [])
+        return {
+            "review_issues": dict(
+                Counter(
+                    i["severity"] for i in issues if i.get("status", "unresolved") == "unresolved"
+                )
+            ),
+            "test_failed": execution.get("passed") is False,
+        }
+    return None
 
 
 class Runner:
@@ -138,7 +168,7 @@ class Runner:
         execution_contract(run)
         if run["control"]:
             raise StopRequested(run["control"])
-        config = Config.model_validate(run["config"])
+        configured = Config.model_validate(run["config"])
         checkpoints(self.store, run)
         directory, worktree = Path(run["directory"]), Path(run["worktree"])
         original = Git(Path(run["repo"]))
@@ -148,7 +178,7 @@ class Runner:
         if not worktree.exists():
             self.store.update(run_id, "preparing")
             original.create(worktree, run["branch"], run["base_sha"])
-        git = Git(worktree, config.tests.output_paths)
+        git = Git(worktree, configured.tests.output_paths)
         if git.call("branch", "--show-current") != run["branch"]:
             if run.get("workspace_checkpoint"):
                 raise WorkspaceBlocked("recorded workspace branch changed; files preserved")
@@ -191,6 +221,7 @@ class Runner:
                 raise StopRequested(control)
             iteration = run.get("iteration", 0)
             role = run.get("next_role", "planner")
+            config = configured
             if role == "developer" and run.get("plan_approval_required"):
                 from dev_orchestra.application.plan_approval import verify_development
 
@@ -208,7 +239,20 @@ class Runner:
                 verified_candidate(self.store, self.store.get(run_id), candidate)
                 self.store.update(run_id, "waiting_approval", final_sha=candidate)
                 return
-            if hasattr(self.tests, "prepare"):
+            if not configured.tests.commands and role in {"tester", "reviewer"}:
+                try:
+                    if role == "tester":
+                        resolution = resolve_candidate_validation(run, git.sha())
+                        if resolution != run.get("candidate_validation"):
+                            self.store.update(run_id, candidate_validation=resolution)
+                            run = self.store.get(run_id)
+                    config = configured.model_copy(update={"tests": run_test_policy(run)})
+                    if hasattr(self.tests, "check_policy"):
+                        self.tests.check_policy(config.tests)
+                except (ApplicationError, PipelineError, ValueError) as error:
+                    self.store.update(run_id, "needs_input", error=redact(str(error)))
+                    return
+            if config.tests.commands and hasattr(self.tests, "prepare"):
                 try:
                     self.tests.prepare(
                         worktree,
@@ -231,7 +275,10 @@ class Runner:
             logging.getLogger(f"devorchestra.{run_id}").info(
                 "Starting %s iteration %s at %s", role, iteration, sha
             )
-            self.store.update(run_id, STATES[role], next_role=role)
+            state = STATES[role]
+            self.store.update(
+                run_id, state, next_role=role, transition_summary=transition_summary(run, state)
+            )
             completed = [
                 s
                 for s in self.store.steps(run_id)
@@ -330,7 +377,7 @@ class Runner:
                     "approved_test_changes": run.get("test_change_approvals", []),
                     "test_change_records": run.get("test_change_records", []),
                     "validation_policy": {
-                        "immutable_for_run": True,
+                        "resolve_after_development": not configured.tests.commands,
                         "change_target": "project validation settings (GUI) or tests in the CLI YAML config",
                         "change_effect": "new runs only; resume answers cannot change command policy",
                         "output_paths": config.tests.output_paths,
@@ -338,6 +385,10 @@ class Runner:
                 }
                 for key in ["plan", "criteria", "test_result", "review_result"]:
                     context[key] = run.get(key)
+                if hasattr(self.tests, "host_tools"):
+                    context["host_tools"] = self.tests.host_tools(
+                        directory / "preflight" / "tools", lambda: self.store.get(run_id)["control"]
+                    )
                 if role == "planner":
                     context["planning_draft"] = run.get("planning_draft")
                 if role == "reviewer":
@@ -668,6 +719,7 @@ class Runner:
             session.reload()
             session.guard()
             data = session.data
+            missing_development_tests = False
             try:
                 if data.get("response") is not None:
                     response = session.saved_response()
@@ -712,6 +764,17 @@ class Runner:
                         lambda: self.store.get(request.run_id)["control"],
                     )
                     session.capture_response(response)
+                if (
+                    request.role in {"developer", "fixer"}
+                    and request.context["validation_policy"]["resolve_after_development"]
+                    and not response.questions
+                    and not any(is_test_source(name) for name in session.data["files"])
+                ):
+                    missing_development_tests = True
+                    raise ResponseError(
+                        "첫 개발의 동작 테스트 파일이 없습니다. 실제 구현 동작을 검증하는 "
+                        "테스트와 실행 설정을 작성한 뒤 완료하세요."
+                    )
                 result, sha, commits = session.finish(response)
                 validate_role(request.role, result)
                 execution = None
@@ -730,10 +793,13 @@ class Runner:
                 session.data.update(
                     response=None,
                     metadata_only=(
-                        request.role != "tester"
-                        or bool(session.data.get("test_evidence"))
-                        and not session.changed_files()
-                        and session.read_test_payload()["sha"] == session.git.sha()
+                        not missing_development_tests
+                        and (
+                            request.role != "tester"
+                            or bool(session.data.get("test_evidence"))
+                            and not session.changed_files()
+                            and session.read_test_payload()["sha"] == session.git.sha()
+                        )
                     ),
                     repair_pending=True,
                     continuing=True,

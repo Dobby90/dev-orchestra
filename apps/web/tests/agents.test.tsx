@@ -14,8 +14,16 @@ const initial = {
 };
 const models = {
   items: [
-    { model: "test-standard", reasoning_efforts: ["low", "medium", "high"] },
-    { model: "test-review", reasoning_efforts: ["high", "xhigh"] },
+    {
+      model: "test-standard",
+      reasoning_efforts: ["low", "medium", "high"],
+      supports_fast: true,
+    },
+    {
+      model: "test-review",
+      reasoning_efforts: ["high", "xhigh"],
+      supports_fast: false,
+    },
   ],
 };
 function wrap(node: React.ReactNode) {
@@ -103,6 +111,16 @@ describe("에이전트 모델·사용량", () => {
     const button = screen.getByRole("button", { name: "에이전트 설정 저장" });
     expect(button).toBeDisabled();
     await userEvent.selectOptions(effort, "xhigh");
+    await userEvent.selectOptions(
+      screen.getByLabelText("공통 기본값 속도"),
+      "fast",
+    );
+    const speed = screen.getByLabelText("Review 속도");
+    expect(
+      within(speed).getByRole("option", { name: /패스트/ }),
+    ).toBeDisabled();
+    expect(button).toBeDisabled();
+    await userEvent.selectOptions(speed, "default");
     expect(button).toBeEnabled();
     await userEvent.click(button);
     await waitFor(() =>
@@ -112,8 +130,13 @@ describe("에이전트 모델·사용량", () => {
           settings: {
             model: "test-standard",
             reasoning_effort: "low",
+            service_tier: "fast",
             roles: {
-              reviewer: { model: "test-review", reasoning_effort: "xhigh" },
+              reviewer: {
+                model: "test-review",
+                reasoning_effort: "xhigh",
+                service_tier: "default",
+              },
             },
           },
         },
@@ -157,7 +180,13 @@ describe("에이전트 모델·사용량", () => {
 
   it("부분 집계와 미확인·실제 0 토큰을 구분한다", async () => {
     vi.spyOn(api, "agentUsage").mockResolvedValue({
-      agents: { developer: { model: "saved-model", reasoning_effort: "high" } },
+      agents: {
+        developer: {
+          model: "saved-model",
+          reasoning_effort: "high",
+          service_tier: "fast",
+        },
+      },
       usage_status: "partial",
       measured_attempts: 1,
       total_attempts: 2,
@@ -190,6 +219,11 @@ describe("에이전트 모델·사용량", () => {
     });
     wrap(<AgentUsagePanel rid="r1" />);
     expect(await screen.findByText("saved-model")).toBeVisible();
+    expect(
+      within(
+        screen.getByRole("region", { name: "역할별 모델 설정" }),
+      ).getByText("패스트"),
+    ).toBeVisible();
     expect(screen.getByText("일부 집계")).toBeVisible();
     expect(screen.getByText(/수집된 시도 1 \/ 전체 2/)).toBeVisible();
     expect(screen.getAllByText(/입력 0 · 캐시 입력 0 · 출력 0/)).toHaveLength(

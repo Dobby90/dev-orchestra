@@ -37,6 +37,9 @@ def main():
         "termination_confirmed": False,
         "guardian": identity(os.getpid()),
     }
+    container_owner = os.environ.get("DEVORCHESTRA_CONTAINER_OWNER")
+    if container_owner:
+        record["container_owner"] = container_owner
     child = None
     tracked = {}
     reason = "completed"
@@ -134,6 +137,14 @@ def main():
                 confirmed = not any(live(p) for p in tracked.values())
             except (psutil.Error, OSError, subprocess.TimeoutExpired):
                 confirmed = False
+        if container_owner:
+            try:
+                from dev_orchestra.infrastructure.containers import cleanup_owned_container
+
+                cleanup_owned_container(container_owner)
+            except Exception as error:
+                confirmed = False
+                record["container_cleanup_error"] = type(error).__name__ + ": " + str(error)[:500]
         record.update(finished=confirmed, termination_confirmed=confirmed, reason=reason)
         record["tracked"] = [{"pid": pid, "create_time": birth} for pid, birth in tracked]
         save()

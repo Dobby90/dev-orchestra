@@ -36,6 +36,9 @@ def list_models(command):
                         "reasoning_efforts": TypeAdapter(list[ReasoningEffort]).validate_python(
                             row["reasoning_efforts"]
                         ),
+                        "supports_fast": TypeAdapter(bool).validate_python(
+                            row["supports_fast"], strict=True
+                        ),
                     }
                 )
             return result
@@ -87,6 +90,11 @@ def discover(command):
                         "reasoning_efforts": [
                             item["reasoningEffort"] for item in row["supportedReasoningEfforts"]
                         ],
+                        "supports_fast": any(
+                            tier["id"] in {"priority", "fast"}
+                            for tier in row.get("serviceTiers", [])
+                        )
+                        or "fast" in row.get("additionalSpeedTiers", []),
                     }
                 )
             cursor = page.get("nextCursor")

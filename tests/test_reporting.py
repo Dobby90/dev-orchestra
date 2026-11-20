@@ -110,3 +110,28 @@ def test_report_formats_counts_review_states_and_redacts_secrets(service):
     assert "| resolved |" in text and "rechecked" in text
     assert "CANARY" not in text
     assert run["base_sha"] in text
+
+
+def test_report_explains_why_a_reviewed_fix_is_still_unresolved(service):
+    svc, rid, _ = service
+    note = "코드 수정 확인, 동일 SHA·revision 테스트 통과 근거 대기"
+    svc.store.update(
+        rid,
+        review_result={
+            "summary": "수정 검토",
+            "issue_states": [
+                {
+                    "severity": "medium",
+                    "file": "main.py",
+                    "line": 1,
+                    "description": "입력 검증",
+                    "status": "unresolved",
+                    "resolution_evidence": None,
+                    "status_note": note,
+                }
+            ],
+        },
+    )
+    text = svc.report(rid)
+    assert "| unresolved |" in text and note in text
+    assert "해결 근거·검증 대기 사유" in text

@@ -54,6 +54,11 @@ class Reviews:
                 )
                 data = existing[key] | {
                     "resolution_evidence": evidence if resolved else None,
+                    "status_note": (
+                        "코드 수정 확인, 동일 SHA·revision 테스트 통과 근거 대기"
+                        if valid and assessment["status"] == "resolved" and not resolved
+                        else None
+                    ),
                     "assessed_sha": sha,
                     "assessed_step_id": step_id,
                 }

@@ -49,7 +49,7 @@ def fetch_entries(entries, directory, stop):
         return paths
 
 
-def prepare_npm_cache(worktree, locked, directory, stop):
+def prepare_npm_cache(worktree, locked, directory, stop, *, node_env=None):
     missing = {}
     cache = Path.home() / ".npm"
     os_name = {"Darwin": "darwin", "Linux": "linux", "Windows": "win32"}.get(platform.system())
@@ -100,11 +100,15 @@ def prepare_npm_cache(worktree, locked, directory, stop):
         tempfile.TemporaryDirectory(prefix="devorchestra-npm-cache-") as temp,
     ):
         scratch = Path(temp).resolve()
-        env = environment() | {
-            "HOME": str(scratch),
-            "TMPDIR": str(scratch),
-            "NPM_CONFIG_USERCONFIG": "/dev/null",
-        }
+        env = (
+            environment()
+            | (node_env or {})
+            | {
+                "HOME": str(scratch),
+                "TMPDIR": str(scratch),
+                "NPM_CONFIG_USERCONFIG": "/dev/null",
+            }
+        )
         # Import only checksum-verified local files, not registry URLs; no lifecycle hooks.
         for offset in range(0, len(tarballs), 64):
             argv = [
@@ -131,12 +135,12 @@ def prepare_npm_cache(worktree, locked, directory, stop):
                 raise PipelineError("verified offline npm cache import failed; see preflight logs")
 
 
-def prepare_yarn(worktree, root, package, directory, tracked, stop):
+def prepare_yarn(worktree, root, package, directory, tracked, stop, *, node_env=None):
     if package.get("workspaces"):
         raise PipelineError(
             "Yarn workspaces require an explicitly prepared offline dependency tree"
         )
-    if not shutil.which("yarn"):
+    if not shutil.which("yarn", path=(environment() | (node_env or {})).get("PATH")):
         raise PipelineError(
             "Yarn Classic executable unavailable; install Yarn 1.x once on this host"
         )
@@ -155,11 +159,15 @@ def prepare_yarn(worktree, root, package, directory, tracked, stop):
     )
     with tempfile.TemporaryDirectory(prefix="devorchestra-yarn-") as temp:
         scratch = Path(temp).resolve()
-        env = environment() | {
-            "HOME": str(scratch),
-            "TMPDIR": str(scratch),
-            "YARN_IGNORE_PATH": "1",
-        }
+        env = (
+            environment()
+            | (node_env or {})
+            | {
+                "HOME": str(scratch),
+                "TMPDIR": str(scratch),
+                "YARN_IGNORE_PATH": "1",
+            }
+        )
         rc, output = execute(
             sandbox_command(worktree, [], scratch, ["yarn", "--no-default-rc", "--version"]),
             scratch,

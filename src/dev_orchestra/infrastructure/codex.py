@@ -247,7 +247,12 @@ class CodexClient:
                     if request.role == "tester"
                     else ["read_test_evidence"]
                     if request.role == "reviewer"
-                    else ["edit_file", "checkpoint_commit", "workspace_state"]
+                    else [
+                        "edit_file",
+                        "checkpoint_commit",
+                        "prepare_environment",
+                        "workspace_state",
+                    ]
                 ),
             }.items():
                 argv += ["-c", "mcp_servers.workspace." + key + "=" + json.dumps(value)]
@@ -265,6 +270,8 @@ class CodexClient:
             argv += ["--model", options.model]
         if options.reasoning_effort:
             argv += ["-c", f'model_reasoning_effort="{options.reasoning_effort}"']
+        if options.service_tier is not None:
+            argv += ["-c", f'service_tier="{options.service_tier}"']
         if _session_id:
             argv.append(_session_id)
         argv.append("-")

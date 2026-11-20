@@ -14,8 +14,16 @@ it("기본 설정을 복사하여 역할별로 변경하고 기본 설정 사용
   });
   vi.spyOn(api, "codexModels").mockResolvedValue({
     items: [
-      { model: "test-standard", reasoning_efforts: ["medium"] },
-      { model: "test-review", reasoning_efforts: ["high"] },
+      {
+        model: "test-standard",
+        reasoning_efforts: ["medium"],
+        supports_fast: false,
+      },
+      {
+        model: "test-review",
+        reasoning_efforts: ["high"],
+        supports_fast: true,
+      },
     ],
   });
   const save = vi.spyOn(api, "saveAgentSettings");
@@ -45,9 +53,14 @@ it("기본 설정을 복사하여 역할별로 변경하고 기본 설정 사용
     screen.getByLabelText("Review 추론 강도"),
     "high",
   );
+  await userEvent.selectOptions(screen.getByLabelText("Review 속도"), "fast");
   expect(
     JSON.parse(screen.getByTestId("settings").textContent!).roles.reviewer,
-  ).toEqual({ model: "test-review", reasoning_effort: "high" });
+  ).toEqual({
+    model: "test-review",
+    reasoning_effort: "high",
+    service_tier: "fast",
+  });
   expect(save).not.toHaveBeenCalled();
   await userEvent.click(screen.getByRole("button", { name: "기본 설정 사용" }));
   expect(screen.getByTestId("settings")).toHaveTextContent("null");

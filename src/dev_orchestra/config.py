@@ -4,25 +4,37 @@ from pathlib import Path
 from typing import Annotated, Literal
 
 import yaml
-from pydantic import Field, StringConstraints, model_validator
+from pydantic import Field, StringConstraints, model_serializer, model_validator
 
 from dev_orchestra.domain.models import Model
+
+DEFAULT_BRANCH_PREFIX = "feature"
 
 
 class Project(Model):
     default_base_branch: str = "main"
-    branch_prefix: str = "feature/codex"
+    branch_prefix: str = DEFAULT_BRANCH_PREFIX
 
 
 Role = Literal["planner", "developer", "tester", "reviewer", "fixer"]
 ROLES = ("planner", "developer", "tester", "reviewer", "fixer")
 ModelName = Annotated[str, StringConstraints(pattern=r"^[A-Za-z0-9][A-Za-z0-9._:/-]{0,199}$")]
 ReasoningEffort = Annotated[str, StringConstraints(pattern=r"^[a-z][a-z0-9_]{0,31}$")]
+ServiceTier = Literal["default", "fast"]
 
 
 class AgentOptions(Model):
     model: ModelName | None = None
     reasoning_effort: ReasoningEffort | None = None
+    service_tier: ServiceTier | None = None
+
+    @model_serializer(mode="wrap")
+    def serialize(self, handler):
+        value = handler(self)
+        # Keep existing Run snapshots and conversation hashes when the tier is unset.
+        if self.service_tier is None:
+            value.pop("service_tier", None)
+        return value
 
 
 class AgentSettings(AgentOptions):
@@ -33,6 +45,7 @@ class AgentSettings(AgentOptions):
         return AgentOptions(
             model=override.model or self.model,
             reasoning_effort=override.reasoning_effort or self.reasoning_effort,
+            service_tier=override.service_tier or self.service_tier,
         )
 
 
