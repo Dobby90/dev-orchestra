@@ -12,13 +12,15 @@ from dev_orchestra.application.validation import (
     docusaurus_build,
     run_test_policy,
     run_test_policy_hash,
+    script_tokens,
 )
 from dev_orchestra.domain.models import PipelineError, TestTarget
 from dev_orchestra.infrastructure.git import Git
 from dev_orchestra.infrastructure.java import java_tool
 
-AUTOMATIC_TEST_CONTRACT = 4
-GRADLE_TEST_CONTRACTS = {3, AUTOMATIC_TEST_CONTRACT}
+AUTOMATIC_TEST_CONTRACT = 5
+JEST_TEST_CONTRACTS = {4, AUTOMATIC_TEST_CONTRACT}
+GRADLE_TEST_CONTRACTS = {3, *JEST_TEST_CONTRACTS}
 AUTOMATIC_TEST_CONTRACTS = {2, *GRADLE_TEST_CONTRACTS}
 NODE_LOCKFILES = {"npm": "package-lock.json", "pnpm": "pnpm-lock.yaml", "yarn": "yarn.lock"}
 
@@ -39,10 +41,42 @@ def candidate_file(run, candidate, name):
     return git.call("show", f"{candidate}:{name}")
 
 
+def frontend_build(package, dependencies):
+    script = package["scripts"].get("build")
+    tokens = script_tokens(script) if isinstance(script, str) else None
+    # Options that redirect build input or invoke other tools need an explicit policy.
+    if tokens == ["vite", "build"]:
+        return "vite" in dependencies
+    return bool(
+        tokens
+        and tokens[:2] == ["vue-cli-service", "build"]
+        and "@vue/cli-service" in dependencies
+        and re.fullmatch(
+            r"(?: --mode(?:=| )[\w-]+| --skip-plugins(?:=| )[@\w/-]+)*",
+            "".join(" " + token for token in tokens[2:]),
+        )
+    )
+
+
+def has_parent_workspace(git, candidate, cwd):
+    names = [
+        str(parent / name)
+        for parent in cwd.parents
+        for name in ("package.json", "pnpm-workspace.yaml")
+    ]
+    present = git.call("ls-tree", "--name-only", "-z", candidate, "--", *names).split("\0")
+    return any(
+        name.endswith("pnpm-workspace.yaml")
+        or json.loads(git.call("show", f"{candidate}:{name}")).get("workspaces")
+        for name in filter(None, present)
+    )
+
+
 def deferred_builds(run, candidate, tests):
-    """Only defer a standalone nested documentation package in new affected Runs."""
-    if not automatic(run) or run["test_selection_contract"] != AUTOMATIC_TEST_CONTRACT:
+    """Defer independent nested builds until the host has selected commands."""
+    if not automatic(run) or run["test_selection_contract"] not in JEST_TEST_CONTRACTS:
         return set()
+    scoped_frontend = run["test_selection_contract"] == AUTOMATIC_TEST_CONTRACT
     git = Git(Path(run["repo"]))
     deferred = set()
     for key, command in tests.commands.items():
@@ -59,7 +93,11 @@ def deferred_builds(run, candidate, tests):
             package = json.loads(candidate_file(run, candidate, str(cwd / "package.json")))
             dependencies = package.get("dependencies", {}) | package.get("devDependencies", {})
             if (
-                docusaurus_build(package)
+                (
+                    docusaurus_build(package)
+                    or scoped_frontend
+                    and frontend_build(package, dependencies)
+                )
                 and not package.get("workspaces")
                 and not {"prebuild", "postbuild"}.intersection(package["scripts"])
                 and not any(
@@ -69,6 +107,7 @@ def deferred_builds(run, candidate, tests):
                 and git.call("ls-tree", candidate, "--", str(cwd / lockfile)).startswith(
                     ("100644 ", "100755 ")
                 )
+                and (not scoped_frontend or not has_parent_workspace(git, candidate, cwd))
             ):
                 deferred.add(key)
         except (PipelineError, ValueError, TypeError, AttributeError):
@@ -141,7 +180,7 @@ def targeted_argv(run, candidate, command, files, gradle=None):
         return argv + [arg for name in classes for arg in ("--tests", name)]
     argv = list(command.argv)
     manager = Path(argv[0]).name
-    jest_enabled = run.get("test_selection_contract") == AUTOMATIC_TEST_CONTRACT
+    jest_enabled = run.get("test_selection_contract") in JEST_TEST_CONTRACTS
     exec_prefix = []
     if manager in {"npm", "pnpm", "yarn"} and argv[1:2] == ["exec"]:
         prefix = 4 if manager == "npm" and argv[2:4] == ["--no", "--"] else 2
@@ -288,16 +327,21 @@ def command_dependencies(chosen, policy):
     return chosen
 
 
-def mandatory_checks(tests, paths, gradle, deferred):
+def mandatory_checks(tests, paths, gradle, deferred, scoped_frontend=False):
     checks = {key for key, command in tests.commands.items() if command.kind == "check"}
     policy = tests.affected
     if policy and any(
         fnmatchcase(path, pattern) for path in paths for pattern in policy.global_paths
     ):
         return checks
-    if paths and all(PurePosixPath(path).parts[:1] in {("src",), ("tests",)} for path in paths):
-        for key in deferred:
-            cwd = PurePosixPath(tests.commands[key].working_directory)
+    directories = {key: PurePosixPath(tests.commands[key].working_directory) for key in deferred}
+    if paths and all(
+        PurePosixPath(path).parts[:1] in {("src",), ("tests",)}
+        or scoped_frontend
+        and any(PurePosixPath(path).is_relative_to(cwd) for cwd in directories.values())
+        for path in paths
+    ):
+        for key, cwd in directories.items():
             if not any(
                 PurePosixPath(path).is_relative_to(cwd)
                 or (policy and any(fnmatchcase(path, p) for p in policy.inputs.get(key, [])))
@@ -340,7 +384,9 @@ def model_selection(run, candidate, paths, plan=None, input_error=None):
     )
     policy = tests.affected
     deferred = deferred_builds(run, candidate, tests)
-    checks = mandatory_checks(tests, paths, gradle, deferred)
+    checks = mandatory_checks(
+        tests, paths, gradle, deferred, scoped_frontend=version == AUTOMATIC_TEST_CONTRACT
+    )
     if policy and deferred:
         checks.update(
             deferred.intersection(
@@ -367,9 +413,12 @@ def model_selection(run, candidate, paths, plan=None, input_error=None):
                 "build checks for affected modules. Include mandatory_command_ids and any configured "
                 "dependents of your selected commands."
             )
-        if version == AUTOMATIC_TEST_CONTRACT:
+        if version in JEST_TEST_CONTRACTS:
             pending["instructions"] += (
-                " Jest supports exact test files. Include documentation builds whenever the change "
+                " Jest supports exact test files. Include builds when the change or acceptance "
+                "criteria affect the generated output of the corresponding package."
+                if version == AUTOMATIC_TEST_CONTRACT
+                else " Jest supports exact test files. Include documentation builds whenever the change "
                 "or acceptance criteria affect the generated documentation."
             )
         return pending
@@ -413,6 +462,8 @@ def model_selection(run, candidate, paths, plan=None, input_error=None):
         decisions[key] = (
             "누적 변경의 Gradle 모듈과 프로젝트 검증 정책에 연결되지 않아 제외했습니다."
             if gradle and command.kind == "check" and java_tool(command) == "gradle"
+            else "누적 변경과 연결되지 않은 프런트엔드 패키지의 빌드를 제외했습니다."
+            if key in deferred and version == AUTOMATIC_TEST_CONTRACT
             else "문서 빌드에 영향이 없는 앱 변경으로 검증에서 제외했습니다."
             if key in deferred
             else "모델이 누적 변경·의존 관계·인수 조건을 분석해 실행 대상에서 제외했습니다."

@@ -8,8 +8,13 @@ import pytest
 from test_workspace import setup as setup
 from test_workspace import start_session
 
-from dev_orchestra.application.automatic_tests import model_selection
+from dev_orchestra.application.automatic_tests import (
+    AUTOMATIC_TEST_CONTRACT,
+    deferred_builds,
+    model_selection,
+)
 from dev_orchestra.application.test_selection import select_tests, selected_config, verify_selection
+from dev_orchestra.application.validation import run_test_policy
 from dev_orchestra.domain.models import Coverage, PipelineError, WorkspaceTestResult
 from dev_orchestra.infrastructure.git import Git
 from dev_orchestra.infrastructure.test_runner import TestRunner
@@ -158,7 +163,7 @@ def test_jest_exact_file_selection_preserves_package_invocation_and_evidence(can
     (repo / "package.json").write_text(json.dumps({"scripts": {"test": "jest --silent"}}))
     git.commit("Jest 파일 선택 준비")
     run = svc.store.get(rid)
-    run["test_selection_contract"] = 4
+    run["test_selection_contract"] = AUTOMATIC_TEST_CONTRACT
     command = run["config"]["tests"]["commands"]["unit"]
     extra = ["--ci", "--runInBand", "--json", "--outputFile=build/test-jest.json"]
     separator = ["--"] if manager == "npm" else []
@@ -173,10 +178,85 @@ def test_jest_exact_file_selection_preserves_package_invocation_and_evidence(can
     run["test_selection_contract"] = 3
     with pytest.raises(PipelineError, match="no safe file adapter"):
         select_tests(run, repo, git.sha(), plan=target)
-    run["test_selection_contract"] = 4
+    run["test_selection_contract"] = AUTOMATIC_TEST_CONTRACT
     command["argv"].append("--watch")
     with pytest.raises(PipelineError, match="unsupported Jest option"):
         select_tests(run, repo, git.sha(), plan=target)
+
+
+def test_jest_keeps_frontend_builds_scoped_to_affected_packages(candidate):
+    svc, rid, repo = candidate
+    manifests = {
+        ".": {"scripts": {"test": "jest", "build": "vue-cli-service build"}},
+        "manual": {
+            "scripts": {"build": "docusaurus build"},
+            "dependencies": {"@docusaurus/core": "2.4.3"},
+        },
+        "portal": {"scripts": {"build": "vite build"}, "devDependencies": {"vite": "5.0.0"}},
+        "studio": {
+            "scripts": {
+                "build": "vue-cli-service build --skip-plugins @vue/cli-plugin-eslint --mode=demo"
+            },
+            "devDependencies": {"@vue/cli-service": "5.0.1"},
+        },
+    }
+    for directory, manifest in manifests.items():
+        root = repo / directory
+        root.mkdir(exist_ok=True)
+        (root / "package.json").write_text(json.dumps(manifest))
+        (root / "yarn.lock").write_text("# yarn lockfile v1\n")
+    git = Git(repo)
+    git.commit("독립 패키지 빌드 준비")
+    sha = git.sha()
+    run = svc.store.get(rid)
+    run.update(base_sha=sha, test_selection_contract=AUTOMATIC_TEST_CONTRACT)
+    tests = run["config"]["tests"]
+    tests["commands"]["unit"]["argv"] = [
+        "yarn",
+        "run",
+        "test",
+        "--ci",
+        "--json",
+        "--outputFile=build/test-jest.json",
+    ]
+    for name, directory in [
+        ("app", "."),
+        ("manual", "manual"),
+        ("portal", "portal"),
+        ("studio", "studio"),
+    ]:
+        tests["commands"][name] = {
+            "kind": "check",
+            "argv": ["yarn", "run", "build"],
+            "working_directory": directory,
+        }
+    check_plan = plan(["tests/selected.test.mjs"])
+    app_change = ["src/AlarmAddPopup.vue"]
+    assert deferred_builds(run, sha, run_test_policy(run)) == {"manual", "portal", "studio"}
+    selection = model_selection(run, sha, app_change, check_plan)
+    assert selection["included"] == ["app", "static", "unit"]
+    assert selection["excluded"] == ["manual", "portal", "studio", "unrelated"]
+    assert selection["resolved_commands"]["unit"]["argv"][-2:] == [
+        "--runTestsByPath",
+        "./tests/selected.test.mjs",
+    ]
+    assert model_selection(run, sha, ["portal/src/Page.vue"], check_plan)["included"] == [
+        "app",
+        "portal",
+        "static",
+        "unit",
+    ]
+    assert model_selection(run, sha, ["yarn.lock"], check_plan)["excluded"] == ["unrelated"]
+    tests["affected"] = {"required_commands": ["manual"], "dependencies": {"portal": ["unit"]}}
+    assert model_selection(run, sha, app_change, check_plan)["excluded"] == ["studio", "unrelated"]
+    tests["affected"] = None
+    run["test_selection_contract"] = 4
+    assert model_selection(run, sha, app_change, check_plan)["excluded"] == ["manual", "unrelated"]
+    run["test_selection_contract"] = AUTOMATIC_TEST_CONTRACT
+    manifest = manifests["."] | {"workspaces": ["portal"]}
+    (repo / "package.json").write_text(json.dumps(manifest))
+    git.commit("상위 워크스페이스 선언")
+    assert not deferred_builds(run, git.sha(), run_test_policy(run))
 
 
 def test_required_regression_cannot_be_filtered(candidate):
