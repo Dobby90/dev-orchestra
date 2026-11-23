@@ -15,6 +15,7 @@ type Draft = {
   mode: "text" | "file";
   base: string;
   branch: string;
+  commitPrefix: string;
   instructions: string;
   budget: string;
   testScope: "full" | "affected";
@@ -27,6 +28,7 @@ const empty: Draft = {
   mode: "text",
   base: "",
   branch: "",
+  commitPrefix: "",
   instructions: "",
   budget: "",
   testScope: "affected",
@@ -40,7 +42,13 @@ const Context = createContext<{
 export function RunDraftProvider({ children }: { children: ReactNode }) {
   const [draft, setDraft] = useState(empty);
   useEffect(() => {
-    if (!draft.name && !draft.text && !draft.instructions) return;
+    if (
+      !draft.name &&
+      !draft.text &&
+      !draft.instructions &&
+      !draft.commitPrefix
+    )
+      return;
     const warn = (event: BeforeUnloadEvent) => {
       event.preventDefault();
       event.returnValue = "";

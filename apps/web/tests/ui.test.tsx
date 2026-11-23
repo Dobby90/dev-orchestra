@@ -481,6 +481,9 @@ describe("화면·위험 명령", () => {
     expect(
       screen.getByLabelText("Feature 브랜치 (선택)"),
     ).toHaveAccessibleDescription(/custom\/tasks\//);
+    const prefix = screen.getByLabelText("커밋 메시지 접두사 (선택)");
+    await userEvent.type(prefix, "  PROJ-123  ");
+    expect(screen.getByLabelText("Feature 브랜치 (선택)")).toHaveValue("");
     await userEvent.type(screen.getByLabelText("PRD"), "작업 요구사항");
     expect(screen.getByLabelText("작업명")).toBeRequired();
     await userEvent.type(
@@ -511,19 +514,29 @@ describe("화면·위험 명령", () => {
       expect.objectContaining({
         test_scope: "affected",
         name: "로그인 화면 개선",
+        commit_prefix: "PROJ-123",
         agent_settings: { model: "task-model", roles: {} },
       }),
     );
     expect(screen.getByRole("dialog", { name: "실행 미리보기" })).toBeVisible();
+    expect(screen.getByText("[PROJ-123]")).toBeVisible();
+    expect(screen.getByText("feature/x")).toBeVisible();
     expect(screen.getByText(/developer.*패스트/)).toBeVisible();
     expect(screen.getByText(/개발 후 확정 · 후보 커밋/)).toBeVisible();
     await userEvent.keyboard("{Escape}");
     expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
     expect(screen.getByLabelText("PRD")).toHaveValue("작업 요구사항");
+    await userEvent.clear(prefix);
     await userEvent.selectOptions(screen.getByLabelText("테스트 범위"), "full");
     expect(
       screen.queryByRole("button", { name: "확인하고 작업 시작" }),
     ).not.toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: "실행 전 확인" }));
+    await screen.findByRole("dialog", { name: "실행 미리보기" });
+    expect(vi.mocked(api.preview).mock.lastCall?.[0]).not.toHaveProperty(
+      "commit_prefix",
+    );
+    expect(screen.queryByText("[PROJ-123]")).not.toBeInTheDocument();
   });
 });
 

@@ -8,7 +8,7 @@ from test_workflow import service as service
 from test_workspace import edit, start_session
 from test_workspace import setup as setup
 
-from dev_orchestra.application.workspace_recovery import verify_intent
+from dev_orchestra.application.workspace_recovery import inspect_workspace, verify_intent
 from dev_orchestra.domain.models import PipelineError, WorkspaceResult
 from dev_orchestra.infrastructure.commit_messages import describe_commit, format_branch_commit
 from dev_orchestra.infrastructure.git import Git
@@ -142,7 +142,11 @@ def test_generic_checkpoint_is_rejected_without_staging(setup):
 
 
 @pytest.mark.parametrize("role", ["developer", "fixer", "tester"])
-def test_prefixed_checkpoint_retry_and_recovery(setup, role):
+@pytest.mark.parametrize("commit_prefix", [None, "PROJ-123"])
+def test_prefixed_checkpoint_retry_and_recovery(setup, role, commit_prefix):
+    svc, run_id, _ = setup
+    if commit_prefix:
+        svc.store.update(run_id, commit_prefix=commit_prefix)
     session, _ = start_session(setup, role)
     path = "tests/test_added.py" if role == "tester" else "main.py"
     edit(session, path, "first\n")
@@ -156,15 +160,50 @@ def test_prefixed_checkpoint_retry_and_recovery(setup, role):
     result = session.checkpoint_commit(*args)
     assert session.checkpoint_commit(*args) == result
     intent = session.data["commits"][0]
-    assert intent["commit_message"].startswith(args[3] + "\n\nDevOrchestra-Checkpoint:")
-    verify_intent(session.data, intent, session.git, intent["parent"])
+    expected = f"[{commit_prefix or run_id}] 인사 출력 변경\n\n기본 인사를 제공합니다."
+    assert intent["commit_message"].startswith(expected + "\n\nDevOrchestra-Checkpoint:")
+    assert session.git.call("branch", "--show-current") == f"features/{run_id}"
+    verify_intent(session.data, intent, session.git, intent["parent"], commit_prefix=commit_prefix)
     with pytest.raises(PipelineError, match="ownership, parent or tree mismatch"):
         verify_intent(
             session.data,
-            intent | {"commit_message": intent["commit_message"].replace(args[3], "잘못된 메시지")},
+            intent
+            | {"commit_message": intent["commit_message"].replace(expected, "잘못된 메시지")},
             session.git,
             intent["parent"],
+            commit_prefix=commit_prefix,
         )
+
+
+def test_recovery_verifies_custom_prefix_after_commit_before_acknowledgement(setup, monkeypatch):
+    svc, run_id, _ = setup
+    svc.store.update(run_id, commit_prefix="PROJ-123")
+    session, _ = start_session(setup)
+    edit(session, "main.py", "first\n")
+    args = (
+        "first",
+        session.git.sha(),
+        {"main.py": session.data["files"]["main.py"]["hash"]},
+        "인사 출력 변경",
+        "첫 기능",
+    )
+
+    def lose_acknowledgement(_intent):
+        raise PipelineError("commit acknowledgement lost")
+
+    with monkeypatch.context() as patch:
+        patch.setattr(session, "acknowledge", lose_acknowledgement)
+        with pytest.raises(PipelineError, match="commit acknowledgement lost"):
+            session.checkpoint_commit(*args)
+    run = svc.store.get(run_id)
+    _, pending = inspect_workspace(svc.store, run)
+    [(_, intent)] = pending
+    assert intent["sha"] == session.git.sha() != run["current_sha"]
+    assert intent["commit_message"].startswith("[PROJ-123] 인사 출력 변경\n")
+    assert session.checkpoint_commit(*args)["sha"] == intent["sha"]
+    assert inspect_workspace(svc.store, svc.store.get(run_id))[1] == []
+    with pytest.raises(PipelineError, match="policy or requirements changed"):
+        inspect_workspace(svc.store, run | {"commit_prefix": "OTHER"})
 
 
 @pytest.mark.parametrize("version", [1, 2])

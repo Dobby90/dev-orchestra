@@ -5028,6 +5028,18 @@
             ],
             "title": "Feature Branch"
           },
+          "commit_prefix": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 80
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Commit Prefix"
+          },
           "max_fix_attempts": {
             "anyOf": [
               {
@@ -5595,6 +5607,18 @@
               }
             ],
             "title": "Feature Branch"
+          },
+          "commit_prefix": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 80
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Commit Prefix"
           },
           "max_fix_attempts": {
             "anyOf": [

@@ -38,7 +38,10 @@ def workspace_policy_hash(run):
     # Raising the existing repair budget is an authorized resume operation,
     # not a change to editing permissions, test commands or selection policy.
     config.get("workflow", {}).pop("max_fix_attempts", None)
-    return checksum({"config": config, "test_scope": run.get("test_scope", "full")})
+    policy = {"config": config, "test_scope": run.get("test_scope", "full")}
+    if run.get("commit_prefix"):
+        policy["commit_prefix"] = run["commit_prefix"]
+    return checksum(policy)
 
 
 def dependency_path(name):
@@ -447,7 +450,10 @@ class WorkspaceSession:
         branch_prefix = run["config"].get("project", {}).get("branch_prefix")
         message_format = {"feature": 3, "features": 4}.get(branch_prefix, 2)
         formatted_message = format_branch_commit(
-            message, self.data["branch"], version=message_format
+            message,
+            self.data["branch"],
+            version=message_format,
+            commit_prefix=run.get("commit_prefix"),
         )
         if expected_sha != self.data["current_sha"]:
             raise PipelineError("checkpoint expected HEAD mismatch")

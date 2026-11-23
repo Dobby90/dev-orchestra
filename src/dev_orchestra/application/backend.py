@@ -37,6 +37,14 @@ def canonical(value):
     return json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
 
 
+def submission_hash(request: Proposal):
+    # Keep pre-existing preview tokens and idempotent submissions replayable.
+    omit = {"commit_prefix"} if request.commit_prefix is None else None
+    return hashlib.sha256(
+        canonical(request.model_dump(mode="json", exclude=omit)).encode()
+    ).hexdigest()
+
+
 class BackendService:
     def __init__(self, runs, roots, key):
         self.runs, self.store, self.key = runs, runs.store, key
@@ -295,9 +303,7 @@ class BackendService:
             "base_sha": info.base_sha,
             "project_version": p["version"],
             "agent_settings_hash": settings_fingerprint(config),
-            "proposal_hash": hashlib.sha256(
-                canonical(proposal.model_dump(mode="json")).encode()
-            ).hexdigest(),
+            "proposal_hash": submission_hash(proposal),
             "expires": int(time.time()) + 300,
         }
         raw = base64.urlsafe_b64encode(canonical(value).encode()).decode()
@@ -323,9 +329,7 @@ class BackendService:
         proposal = Proposal.model_validate(command.model_dump(exclude={"preview_token"}))
         scope = "submit"
         key_hash = hashlib.sha256(idem_key.encode()).hexdigest()
-        request_hash = hashlib.sha256(
-            canonical(command.model_dump(mode="json")).encode()
-        ).hexdigest()
+        request_hash = submission_hash(command)
 
         def replay(db):
             row = db.execute(
@@ -395,6 +399,8 @@ class BackendService:
         if data["base_sha"] != receipt["base_sha"]:
             raise ApplicationError("PREVIEW_STALE", "base branch changed during submission")
         data["answers"] = proposal.additional_instructions
+        if proposal.commit_prefix:
+            data["commit_prefix"] = proposal.commit_prefix
         op = identifier("op")
         job = identifier("job")
         sid = identifier("spec")

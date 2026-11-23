@@ -98,8 +98,9 @@ def _inspect_workspace(store, run):
     if git.call("diff", "--cached", "--name-only"):
         raise PipelineError("unexpected staged changes preserved during recovery")
     parent = data["input_sha"]
+    commit_prefix = run.get("commit_prefix")
     for commit in data["commits"]:
-        verify_intent(data, commit, git, parent)
+        verify_intent(data, commit, git, parent, commit_prefix=commit_prefix)
         parent = commit["sha"]
     if parent != data["current_sha"]:
         raise PipelineError("workspace checkpoint chain mismatch")
@@ -111,7 +112,7 @@ def _inspect_workspace(store, run):
         # A recorded intent is recoverable only after a matching commit exists.
         candidate = intent.get("sha") or git.sha()
         intent = intent | {"sha": candidate}
-        verify_intent(data, intent, git, parent, pending=True)
+        verify_intent(data, intent, git, parent, pending=True, commit_prefix=commit_prefix)
         pending.append((intent_path, intent))
         parent = candidate
     if (
@@ -163,18 +164,20 @@ def confirm_workspace_identity(store, run, previous, current):
         return None
 
 
-def verify_intent(data, intent, git, parent, *, pending=False):
+def verify_intent(data, intent, git, parent, *, pending=False, commit_prefix=None):
     args = {
         key: intent[key] for key in ["request_id", "expected_sha", "files", "message", "summary"]
     }
     marker = f"DevOrchestra-Checkpoint: {data['run_id']}:{data['step_id']}:{intent['request_id']}"
     message_format = intent.get("commit_message_format", 1)
-    if message_format not in {1, 2, 3, 4}:
+    if message_format not in {1, 2, 3, 4} or (message_format == 1 and commit_prefix):
         raise PipelineError("unsupported workspace commit message format")
     message = (
         intent["message"].strip()
         if message_format == 1
-        else format_branch_commit(intent["message"], data["branch"], version=message_format)
+        else format_branch_commit(
+            intent["message"], data["branch"], version=message_format, commit_prefix=commit_prefix
+        )
     )
     if (
         intent["parent"] != parent

@@ -189,7 +189,8 @@ def test_project_duplicate_path_denied(web):
     assert r.status_code == 409
 
 
-def test_submission_atomic_idempotent_and_not_started(web):
+@pytest.mark.parametrize("commit_prefix", [None, "   ", "  PROJ-123  "])
+def test_submission_atomic_idempotent_and_not_started(web, commit_prefix):
     c, svc, _, repo, _ = web
     before = (repo / "main.py").read_bytes()
     p = project(c, svc, repo)
@@ -198,6 +199,8 @@ def test_submission_atomic_idempotent_and_not_started(web):
         "project_id": p["id"],
         "spec": {"kind": "text", "text": "인사말 구현"},
     }
+    if commit_prefix is not None:
+        proposal["commit_prefix"] = commit_prefix
     preview = c.post(f"/api/projects/{p['id']}/run-previews", json=proposal)
     assert preview.status_code == 200, preview.text
     body = {**proposal, "preview_token": preview.json()["preview_token"]}
@@ -210,6 +213,14 @@ def test_submission_atomic_idempotent_and_not_started(web):
         == 409
     )
     headers = {"Idempotency-Key": "request-one"}
+    assert (
+        c.post(
+            "/api/runs",
+            json={**body, "commit_prefix": "PROJ-456"},
+            headers=headers,
+        ).status_code
+        == 409
+    )
     response = c.post("/api/runs", json=body, headers=headers)
     assert response.status_code == 202, response.text
     result = response.json()
@@ -229,7 +240,10 @@ def test_submission_atomic_idempotent_and_not_started(web):
         assert db.execute("SELECT count(*) FROM operations").fetchone()[0] == 1
     detail = c.get("/api/runs/" + rid)
     assert detail.json()["name"] == "인사말 구현"
-    assert svc.store.get(rid)["name"] == "인사말 구현"
+    run = svc.store.get(rid)
+    assert run["name"] == "인사말 구현"
+    assert run["branch"] == preview.json()["branch"] == f"features/{rid}"
+    assert run.get("commit_prefix") == ((commit_prefix or "").strip() or None)
     assert (
         next(r for r in c.get("/api/runs").json()["items"] if r["id"] == rid)["name"]
         == "인사말 구현"
@@ -244,6 +258,22 @@ def test_submission_atomic_idempotent_and_not_started(web):
         == 202
     )
     assert svc.status(rid)["state"] == "cancelled"
+
+
+@pytest.mark.parametrize("commit_prefix", ["[PROJ-123]", "PROJ\n123", "PROJ\x00", "x" * 81])
+def test_preview_rejects_invalid_commit_prefix(web, commit_prefix):
+    c, svc, _, repo, _ = web
+    p = project(c, svc, repo)
+    response = c.post(
+        f"/api/projects/{p['id']}/run-previews",
+        json={
+            "name": "테스트 작업",
+            "project_id": p["id"],
+            "spec": {"kind": "text", "text": "PRD"},
+            "commit_prefix": commit_prefix,
+        },
+    )
+    assert response.status_code == 422
 
 
 def test_stale_preview_rejected(web):

@@ -3,7 +3,7 @@
 from datetime import datetime
 from typing import Annotated, Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, SecretStr, model_validator
+from pydantic import BaseModel, ConfigDict, Field, SecretStr, field_validator, model_validator
 
 from dev_orchestra.application.contracts import RunName, RunSummary
 from dev_orchestra.config import (
@@ -15,6 +15,7 @@ from dev_orchestra.config import (
 )
 from dev_orchestra.domain.models import State
 from dev_orchestra.infrastructure.agent_usage import AgentTelemetry, TokenUsage
+from dev_orchestra.infrastructure.process import sanitize
 
 
 class Input(BaseModel):
@@ -141,10 +142,24 @@ class Proposal(Input):
     spec: Annotated[TextSpec | StoredSpec, Field(discriminator="kind")]
     base_branch: str | None = None
     feature_branch: str | None = None
+    commit_prefix: str | None = Field(default=None, max_length=80)
     max_fix_attempts: int | None = Field(default=None, ge=0, le=20, strict=True)
     additional_instructions: str = Field(default="", max_length=65536)
     run_tests: Literal[True] = True
     run_review: Literal[True] = True
+
+    @field_validator("commit_prefix")
+    @classmethod
+    def validate_commit_prefix(cls, value):
+        if value is None:
+            return None
+        if value and (not value.isprintable() or "[" in value or "]" in value):
+            raise ValueError("commit prefix must be printable text without brackets")
+        value = value.strip()
+        prefix = f"[{value}]"
+        if sanitize(prefix) != prefix:
+            raise ValueError("commit prefix must not contain sensitive content")
+        return value or None
 
 
 class RunCreate(Proposal):

@@ -36,6 +36,7 @@ export function NewRunPage() {
     [mode, setMode] = useDraftField("mode"),
     [base, setBase] = useDraftField("base"),
     [branch, setBranch] = useDraftField("branch"),
+    [commitPrefix, setCommitPrefix] = useDraftField("commitPrefix"),
     [instructions, setInstructions] = useDraftField("instructions"),
     [budget, setBudget] = useDraftField("budget"),
     [testScope, setTestScope] = useDraftField("testScope"),
@@ -108,6 +109,11 @@ export function NewRunPage() {
       setLocalError("작업명을 입력해 주세요.");
       return;
     }
+    const prefix = commitPrefix.trim();
+    if (prefix.includes("[") || prefix.includes("]")) {
+      setLocalError("커밋 메시지 접두사에는 대괄호 안의 값만 입력해 주세요.");
+      return;
+    }
     if (
       mode === "text" &&
       (!text.trim() || new TextEncoder().encode(text).length > 1048576)
@@ -133,6 +139,7 @@ export function NewRunPage() {
       run_review: true,
       ...(base ? { base_branch: base } : {}),
       ...(branch ? { feature_branch: branch } : {}),
+      ...(prefix ? { commit_prefix: prefix } : {}),
       ...(budget !== "" ? { max_fix_attempts: Number(budget) } : {}),
     };
     preview.mutate(proposal);
@@ -337,6 +344,22 @@ export function NewRunPage() {
                   )}
                 </p>
                 <label>
+                  커밋 메시지 접두사 (선택)
+                  <input
+                    value={commitPrefix}
+                    maxLength={80}
+                    aria-describedby="commit-prefix-guide"
+                    placeholder="PROJ-123"
+                    onChange={(e) =>
+                      edit(() => setCommitPrefix(e.target.value))
+                    }
+                  />
+                </label>
+                <p id="commit-prefix-guide" className="help">
+                  대괄호 안에 들어갈 값만 입력하세요. 비워 두면 기존 브랜치 이름
+                  규칙을 사용합니다.
+                </p>
+                <label>
                   추가 지시사항 (선택)
                   <textarea
                     rows={3}
@@ -518,6 +541,14 @@ export function NewRunPage() {
             <dd>{selected.data?.name}</dd>
             <dt>Feature 브랜치</dt>
             <dd className="mono path">{preview.data.receipt.branch}</dd>
+            {preview.data.proposal.commit_prefix && (
+              <>
+                <dt>커밋 메시지 접두사</dt>
+                <dd className="mono path">
+                  [{preview.data.proposal.commit_prefix}]
+                </dd>
+              </>
+            )}
             <dt>기준 커밋</dt>
             <dd className="mono path">{preview.data.receipt.base_sha}</dd>
             {preview.data.receipt.agent_settings && (

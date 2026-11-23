@@ -1665,6 +1665,8 @@ export interface components {
             base_branch?: string | null;
             /** Feature Branch */
             feature_branch?: string | null;
+            /** Commit Prefix */
+            commit_prefix?: string | null;
             /** Max Fix Attempts */
             max_fix_attempts?: number | null;
             /**
@@ -1847,6 +1849,8 @@ export interface components {
             base_branch?: string | null;
             /** Feature Branch */
             feature_branch?: string | null;
+            /** Commit Prefix */
+            commit_prefix?: string | null;
             /** Max Fix Attempts */
             max_fix_attempts?: number | null;
             /**
