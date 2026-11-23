@@ -13,6 +13,7 @@ from dev_orchestra.application.automatic_tests import (
     AUTOMATIC_TEST_CONTRACTS,
     automatic,
     command_dependencies,
+    deferred_builds,
 )
 from dev_orchestra.application.errors import ApplicationError
 from dev_orchestra.application.handoff import repository_identity, same_repository
@@ -283,7 +284,18 @@ class Runner:
                     return
             if config.tests.commands and hasattr(self.tests, "prepare"):
                 try:
-                    self._prepare(run_id, worktree, config.tests, directory / "preflight")
+                    tests = config.tests
+                    if automatic(run) and (deferred := deferred_builds(run, git.sha(), tests)):
+                        tests = tests.model_copy(
+                            update={
+                                "commands": {
+                                    key: command
+                                    for key, command in tests.commands.items()
+                                    if key not in deferred
+                                }
+                            }
+                        )
+                    self._prepare(run_id, worktree, tests, directory / "preflight")
                     if resumed_workspace:
                         resumed_workspace.guard()
                     elif git.dirty():

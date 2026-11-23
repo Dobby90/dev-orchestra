@@ -3,8 +3,8 @@
 from fnmatch import fnmatchcase
 
 from dev_orchestra.application.automatic_tests import (
-    AUTOMATIC_TEST_CONTRACT,
     AUTOMATIC_TEST_CONTRACTS,
+    GRADLE_TEST_CONTRACTS,
     automatic,
     model_selection,
 )
@@ -124,9 +124,7 @@ def select_tests(run, worktree, candidate, plan=None):
     try:
         # Keep both paths of a move when finding affected modules.
         options = (
-            ["--no-renames"]
-            if run.get("test_selection_contract") == AUTOMATIC_TEST_CONTRACT
-            else []
+            ["--no-renames"] if run.get("test_selection_contract") in GRADLE_TEST_CONTRACTS else []
         )
         names = Git(worktree).call(
             "diff", "--name-only", "-z", *options, run["base_sha"], candidate, "--"

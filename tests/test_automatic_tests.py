@@ -151,6 +151,34 @@ def test_expansion_requires_reason_and_invalid_plans_cannot_pass(candidate):
         model_selection(run, run["base_sha"], [], plan(), input_error="diff unavailable")
 
 
+@pytest.mark.parametrize("manager", ["yarn", "npm"])
+def test_jest_exact_file_selection_preserves_package_invocation_and_evidence(candidate, manager):
+    svc, rid, repo = candidate
+    git = Git(repo)
+    (repo / "package.json").write_text(json.dumps({"scripts": {"test": "jest --silent"}}))
+    git.commit("Jest 파일 선택 준비")
+    run = svc.store.get(rid)
+    run["test_selection_contract"] = 4
+    command = run["config"]["tests"]["commands"]["unit"]
+    extra = ["--ci", "--runInBand", "--json", "--outputFile=build/test-jest.json"]
+    separator = ["--"] if manager == "npm" else []
+    command["argv"] = [manager, "run", "test", *separator, *extra]
+    target = plan(["tests/selected.test.mjs"])
+    result = select_tests(run, repo, git.sha(), plan=target)
+    assert selected_config(run, result).commands["unit"].argv == [
+        *command["argv"],
+        "--runTestsByPath",
+        "./tests/selected.test.mjs",
+    ]
+    run["test_selection_contract"] = 3
+    with pytest.raises(PipelineError, match="no safe file adapter"):
+        select_tests(run, repo, git.sha(), plan=target)
+    run["test_selection_contract"] = 4
+    command["argv"].append("--watch")
+    with pytest.raises(PipelineError, match="unsupported Jest option"):
+        select_tests(run, repo, git.sha(), plan=target)
+
+
 def test_required_regression_cannot_be_filtered(candidate):
     svc, rid, repo = candidate
     run = svc.store.get(rid)
@@ -313,16 +341,73 @@ def test_real_pytest_execution_excludes_failing_unrelated_test_and_checks_eviden
         verify_selection(svc.store.get(rid), forged)
 
 
-def test_automatic_selection_reaches_final_approval_without_static_mapping(candidate):
+@pytest.mark.parametrize("manual_changed", [None, False, True], ids=["legacy", "app", "manual"])
+def test_automatic_selection_reaches_final_approval_without_static_mapping(
+    candidate, monkeypatch, manual_changed
+):
+    from pathlib import Path
+
+    from test_validation_policy import detect
     from test_workflow import FakeAgent
     from test_workspace import edit
 
     from dev_orchestra.application.plan_approval import binding, decide
     from dev_orchestra.domain.models import AgentResult, TestTarget, WorkspaceResult
+    from dev_orchestra.infrastructure import test_runner
     from dev_orchestra.orchestration.runner import Runner
 
     svc, rid, repo = candidate
-    svc.store.update(rid, test_selection_contract=3)
+    selection_version = 3 if manual_changed is None else 4
+    included = ["manual", "static", "unit"] if manual_changed else ["static", "unit"]
+    change_path = "main.py"
+    preparations, doc_builds = [], []
+    if manual_changed is not None:
+        change_path = "manual/docs/index.md" if manual_changed else "src/main.js"
+        (repo / change_path).parent.mkdir(parents=True)
+        (repo / "manual").mkdir(exist_ok=True)
+        (repo / "manual/package.json").write_text(
+            json.dumps(
+                {
+                    "scripts": {"build": "docusaurus build"},
+                    "dependencies": {"@docusaurus/core": "2.4.3"},
+                }
+            )
+        )
+        (repo / "manual/yarn.lock").write_text("# yarn lockfile v1\n")
+        (repo / change_path).write_text("seed\n")
+        git = Git(repo)
+        git.commit("매뉴얼 검증 준비")
+        config = svc.store.get(rid)["config"]
+        build = next(c for c in detect(repo).candidates if c.command.working_directory == "manual")
+        assert "manual/.docusaurus" in build.output_paths
+        config["tests"]["commands"]["manual"] = build.command.model_dump()
+        config["tests"]["output_paths"].extend(build.output_paths)
+        svc.store.update(rid, config=config, base_sha=git.sha())
+        if not manual_changed:
+            policy_run = svc.store.get(rid)
+            policy_run.update(test_selection_contract=4, criteria=[{"id": "AC1"}])
+            policy_run["config"]["tests"]["affected"] = {
+                "criterion_commands": {"AC1": ["unit", "manual"]}
+            }
+            selection = model_selection(policy_run, git.sha(), [change_path], plan())
+            assert "manual" in selection["included"]
+    svc.store.update(rid, test_selection_contract=selection_version)
+
+    execute = test_runner.execute
+
+    def run_command(argv, cwd, *args, **kwargs):
+        if cwd.name == "manual":
+            assert argv[-3:] == ["yarn", "run", "build"]
+            doc_builds.append(cwd)
+            return 0, ""
+        return execute(argv, cwd, *args, **kwargs)
+
+    monkeypatch.setattr(test_runner, "execute", run_command)
+
+    class RecordingRunner(TestRunner):
+        def prepare(self, worktree, config, directory, stop=lambda: None):
+            preparations.append(set(config.commands))
+            self.preflight = Path(directory)
 
     class Agent(FakeAgent):
         def run(self, request, *args):
@@ -330,7 +415,7 @@ def test_automatic_selection_reaches_final_approval_without_static_mapping(candi
                 assert request.context["automatic_test_selection"]
                 return AgentResult(
                     summary="관련 회귀 테스트 자동 선택",
-                    command_ids=["static", "unit"],
+                    command_ids=included,
                     test_plan=[TestTarget(**item) for item in plan()],
                     coverage=[Coverage(criterion_id="AC1", command_ids=["unit"])],
                 )
@@ -338,9 +423,9 @@ def test_automatic_selection_reaches_final_approval_without_static_mapping(candi
 
         def run_workspace(self, request, directory, session, stop):
             if request.role == "developer":
-                edit(session, "main.py", "implemented\n")
+                edit(session, change_path, "implemented\n")
                 return WorkspaceResult(summary="요구 기능 수정")
-            value = session.run_tests(["static", "unit"], test_plan=plan())
+            value = session.run_tests(included, test_plan=plan())
             return WorkspaceTestResult(
                 summary="관련 회귀 테스트 자동 실행",
                 command_ids=value["selection"]["included"],
@@ -348,16 +433,22 @@ def test_automatic_selection_reaches_final_approval_without_static_mapping(candi
                 coverage=[Coverage(criterion_id="AC1", command_ids=["unit"])],
             )
 
-    runner = Runner(svc.store, Agent(), TestRunner())
+    runner = Runner(svc.store, Agent(), RecordingRunner())
     runner.execute(rid)
     assert svc.store.get(rid)["state"] == "waiting_plan_approval", svc.store.get(rid).get("error")
+    assert all("manual" not in commands for commands in preparations)
     decide(svc, rid, binding(svc.store, svc.store.get(rid))["plan_hash"], True)
     runner.execute(rid)
     run = svc.store.get(rid)
     assert run["state"] == "waiting_approval", run.get("error")
-    assert run["test_result"]["test_selection"]["selector_version"] == 3
-    assert run["test_result"]["test_selection"]["excluded"] == ["unrelated"]
-    assert run["test_result"]["execution"]["commands"][0]["total"] == 1
+    assert run["test_result"]["test_selection"]["selector_version"] == selection_version
+    assert run["test_result"]["test_selection"]["included"] == included
+    assert [commands for commands in preparations if "manual" in commands] == (
+        [{"manual"}] if manual_changed else []
+    )
+    assert len(doc_builds) == int(bool(manual_changed))
+    unit = next(c for c in run["test_result"]["execution"]["commands"] if c["command_id"] == "unit")
+    assert unit["total"] == 1
     svc.approve(rid)
     assert svc.store.get(rid)["state"] == "completed"
 

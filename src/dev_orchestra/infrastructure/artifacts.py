@@ -3,7 +3,9 @@
 import base64
 import hashlib
 import io
+import os
 import re
+import stat
 import tarfile
 import threading
 import time
@@ -116,7 +118,32 @@ def checksum(integrity):
     return max(values, key=lambda p: hashlib.new(p[0]).digest_size)
 
 
-def verified(url, integrity, directory, stop=lambda: None, budget=None):
+def npm_cache_path(cache, algorithm, expected):
+    encoded = expected.hex()
+    return cache / "_cacache/content-v2" / algorithm / encoded[:2] / encoded[2:4] / encoded[4:]
+
+
+def cached_npm_archive(cache, algorithm, expected, stop):
+    path = npm_cache_path(cache, algorithm, expected)
+    if any(p.is_symlink() for p in path.parents):
+        return None
+    limit = 128 * 2**20
+    try:
+        fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+        with os.fdopen(fd, "rb") as archive:
+            info = os.fstat(fd)
+            if not stat.S_ISREG(info.st_mode) or info.st_size > limit:
+                return None
+            check_stop(stop)
+            data = archive.read(limit + 1)
+    except OSError:
+        return None
+    if len(data) <= limit and hashlib.new(algorithm, data).digest() == expected:
+        return data
+    return None
+
+
+def verified(url, integrity, directory, stop=lambda: None, budget=None, *, npm_cache=None):
     public_url(url)
     algorithm, expected = checksum(integrity)
     directory = Path(directory)
@@ -130,9 +157,11 @@ def verified(url, integrity, directory, stop=lambda: None, budget=None):
         if hashlib.new(algorithm, path.read_bytes()).digest() == expected:
             check_stop(stop)
             return path
-    data = fetch(url, stop, 128 * 2**20, budget)
-    if hashlib.new(algorithm, data).digest() != expected:
-        raise PipelineError("public artifact checksum mismatch")
+    data = cached_npm_archive(npm_cache, algorithm, expected, stop) if npm_cache else None
+    if data is None:
+        data = fetch(url, stop, 128 * 2**20, budget)
+        if hashlib.new(algorithm, data).digest() != expected:
+            raise PipelineError("public artifact checksum mismatch")
     from tempfile import NamedTemporaryFile
 
     with NamedTemporaryFile(dir=directory, delete=False) as file:

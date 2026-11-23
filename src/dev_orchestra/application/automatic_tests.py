@@ -8,13 +8,19 @@ from pathlib import Path, PurePosixPath
 
 from dev_orchestra.application.gradle_tests import SOURCE_DIRS, GradleSelection, gradle_target_class
 from dev_orchestra.application.test_changes import checksum
-from dev_orchestra.application.validation import run_test_policy, run_test_policy_hash
+from dev_orchestra.application.validation import (
+    docusaurus_build,
+    run_test_policy,
+    run_test_policy_hash,
+)
 from dev_orchestra.domain.models import PipelineError, TestTarget
 from dev_orchestra.infrastructure.git import Git
 from dev_orchestra.infrastructure.java import java_tool
 
-AUTOMATIC_TEST_CONTRACT = 3
-AUTOMATIC_TEST_CONTRACTS = {2, AUTOMATIC_TEST_CONTRACT}
+AUTOMATIC_TEST_CONTRACT = 4
+GRADLE_TEST_CONTRACTS = {3, AUTOMATIC_TEST_CONTRACT}
+AUTOMATIC_TEST_CONTRACTS = {2, *GRADLE_TEST_CONTRACTS}
+NODE_LOCKFILES = {"npm": "package-lock.json", "pnpm": "pnpm-lock.yaml", "yarn": "yarn.lock"}
 
 
 def automatic(run):
@@ -31,6 +37,64 @@ def candidate_file(run, candidate, name):
     if not entry.startswith(("100644 ", "100755 ")):
         raise PipelineError("test input must be a committed regular file")
     return git.call("show", f"{candidate}:{name}")
+
+
+def deferred_builds(run, candidate, tests):
+    """Only defer a standalone nested documentation package in new affected Runs."""
+    if not automatic(run) or run["test_selection_contract"] != AUTOMATIC_TEST_CONTRACT:
+        return set()
+    git = Git(Path(run["repo"]))
+    deferred = set()
+    for key, command in tests.commands.items():
+        cwd = PurePosixPath(command.working_directory)
+        lockfile = NODE_LOCKFILES.get(Path(command.argv[0]).name)
+        if (
+            command.kind != "check"
+            or cwd == PurePosixPath(".")
+            or not lockfile
+            or command.argv[1:] != ["run", "build"]
+        ):
+            continue
+        try:
+            package = json.loads(candidate_file(run, candidate, str(cwd / "package.json")))
+            dependencies = package.get("dependencies", {}) | package.get("devDependencies", {})
+            if (
+                docusaurus_build(package)
+                and not package.get("workspaces")
+                and not {"prebuild", "postbuild"}.intersection(package["scripts"])
+                and not any(
+                    not isinstance(v, str) or v.startswith(("file:", "link:", "workspace:"))
+                    for v in (dependencies | package.get("optionalDependencies", {})).values()
+                )
+                and git.call("ls-tree", candidate, "--", str(cwd / lockfile)).startswith(
+                    ("100644 ", "100755 ")
+                )
+            ):
+                deferred.add(key)
+        except (PipelineError, ValueError, TypeError, AttributeError):
+            continue
+    return deferred
+
+
+def check_jest_options(options):
+    switches = {"--ci", "--runInBand", "--json", "--silent", "--verbose", "--no-cache"}
+    values = {"--config", "--outputFile", "--cacheDirectory", "--maxWorkers"}
+    remaining = iter(options)
+    for arg in remaining:
+        flag, equals, value = arg.partition("=")
+        if flag in values:
+            value = value if equals else next(remaining, "")
+            if value and not value.startswith("-"):
+                continue
+        elif arg in switches:
+            continue
+        raise PipelineError("unsupported Jest option for exact file targeting: " + arg)
+
+
+def jest_file_args(files):
+    if any(PurePosixPath(name).as_posix() != name for name in files):
+        raise PipelineError("Jest test target must use a canonical relative path")
+    return ["--runTestsByPath", *("./" + name for name in files)]
 
 
 def targeted_argv(run, candidate, command, files, gradle=None):
@@ -77,6 +141,7 @@ def targeted_argv(run, candidate, command, files, gradle=None):
         return argv + [arg for name in classes for arg in ("--tests", name)]
     argv = list(command.argv)
     manager = Path(argv[0]).name
+    jest_enabled = run.get("test_selection_contract") == AUTOMATIC_TEST_CONTRACT
     exec_prefix = []
     if manager in {"npm", "pnpm", "yarn"} and argv[1:2] == ["exec"]:
         prefix = 4 if manager == "npm" and argv[2:4] == ["--no", "--"] else 2
@@ -94,6 +159,17 @@ def targeted_argv(run, candidate, command, files, gradle=None):
             if any(char in text for char in ";&|<>`$\n"):
                 raise ValueError("compound npm script")
             runner = shlex.split(text)
+            if "pre" + script in package["scripts"] or "post" + script in package["scripts"]:
+                raise ValueError("package manager lifecycle hooks")
+            extra = argv[index + 2 :]
+            if jest_enabled and runner[0] == "jest":
+                if index != 1:
+                    raise ValueError("unsupported Jest package manager options")
+                separator = ["--"] if manager == "npm" or extra[:1] == ["--"] else []
+                options = extra[1:] if extra[:1] == ["--"] else extra
+                check_jest_options(runner[1:])
+                check_jest_options(options)
+                return argv[: index + 2] + separator + options + jest_file_args(files)
             if runner[0] == "npx":
                 runner = runner[1:]
             if runner and runner[0] in {"playwright", "vitest"}:
@@ -106,21 +182,20 @@ def targeted_argv(run, candidate, command, files, gradle=None):
             ]
             if node_options and runner[0] != "node":
                 raise ValueError("node options require node runner")
-            extra = argv[index + 2 :]
             argv = (
                 runner[:1]
                 + node_options
                 + runner[1:]
                 + (extra[1:] if extra[:1] == ["--"] else extra)
             )
-            # Preserve npm lifecycle behavior: targeting scripts with hooks needs a dedicated command.
-            if "pre" + script in package["scripts"] or "post" + script in package["scripts"]:
-                raise ValueError("package manager lifecycle hooks")
         except (ValueError, KeyError, IndexError) as error:
             raise PipelineError(
                 "cannot safely filter package script; select this command with files=[] and explain why"
             ) from error
     executable = Path(argv[0]).name
+    if jest_enabled and executable == "jest" and (exec_prefix or manager not in NODE_LOCKFILES):
+        check_jest_options(argv[1:])
+        return exec_prefix + argv + jest_file_args(files)
     prefix = 1
     if executable.startswith("python") and argv[1:3] == ["-m", "pytest"]:
         prefix = 3
@@ -213,16 +288,26 @@ def command_dependencies(chosen, policy):
     return chosen
 
 
-def mandatory_checks(tests, paths, gradle):
+def mandatory_checks(tests, paths, gradle, deferred):
     checks = {key for key, command in tests.commands.items() if command.kind == "check"}
+    policy = tests.affected
+    if policy and any(
+        fnmatchcase(path, pattern) for path in paths for pattern in policy.global_paths
+    ):
+        return checks
+    if paths and all(PurePosixPath(path).parts[:1] in {("src",), ("tests",)} for path in paths):
+        for key in deferred:
+            cwd = PurePosixPath(tests.commands[key].working_directory)
+            if not any(
+                PurePosixPath(path).is_relative_to(cwd)
+                or (policy and any(fnmatchcase(path, p) for p in policy.inputs.get(key, [])))
+                for path in paths
+            ):
+                checks.remove(key)
     if gradle is None:
         return checks
-    policy = tests.affected
     affected_modules = gradle.affected_modules(tests.commands.values(), paths)
-    if affected_modules is None or (
-        policy
-        and any(fnmatchcase(path, pattern) for path in paths for pattern in policy.global_paths)
-    ):
+    if affected_modules is None:
         return checks
     return {
         key
@@ -249,12 +334,21 @@ def model_selection(run, candidate, paths, plan=None, input_error=None):
     version = run.get("test_selection_contract", 2)
     gradle = (
         GradleSelection(run, candidate)
-        if version == AUTOMATIC_TEST_CONTRACT
+        if version in GRADLE_TEST_CONTRACTS
         and any(java_tool(c) == "gradle" for c in tests.commands.values())
         else None
     )
     policy = tests.affected
-    checks = mandatory_checks(tests, paths, gradle)
+    deferred = deferred_builds(run, candidate, tests)
+    checks = mandatory_checks(tests, paths, gradle, deferred)
+    if policy and deferred:
+        checks.update(
+            deferred.intersection(
+                key
+                for criterion in run.get("criteria", [])
+                for key in policy.criterion_commands.get(criterion["id"], [])
+            )
+        )
     if plan is None:
         pending = {
             "selector_version": version,
@@ -265,13 +359,18 @@ def model_selection(run, candidate, paths, plan=None, input_error=None):
             },
             "instructions": "Analyze cumulative diff, callers, dependencies and tests. Supply test_plan with command_id, files (relative to command working_directory), reason. No static mapping required. Use exact test files; files=[] expands one command only with a concrete reason. Cover every criterion and changed behavior. Mandatory checks/regressions remain host-owned.",
         }
-        if version == AUTOMATIC_TEST_CONTRACT:
+        if version in GRADLE_TEST_CONTRACTS:
             pending["mandatory_command_ids"] = sorted(command_dependencies(checks, policy))
             pending["instructions"] += (
                 " For Gradle, supply exact Java, Kotlin or Groovy class files under src/test. "
                 "The host scopes supported test tasks to the selected classes and includes Gradle "
                 "build checks for affected modules. Include mandatory_command_ids and any configured "
                 "dependents of your selected commands."
+            )
+        if version == AUTOMATIC_TEST_CONTRACT:
+            pending["instructions"] += (
+                " Jest supports exact test files. Include documentation builds whenever the change "
+                "or acceptance criteria affect the generated documentation."
             )
         return pending
     targets = [TestTarget.model_validate(item) for item in plan]
@@ -314,6 +413,8 @@ def model_selection(run, candidate, paths, plan=None, input_error=None):
         decisions[key] = (
             "누적 변경의 Gradle 모듈과 프로젝트 검증 정책에 연결되지 않아 제외했습니다."
             if gradle and command.kind == "check" and java_tool(command) == "gradle"
+            else "문서 빌드에 영향이 없는 앱 변경으로 검증에서 제외했습니다."
+            if key in deferred
             else "모델이 누적 변경·의존 관계·인수 조건을 분석해 실행 대상에서 제외했습니다."
         )
     broad = any(

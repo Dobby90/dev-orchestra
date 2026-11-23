@@ -525,7 +525,7 @@ class WorkspaceSession:
         return select_tests(self.store.get(self.run_id), self.root, self.git.sha())
 
     def run_tests(self, command_ids, test_plan=None, commit_message=""):
-        from dev_orchestra.application.automatic_tests import automatic
+        from dev_orchestra.application.automatic_tests import automatic, deferred_builds
         from dev_orchestra.application.test_selection import select_tests, selected_config
         from dev_orchestra.infrastructure.test_runner import TestRunner
 
@@ -570,18 +570,27 @@ class WorkspaceSession:
 
         evidence_id = "test-" + uuid.uuid4().hex
         directory = self.path.parent / evidence_id
-        runner = getattr(self, "_test_runner", None) or TestRunner(
-            preflight=Path(run["directory"]) / "preflight"
-        )
+        preflight = Path(run["directory"]) / "preflight"
+        runner = getattr(self, "_test_runner", None) or TestRunner(preflight=preflight)
+        tests = selected_config(run, selection)
+
+        def stop():
+            return self.store.read_control(self.run_id)
+
         self.data["testing"] = True
         self.save()
         try:
-            execution = runner.run(
-                self.root,
-                selected_config(run, selection),
-                directory,
-                lambda: self.store.get(self.run_id)["control"],
-            )
+            if deferred := deferred_builds(run, self.git.sha(), tests):
+                runner.prepare(
+                    self.root,
+                    tests.model_copy(
+                        update={"commands": {key: tests.commands[key] for key in deferred}}
+                    ),
+                    preflight,
+                    stop,
+                )
+                self.guard()
+            execution = runner.run(self.root, tests, directory, stop)
         except StopRequested:
             raise
         except (PipelineError, OSError) as error:
@@ -597,7 +606,7 @@ class WorkspaceSession:
                         "passed": False,
                         "error": sanitize(str(error)),
                     }
-                    for key, command in selected_config(run, selection).commands.items()
+                    for key, command in tests.commands.items()
                 ],
             }
         finally:

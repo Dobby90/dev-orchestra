@@ -247,6 +247,16 @@ def profiles():
     return [candidate(key, label=label) for key, label in labels.items()]
 
 
+def docusaurus_build(package):
+    script = package.get("scripts", {}).get("build")
+    return (
+        isinstance(script, str)
+        and script.split() == ["docusaurus", "build"]
+        and "@docusaurus/core"
+        in (package.get("dependencies", {}) | package.get("devDependencies", {}))
+    )
+
+
 def detect_validation(info, *, supported_only=False):
     git = Git(info.repository_path)
     # Git blobs avoid following repository symlinks and ignore uncommitted source changes.
@@ -352,6 +362,12 @@ def detect_validation(info, *, supported_only=False):
                             item.output_paths.append(vite_cache)
                         if re.search(r"(?:^|\s)vue-cli-service\s+build(?:\s|$)", value):
                             item.output_paths.append(prefix + "node_modules/.cache")
+                        if script == "build" and docusaurus_build(package):
+                            generated = prefix + ".docusaurus"
+                            if not any(
+                                p == generated or p.startswith(generated + "/") for p in files
+                            ):
+                                item.output_paths.append(generated)
                     elif script == "test" or script.startswith(("test:", "test-")):
                         argv = [pm, "run", script]
                         separator = ["--"] if pm == "npm" else []
@@ -746,7 +762,9 @@ def complete_run_validation(config, info):
             ) != script_identity(item.command.argv):
                 continue
             for output in item.output_paths:
-                if output.endswith(("node_modules/.vite-temp", "node_modules/.cache")) and not any(
+                if output.endswith(
+                    ("node_modules/.vite-temp", "node_modules/.cache", ".docusaurus")
+                ) and not any(
                     PurePosixPath(output).is_relative_to(PurePosixPath(p))
                     for p in snapshot.tests.output_paths
                 ):
