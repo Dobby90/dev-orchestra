@@ -605,6 +605,45 @@
         }
       }
     },
+    "/api/projects/{pid}/repository/reverify": {
+      "post": {
+        "summary": "Reverify Repository",
+        "operationId": "reverify_repository_api_projects__pid__repository_reverify_post",
+        "parameters": [
+          {
+            "name": "pid",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Pid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProjectView"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/projects/{pid}/git": {
       "get": {
         "summary": "Git Settings",
@@ -4215,6 +4254,38 @@
         ],
         "title": "GitTestView"
       },
+      "GradlePreparation": {
+        "properties": {
+          "total": {
+            "type": "integer",
+            "minimum": 0.0,
+            "title": "Total"
+          },
+          "checked": {
+            "type": "integer",
+            "minimum": 0.0,
+            "title": "Checked"
+          },
+          "reused": {
+            "type": "integer",
+            "minimum": 0.0,
+            "title": "Reused"
+          },
+          "active": {
+            "type": "boolean",
+            "title": "Active"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "total",
+          "checked",
+          "reused",
+          "active"
+        ],
+        "title": "GradlePreparation"
+      },
       "HTTPValidationError": {
         "properties": {
           "detail": {
@@ -4830,6 +4901,11 @@
             "type": "string",
             "title": "Repository Path"
           },
+          "repository_identity_legacy": {
+            "type": "boolean",
+            "title": "Repository Identity Legacy",
+            "default": false
+          },
           "default_base_branch": {
             "type": "string",
             "title": "Default Base Branch"
@@ -4840,7 +4916,7 @@
           "branch_prefix": {
             "type": "string",
             "title": "Branch Prefix",
-            "default": "feature"
+            "default": "features"
           },
           "version": {
             "type": "integer",
@@ -5701,6 +5777,16 @@
             ],
             "title": "Current Role"
           },
+          "gradle_preparation": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/GradlePreparation"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "control": {
             "anyOf": [
               {
@@ -6051,6 +6137,16 @@
               }
             ],
             "title": "Current Role"
+          },
+          "gradle_preparation": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/GradlePreparation"
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "control": {
             "anyOf": [

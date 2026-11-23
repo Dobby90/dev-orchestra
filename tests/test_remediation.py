@@ -53,7 +53,7 @@ def test_approval_report_matches_state(service):
     svc, rid, _ = service
     Runner(svc.store, FakeAgent(), FakeTests()).execute(rid)
     svc.approve(rid)
-    assert "**state**: completed" in svc.report(rid)
+    assert "**승인 완료**" in svc.report(rid)
 
 
 def test_resume_detects_prior_evidence_corruption(service):

@@ -51,9 +51,16 @@ def test_sandbox_exempts_safe_example_but_denies_actual_and_mislabeled_secrets(t
     nested = tmp_path / "nested"
     nested.mkdir()
     (nested / ".env.example").write_text("API_KEY=private-value\n")
+    protected = tmp_path / ".env.private"
+    protected.mkdir()
+    (protected / "settings").write_text("private")
+    target = tmp_path / "linked-settings"
+    target.write_text("private")
+    (protected / "link").symlink_to(target)
     profile = sandbox_command(tmp_path, [], tmp_path, [sys.executable])[2]
-    for path in (tmp_path / ".env", nested / ".env.example"):
+    for path in (tmp_path / ".env", nested / ".env.example", protected, target):
         assert "(deny file-read* (subpath " + json.dumps(str(path.resolve())) + "))" in profile
+    assert str(protected / "settings") not in profile
     assert (
         "(deny file-read* (subpath " + json.dumps(str((tmp_path / ".env.example").resolve())) + "))"
         not in profile

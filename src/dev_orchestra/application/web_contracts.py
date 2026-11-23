@@ -211,6 +211,7 @@ class ProjectView(BaseModel):
     id: str
     name: str
     repository_path: str
+    repository_identity_legacy: bool = False
     default_base_branch: str
     policy: Policy
     branch_prefix: str = DEFAULT_BRANCH_PREFIX

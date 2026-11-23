@@ -7,6 +7,7 @@ import json
 import platform
 import sys
 import tarfile
+from pathlib import Path
 
 import pytest
 from test_validation_policy import commit_files, detect
@@ -64,6 +65,54 @@ def test_download_budget_and_groovy_path_literals():
         budget.consume(1)
     literal = java_native.groovy_literal("/tmp/${untrusted}/'quoted'")
     assert literal.startswith("'") and literal.endswith("'") and "\\'quoted\\'" in literal
+
+
+@pytest.mark.parametrize("cache_entry", ["valid", "corrupt", "symlink", "missing"])
+def test_yarn_preparation_reuses_only_verified_npm_tarballs(tmp_path, monkeypatch, cache_entry):
+    from dev_orchestra.infrastructure import node_dependencies
+
+    home = tmp_path / "user"
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setattr(node_dependencies.shutil, "which", lambda *args, **kwargs: "yarn")
+    root = tmp_path / "project"
+    root.mkdir()
+    package = {"dependencies": {"tool": "1.0.0"}}
+    (root / "package.json").write_text(json.dumps(package))
+    data = b"pinned package"
+    url = "https://registry.yarnpkg.com/tool/-/tool-1.0.0.tgz"
+    integrity = sri(data)
+    (root / "yarn.lock").write_text(
+        f'tool@1.0.0:\n  version "1.0.0"\n  resolved "{url}"\n  integrity {integrity}\n'
+    )
+    path = artifacts.npm_cache_path(home / ".npm", *artifacts.checksum(integrity))
+    path.parent.mkdir(parents=True)
+    if cache_entry == "symlink":
+        other = tmp_path / "archive.tgz"
+        other.write_bytes(data)
+        path.symlink_to(other)
+    elif cache_entry != "missing":
+        path.write_bytes(data if cache_entry == "valid" else b"corrupt")
+    fetched = []
+    monkeypatch.setattr(artifacts, "fetch", lambda url, *args: fetched.append(url) or data)
+    monkeypatch.setattr(node_dependencies, "sandbox_command", lambda *args: args[-1])
+
+    def execute(argv, *args, env, **kwargs):
+        if "--version" in argv:
+            return 0, "1.22.22"
+        if "install" in argv:
+            assert (Path(env["HOME"]) / "mirror/tool-1.0.0.tgz").read_bytes() == data
+            assert "--offline" in argv and "--ignore-scripts" in argv
+        return 0, "ok"
+
+    monkeypatch.setattr(node_dependencies, "execute", execute)
+    node_dependencies.prepare_yarn(root, root, package, tmp_path / "preflight", [], lambda: None)
+    assert fetched == ([] if cache_entry == "valid" else [url])
+    if cache_entry == "corrupt":
+        assert path.read_bytes() == b"corrupt"
+    elif cache_entry == "symlink":
+        assert path.is_symlink()
+    elif cache_entry == "missing":
+        assert not path.exists()
 
 
 def test_missing_public_npm_cache_is_imported_offline_without_project_scripts(

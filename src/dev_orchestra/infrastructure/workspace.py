@@ -24,6 +24,7 @@ from dev_orchestra.domain.models import (
 )
 from dev_orchestra.infrastructure.commit_messages import describe_commit, format_branch_commit
 from dev_orchestra.infrastructure.files import contained, digest, write
+from dev_orchestra.infrastructure.filesystem_identity import directory_identity
 from dev_orchestra.infrastructure.git import Git
 from dev_orchestra.infrastructure.process import redact, sanitize
 from dev_orchestra.infrastructure.secret_files import public_environment_example, secret_path
@@ -61,8 +62,6 @@ class WorkspaceSession:
             "tester",
         }:
             raise PipelineError("workspace editing is restricted to developer/tester/fixer")
-        from dev_orchestra.application.workspace_recovery import file_identity
-
         git = Git(Path(run["worktree"]))
         if git.sha() != request.input_sha or git.call("diff", "--cached", "--name-only"):
             raise PipelineError("workspace session requires unchanged HEAD and empty index")
@@ -76,8 +75,8 @@ class WorkspaceSession:
             "repo": run["repo"],
             "branch": run["branch"],
             "common": str(git.common().resolve()),
-            "worktree_identity": file_identity(run["worktree"]),
-            "common_identity": file_identity(git.common()),
+            "worktree_identity": directory_identity(run["worktree"]),
+            "common_identity": directory_identity(git.common()),
             "git_link_hash": digest((Path(run["worktree"]) / ".git").read_bytes()),
             "role": request.role,
             "iteration": request.iteration,
@@ -445,9 +444,8 @@ class WorkspaceSession:
             return {"sha": intent["sha"], "parent": intent["parent"], "tree": intent["tree"]}
         run = self.guard()
         # Use the Run's stored prefix so changes in startup config do not affect it.
-        message_format = (
-            3 if run["config"].get("project", {}).get("branch_prefix") == "feature" else 2
-        )
+        branch_prefix = run["config"].get("project", {}).get("branch_prefix")
+        message_format = {"feature": 3, "features": 4}.get(branch_prefix, 2)
         formatted_message = format_branch_commit(
             message, self.data["branch"], version=message_format
         )
@@ -527,6 +525,7 @@ class WorkspaceSession:
         return select_tests(self.store.get(self.run_id), self.root, self.git.sha())
 
     def run_tests(self, command_ids, test_plan=None, commit_message=""):
+        from dev_orchestra.application.automatic_tests import automatic, deferred_builds
         from dev_orchestra.application.test_selection import select_tests, selected_config
         from dev_orchestra.infrastructure.test_runner import TestRunner
 
@@ -556,7 +555,7 @@ class WorkspaceSession:
             if test_plan is not None
             else None,
         )
-        if selection.get("selector_version") == 2 and "selection_hash" not in selection:
+        if automatic(run) and "selection_hash" not in selection:
             raise PipelineError("automatic test selection requires test_plan")
         if set(command_ids) != set(selection["included"]) or len(command_ids) != len(
             set(command_ids)
@@ -571,16 +570,27 @@ class WorkspaceSession:
 
         evidence_id = "test-" + uuid.uuid4().hex
         directory = self.path.parent / evidence_id
-        runner = getattr(self, "_test_runner", None) or TestRunner()
+        preflight = Path(run["directory"]) / "preflight"
+        runner = getattr(self, "_test_runner", None) or TestRunner(preflight=preflight)
+        tests = selected_config(run, selection)
+
+        def stop():
+            return self.store.read_control(self.run_id)
+
         self.data["testing"] = True
         self.save()
         try:
-            execution = runner.run(
-                self.root,
-                selected_config(run, selection),
-                directory,
-                lambda: self.store.get(self.run_id)["control"],
-            )
+            if deferred := deferred_builds(run, self.git.sha(), tests):
+                runner.prepare(
+                    self.root,
+                    tests.model_copy(
+                        update={"commands": {key: tests.commands[key] for key in deferred}}
+                    ),
+                    preflight,
+                    stop,
+                )
+                self.guard()
+            execution = runner.run(self.root, tests, directory, stop)
         except StopRequested:
             raise
         except (PipelineError, OSError) as error:
@@ -596,7 +606,7 @@ class WorkspaceSession:
                         "passed": False,
                         "error": sanitize(str(error)),
                     }
-                    for key, command in selected_config(run, selection).commands.items()
+                    for key, command in tests.commands.items()
                 ],
             }
         finally:

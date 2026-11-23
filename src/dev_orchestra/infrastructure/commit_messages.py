@@ -24,6 +24,8 @@ def format_branch_commit(message, branch, *, version):
     bases = ("feature/codex/", "feature/ai/")
     if version == 3:
         bases += ("feature/",)
+    elif version == 4:
+        bases += ("features/",)
     for base in bases:
         if branch.startswith(base) and (suffix := branch.removeprefix(base)):
             prefix = f"[{suffix}] "

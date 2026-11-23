@@ -247,7 +247,7 @@ function RunDetailBody({ rid }: { rid: string }) {
         작업 목록으로
       </Link>
       <Heading eyebrow="WORKSPACE / RUN DETAIL" title={r.name || rid}>
-        <Status state={r.state} large />
+        <Status state={r.state} preparation={r.gradle_preparation} large />
       </Heading>
       <div className="run-identity">
         <p className="subtle">
@@ -681,15 +681,6 @@ function RunDetailBody({ rid }: { rid: string }) {
                     현재 상태보다 이전 버전에서 생성한 보고서입니다.
                   </p>
                 )}
-                {report.data.artifact_id && (
-                  <Button asChild variant="ghost">
-                    <a
-                      href={`/api/runs/${encodeURIComponent(rid)}/artifacts/${encodeURIComponent(report.data.artifact_id)}`}
-                    >
-                      보존 보고서 저장
-                    </a>
-                  </Button>
-                )}
                 <ReactMarkdown
                   remarkPlugins={[remarkGfm]}
                   skipHtml
@@ -700,6 +691,26 @@ function RunDetailBody({ rid }: { rid: string }) {
                 >
                   {report.data.markdown}
                 </ReactMarkdown>
+                <nav aria-label="보고서 상세 근거" className="inline-actions">
+                  {(["tests", "review", "diff", "spec"] as const).map(
+                    (target) => (
+                      <Button key={target} asChild variant="secondary">
+                        <Link to={{ search: `?tab=${target}` }}>
+                          {labels[target]} 보기
+                        </Link>
+                      </Button>
+                    ),
+                  )}
+                  {report.data.artifact_id && (
+                    <Button asChild variant="ghost">
+                      <a
+                        href={`/api/runs/${encodeURIComponent(rid)}/artifacts/${encodeURIComponent(report.data.artifact_id)}`}
+                      >
+                        보존 보고서 저장
+                      </a>
+                    </Button>
+                  )}
+                </nav>
               </article>
             )}
           </Tabs.Content>

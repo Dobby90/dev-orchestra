@@ -49,12 +49,15 @@ export function active(state: State) {
 }
 export function Status({
   state,
+  preparation,
   large = false,
 }: {
   state: State;
+  preparation?: Run["gradle_preparation"];
   large?: boolean;
 }) {
-  const { label, tone } = states[state];
+  const preparing = preparation?.active && active(state);
+  const { label, tone } = states[preparing ? "preparing" : state];
   const Icon =
     state === "completed"
       ? CheckCircle2
@@ -70,7 +73,9 @@ export function Status({
   return (
     <span className={`status status-${tone}${large ? " status-large" : ""}`}>
       <Icon size={large ? 18 : 13} className={tone === "blue" ? "spin" : ""} />
-      {label}
+      {preparing
+        ? `Gradle 환경 준비 중 · ${preparation.checked + preparation.reused}/${preparation.total}`
+        : label}
     </span>
   );
 }
@@ -195,7 +200,10 @@ export function RunsTable({ runs }: { runs: Run[] }) {
                 </div>
               </td>
               <td>
-                <Status state={run.state} />
+                <Status
+                  state={run.state}
+                  preparation={run.gradle_preparation}
+                />
                 {run.control && (
                   <span className="text-small subtle">
                     {run.control === "cancel" ? "취소 요청됨" : "중지 요청됨"}

@@ -3,7 +3,12 @@
 import os
 import shlex
 import shutil
+import subprocess
+import threading
+from functools import partial
+from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
+from zipfile import ZipFile
 
 import pytest
 from test_validation_policy import commit_files
@@ -12,7 +17,9 @@ from test_workflow import service as service
 from dev_orchestra.application.projects import ProjectService
 from dev_orchestra.application.validation import complete_run_validation
 from dev_orchestra.config import Config
-from dev_orchestra.infrastructure import coordination
+from dev_orchestra.config import TestCommand as Command
+from dev_orchestra.config import Tests as Commands
+from dev_orchestra.infrastructure import coordination, java
 from dev_orchestra.infrastructure.test_runner import TestRunner
 
 pytestmark = pytest.mark.skipif(
@@ -90,3 +97,85 @@ def test_automatic_java_policy_runs_real_project_launcher(service, tmp_path, mon
     result = runner.run(repo, tests, tmp_path / "failing")
     assert not result["passed"], result
     assert result["commands"][0]["failed"] == 1, result
+
+
+def test_gradle_resolves_offline_from_run_owned_read_only_cache(service, tmp_path, monkeypatch):
+    _, _, repo = service
+    executable = local_tool("gradle")
+    if jdk := java.select_jdk(17):
+        monkeypatch.setenv("JAVA_HOME", jdk)
+    host = tmp_path / "host"
+    monkeypatch.setenv("GRADLE_USER_HOME", str(host))
+    monkeypatch.setenv("PATH", str(executable.parent) + os.pathsep + os.environ["PATH"])
+    monkeypatch.setattr(coordination, "host_root", lambda: tmp_path / "slots")
+    repository = tmp_path / "repository"
+    jar = repository / "org/example/fixture/1/fixture-1.jar"
+    jar.parent.mkdir(parents=True)
+    with ZipFile(jar, "w") as archive:
+        archive.writestr("fixture.txt", "offline")
+
+    # Prime only the temporary host cache. Stop the loopback repository before using the Run.
+    with ThreadingHTTPServer(
+        ("127.0.0.1", 0), partial(SimpleHTTPRequestHandler, directory=repository)
+    ) as server:
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        try:
+            build = """
+repositories { maven { url = uri('http://127.0.0.1:PORT'); allowInsecureProtocol = true; metadataSources { artifact() } } }
+configurations { sample }
+dependencies { sample 'org.example:fixture:1@jar' }
+tasks.register('prime') { doLast { assert configurations.sample.singleFile.isFile() } }
+def checkShared = {
+    def shared = file(System.getenv('GRADLE_RO_DEP_CACHE')).toPath()
+    assert configurations.sample.singleFile.toPath().startsWith(shared)
+    try {
+        java.nio.file.Files.createFile(shared.resolve('write-probe'))
+        throw new GradleException('shared dependencies were writable')
+    } catch (java.io.IOException expected) {}
+}
+tasks.register('assemble') { doLast { checkShared() } }
+tasks.register('test') { doLast {
+    checkShared()
+    file('build/unit.xml').text = '<testsuite><testcase name="offline artifact"/></testsuite>'
+} }
+""".replace("PORT", str(server.server_port))
+            commit_files(
+                repo, {"settings.gradle": "rootProject.name='fixture'", "build.gradle": build}
+            )
+            prime = tmp_path / "prime"
+            prime.mkdir()
+            (prime / "settings.gradle").write_text("rootProject.name='fixture'")
+            (prime / "build.gradle").write_text(build)
+            subprocess.run(
+                [str(executable), "--no-daemon", "prime"], cwd=prime, check=True, timeout=90
+            )
+        finally:
+            server.shutdown()
+            thread.join()
+
+    argv = [
+        "gradle",
+        "--offline",
+        "--no-daemon",
+        "-g",
+        "cache/user",
+        "--project-cache-dir",
+        "cache/project",
+    ]
+    cfg = Commands(
+        commands={
+            "unit": Command(
+                network="loopback", argv=[*argv, "test"], junit_report="build/unit.xml"
+            ),
+            "build": Command(kind="check", network="loopback", argv=[*argv, "assemble"]),
+        },
+        output_paths=["cache", "build"],
+    )
+    preflight = tmp_path / "preflight"
+    TestRunner().prepare(repo, cfg, preflight)
+    result = TestRunner(preflight=preflight).run(repo, cfg, tmp_path / "result")
+    assert result["passed"], result
+    assert [r["command_id"] for r in result["commands"]] == ["unit", "build"]
+    assert result["commands"][0]["total"] == 1
+    assert not list((repo / "cache/user").rglob("fixture-1.jar"))

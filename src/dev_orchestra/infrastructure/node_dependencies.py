@@ -13,6 +13,7 @@ from dev_orchestra.infrastructure.artifacts import (
     DownloadBudget,
     checksum,
     github_archive,
+    npm_cache_path,
     public_url,
     verified,
     yarn_entries,
@@ -22,21 +23,16 @@ from dev_orchestra.infrastructure.process import environment, execute
 from dev_orchestra.infrastructure.test_runner import sandbox_command
 
 
-def fetch_entries(entries, directory, stop):
+def fetch_entries(entries, directory, stop, *, npm_cache=None):
     if len(entries) > 10000:
         raise PipelineError("dependency artifact count exceeds safety limit")
     # Workers download data only; they never invoke repository code.
     budget = DownloadBudget()
     with ThreadPoolExecutor(max_workers=6) as pool:
         futures = [
-            pool.submit(
-                github_archive if sri.startswith(("git-", "githubtar-")) else verified,
-                url,
-                sri,
-                directory,
-                stop,
-                budget,
-            )
+            pool.submit(github_archive, url, sri, directory, stop, budget)
+            if sri.startswith(("git-", "githubtar-"))
+            else pool.submit(verified, url, sri, directory, stop, budget, npm_cache=npm_cache)
             for url, sri in entries
         ]
         paths, total = [], 0
@@ -77,10 +73,7 @@ def prepare_npm_cache(worktree, locked, directory, stop, *, node_env=None):
         except PipelineError:
             # Private/local dependencies can still be supplied by an existing offline cache.
             continue
-        encoded = raw.hex()
-        content = (
-            cache / "_cacache/content-v2" / algorithm / encoded[:2] / encoded[2:4] / encoded[4:]
-        )
+        content = npm_cache_path(cache, algorithm, raw)
         if content.is_file() and not content.is_symlink() and content.stat().st_size <= 128 * 2**20:
             if hashlib.new(algorithm, content.read_bytes()).digest() == raw:
                 continue
@@ -202,7 +195,10 @@ def prepare_yarn(worktree, root, package, directory, tracked, stop, *, node_env=
             write(marker, {"fingerprint": fingerprint, "ready": False})
             entries = yarn_entries(lockfile.read_text())
             paths = fetch_entries(
-                [(url, sri) for url, sri, _ in entries], directory / "artifacts", stop
+                [(url, sri) for url, sri, _ in entries],
+                directory / "artifacts",
+                stop,
+                npm_cache=Path.home() / ".npm",
             )
             names = {}
             for (_, _, name), path in zip(entries, paths, strict=True):

@@ -1,6 +1,8 @@
 """Java readiness must precede model work and preserve source, policy and host caches."""
 
+import os
 from pathlib import Path
+from unittest.mock import Mock
 
 import pytest
 from test_validation_policy import commit_files, detect
@@ -10,9 +12,10 @@ from test_workflow import service as service
 from dev_orchestra.config import TestCommand as Command
 from dev_orchestra.config import Tests as Commands
 from dev_orchestra.domain.models import PipelineError, StopRequested
-from dev_orchestra.infrastructure import java
+from dev_orchestra.infrastructure import java, java_cache, java_native, test_runner
 from dev_orchestra.infrastructure.dependencies import prepare_dependencies
 from dev_orchestra.infrastructure.git import Git
+from dev_orchestra.infrastructure.gradle_preparation import ModuleProgress, observe_preparation
 from dev_orchestra.infrastructure.test_runner import TestRunner
 from dev_orchestra.orchestration.runner import Runner
 
@@ -255,6 +258,362 @@ def test_wrapper_and_dependency_cache_are_reused_offline(service, tmp_path, jdk,
     assert env["MAVEN_USER_HOME" if tool == "maven" else "GRADLE_USER_HOME"] == str(root)
     assert cfg.model_dump() == before and src.read_text() == "artifact"
     assert not Git(repo, cfg.output_paths).dirty()
+
+
+@pytest.fixture
+def gradle_pair(service, tmp_path, jdk, monkeypatch):
+    _, _, repo = service
+    wrapper(repo, "gradle")
+    cfg = java_config("gradle")
+    test = cfg.commands["java"]
+    test.network = "none"
+    cfg.commands["build"] = Command(
+        kind="check", argv=["assemble" if arg == "test" else arg for arg in test.argv]
+    )
+    monkeypatch.setattr(java, "host_cache", lambda _: tmp_path / "host")
+    return repo, cfg
+
+
+def test_gradle_pair_reuses_successful_preparation_and_executes_both_commands(
+    gradle_pair, tmp_path, monkeypatch
+):
+    repo, cfg = gradle_pair
+    artifact = tmp_path / "host/caches/modules-2/files-2.1/org/lib/1/hash/lib.jar"
+    artifact.parent.mkdir(parents=True)
+    artifact.write_bytes(b"shared")
+    commit_files(
+        repo,
+        {
+            "gradlew": """#!/bin/sh
+test -f "$GRADLE_RO_DEP_CACHE/modules-2/files-2.1/org/lib/1/hash/lib.jar" || exit 8
+test ! -e "$GRADLE_USER_HOME/caches/modules-2/files-2.1/org/lib/1/hash/lib.jar" || exit 9
+case "$1" in
+  test) echo '<testsuite><testcase name="unit"/></testsuite>' > build/unit.xml ;;
+  assemble) exit 7 ;;
+  *) exit 2 ;;
+esac
+"""
+        },
+    )
+    probes = []
+    mock_tools(monkeypatch, probes)
+    runner = TestRunner()
+    progress = []
+    with observe_preparation(progress.append):
+        runner.prepare(repo, cfg, tmp_path / "preflight")
+        assert progress[-1] == dict(total=1, checked=1, reused=0, active=True)
+        TestRunner().prepare(repo, cfg, tmp_path / "preflight")
+        assert progress[-1] == dict(total=1, checked=0, reused=1, active=True)
+    assert [argv[-1] for argv, _ in probes] == ["-version", "--version"]
+
+    monkeypatch.setattr(test_runner, "sandbox_command", lambda w, o, s, argv, network: argv)
+    # The tester host tool also reopens the prepared Run in a separate process.
+    runner = TestRunner(preflight=tmp_path / "preflight")
+    results = runner.run(repo, cfg, tmp_path / "results")["commands"]
+    assert [(r["command_id"], r["exit_code"]) for r in results] == [("java", 0), ("build", 7)]
+    assert results[0]["passed"] and results[0]["junit_hash"]
+    assert not results[1]["passed"] and results[1]["junit_path"] is None
+    shared = Path(probes[0][1]["GRADLE_RO_DEP_CACHE"])
+    (shared / "modules-2/files-2.1/org/lib/1/hash/lib.jar").unlink()
+    results = runner.run(repo, cfg, tmp_path / "changed")["commands"]
+    assert all(r["exit_code"] is None and "cache changed" in r["error"] for r in results)
+
+
+def test_gradle_modules_share_dependencies_and_recheck_only_affected_caches(
+    service, tmp_path, jdk, monkeypatch
+):
+    _, _, repo = service
+    distribution = wrapper(repo, "gradle")
+    commit_files(
+        repo,
+        {
+            "settings.gradle": 'includeBuild("build-logic")\ninclude("a", "b")\n',
+            "a/build.gradle": "dependencies { implementation 'org:lib:1'; implementation 'org:local:1' }",
+            "b/build.gradle": "dependencies { implementation 'org:lib:1' }",
+            "build-logic/build.gradle": "",
+        },
+    )
+    cfg = Commands()
+    for name in ("a", "b", "build-logic"):
+        module = java_config("gradle", directory=name)
+        cfg.output_paths.extend(module.output_paths)
+        command = module.commands["java"]
+        command.argv[0] = "../gradlew"
+        cfg.commands[name] = command
+    artifact = Path("caches/modules-2/files-2.1/org/lib/1/hash/lib.jar")
+    host = tmp_path / "host"
+    (host / artifact).parent.mkdir(parents=True)
+    (host / artifact).write_bytes(b"fixture")
+    wrapper_file = Path("wrapper/dists") / distribution / "hash/bin/gradle"
+    (host / wrapper_file).parent.mkdir(parents=True)
+    (host / wrapper_file).write_bytes(b"distribution")
+    private = [repo / name / ".devorchestra-cache/gradle" for name in cfg.commands]
+    local = Path("caches/modules-2/files-2.1/org/local/1/hash/local.jar")
+    (private[0] / local).parent.mkdir(parents=True)
+    (private[0] / local).write_bytes(b"private")
+    monkeypatch.setattr(java, "host_cache", lambda _: host)
+    probes = []
+    mock_tools(monkeypatch, probes)
+    preflight = tmp_path / "preflight"
+    progress = []
+    with observe_preparation(progress.append):
+        java.prepare_java(repo, cfg, preflight)
+        assert progress[-1]["checked"] == 3
+        seeds = list((preflight / "gradle-seeds").glob("*/" + str(artifact)))
+        assert len(seeds) == 2
+        shared = [Path(env["GRADLE_RO_DEP_CACHE"]) for _, env in probes[::2]]
+        assert shared[0] == shared[1] != shared[2]
+        assert len({f.stat().st_ino for f in [host / artifact, *seeds]}) == 3
+        assert all(file.stat().st_mode & 0o222 == 0 for file in seeds)
+        assert all(not (p / artifact).exists() for p in private)
+        assert not (private[1] / local).exists()
+        assert all(not (p.parent / local).exists() for p in shared)
+        assert len({(p / wrapper_file).stat().st_ino for p in private}) == 3
+        (private[0] / wrapper_file).unlink()
+        java.prepare_java(repo, cfg, preflight)
+        assert (private[0] / wrapper_file).read_bytes() == b"distribution"
+        assert progress[-1] == dict(total=3, checked=1, reused=2, active=True)
+        (shared[0].parent / artifact).unlink()
+        java.prepare_java(repo, cfg, preflight)
+        assert (shared[0].parent / artifact).read_bytes() == b"fixture"
+        assert progress[-1] == dict(total=3, checked=2, reused=1, active=True)
+    assert (private[0] / local).read_bytes() == b"private" and len(probes) == 12
+    override = private[0] / artifact
+    override.parent.mkdir(parents=True)
+    override.symlink_to(host / artifact)
+    with pytest.raises(PipelineError, match="symlink Java cache"):
+        java.prepare_java(repo, cfg, preflight)
+
+
+def test_failed_gradle_check_does_not_issue_reusable_evidence(gradle_pair, tmp_path, monkeypatch):
+    repo, cfg = gradle_pair
+    preflight = tmp_path / "preflight"
+    mock_tools(monkeypatch, [], fails=True)
+    with pytest.raises(PipelineError, match="bootstrap failed"):
+        java.prepare_java(repo, cfg, preflight)
+    assert not list(preflight.glob("gradle-readiness/*.json"))
+    probes = []
+    mock_tools(monkeypatch, probes)
+    java.prepare_java(repo, cfg, preflight)
+    (repo / "gradlew").write_text("#!/bin/sh\nexit 1\n")
+    java.prepare_java(repo, cfg, preflight)
+    assert len(probes) == 4
+
+
+def test_previous_run_dependency_survives_partial_host_cache_cleanup(
+    gradle_pair, tmp_path, monkeypatch
+):
+    repo, cfg = gradle_pair
+    deps = tmp_path / "host/caches/modules-2/files-2.1/org"
+    for name in ("old", "keep"):
+        jar = deps / name / "1/hash/lib.jar"
+        jar.parent.mkdir(parents=True)
+        jar.write_text(name)
+    commit_files(repo, {"build.gradle": "dependencies { implementation 'org:old:1' }"})
+    probes = []
+    mock_tools(monkeypatch, probes)
+    preflight = tmp_path / "preflight"
+    java.prepare_java(repo, cfg, preflight)
+    (deps / "old/1/hash/lib.jar").unlink()
+    commit_files(repo, {"note.txt": "new candidate"})
+    java.prepare_java(repo, cfg, preflight)
+    private = repo / ".devorchestra-cache/gradle/caches/modules-2/files-2.1/org"
+    shared = Path(probes[-1][1]["GRADLE_RO_DEP_CACHE"]) / "modules-2/files-2.1/org"
+    assert (private / "old/1/hash/lib.jar").read_text() == "old"
+    assert not (private / "keep").exists()
+    assert (shared / "keep/1/hash/lib.jar").read_text() == "keep"
+
+
+def test_unknown_gradle_distribution_keeps_dependencies_private(gradle_pair, tmp_path, monkeypatch):
+    repo, cfg = gradle_pair
+    commit_files(
+        repo,
+        {
+            "gradle/wrapper/gradle-wrapper.properties": "distributionUrl=https://example.invalid/custom.zip"
+        },
+    )
+    artifact = Path("caches/modules-2/files-2.1/org/lib/1/hash/lib.jar")
+    host = tmp_path / "host"
+    (host / artifact).parent.mkdir(parents=True)
+    (host / artifact).write_text("private fallback")
+    probes = []
+    mock_tools(monkeypatch, probes)
+    java.prepare_java(repo, cfg, tmp_path / "preflight")
+    assert (repo / ".devorchestra-cache/gradle" / artifact).read_text() == "private fallback"
+    assert "GRADLE_RO_DEP_CACHE" not in probes[-1][1]
+
+
+def test_same_path_jdk_replacement_invalidates_readiness(gradle_pair, jdk, tmp_path, monkeypatch):
+    repo, cfg = gradle_pair
+    module = jdk / "lib/modules"
+    module.parent.mkdir()
+    module.write_bytes(b"before")
+    probes = []
+    mock_tools(monkeypatch, probes)
+    preflight = tmp_path / "preflight"
+    java.prepare_java(repo, cfg, preflight)
+    original = module.stat()
+    module.with_suffix(".new").write_bytes(b"change")
+    module.with_suffix(".new").replace(module)
+    os.utime(module, ns=(original.st_atime_ns, original.st_mtime_ns))
+    java.prepare_java(repo, cfg, preflight)
+    java.prepare_java(repo, cfg, preflight)
+    assert len(probes) == 4
+
+
+def test_installed_gradle_library_change_rechecks_launcher(gradle_pair, tmp_path, monkeypatch):
+    repo, cfg = gradle_pair
+    install = tmp_path / "gradle"
+    (install / "bin").mkdir(parents=True)
+    (install / "lib").mkdir()
+    binary = install / "bin/gradle"
+    binary.write_text("#!/bin/sh\nexit 0\n")
+    binary.chmod(0o755)
+    library = install / "lib/gradle-launcher-8.jar"
+    library.write_text("gradle")
+    monkeypatch.setenv("PATH", str(binary.parent) + os.pathsep + os.environ["PATH"])
+    for command in cfg.commands.values():
+        command.argv[0] = "gradle"
+    probes = []
+    mock_tools(monkeypatch, probes)
+    preflight = tmp_path / "preflight"
+    java.prepare_java(repo, cfg, preflight)
+    java.prepare_java(repo, cfg, preflight)
+    library.write_text("updated")
+    java.prepare_java(repo, cfg, preflight)
+    assert len(probes) == 4
+
+
+def test_cancel_during_seed_copy_can_retry_cleanly(gradle_pair, tmp_path, monkeypatch):
+    repo, cfg = gradle_pair
+    artifact = tmp_path / "host/caches/modules-2/lib.jar"
+    artifact.parent.mkdir(parents=True)
+    artifact.write_bytes(b"fixture" * 200000)
+    copy = java_cache.copy_artifact
+    copying = False
+
+    def interrupted_copy(*args, **kwargs):
+        nonlocal copying
+        copying = True
+        return copy(*args, **kwargs)
+
+    monkeypatch.setattr(java_cache, "copy_artifact", interrupted_copy)
+    probes = []
+    mock_tools(monkeypatch, probes)
+    preflight = tmp_path / "preflight"
+    with pytest.raises(StopRequested):
+        java.prepare_java(repo, cfg, preflight, lambda: "cancel" if copying else None)
+    assert not list((preflight / "gradle-seeds").iterdir())
+    assert not list(preflight.glob("gradle-readiness/*.json"))
+    assert not probes
+    java.prepare_java(repo, cfg, preflight)
+    assert len(probes) == 2
+    shared = Path(probes[0][1]["GRADLE_RO_DEP_CACHE"])
+    assert (shared / "modules-2/lib.jar").read_bytes() == artifact.read_bytes()
+    assert not (repo / ".devorchestra-cache/gradle/caches/modules-2/lib.jar").exists()
+
+
+def test_resumed_preparation_reports_progress_and_polls_only_control(service, monkeypatch):
+    svc, rid, _ = service
+    store = svc.store
+    store.update(rid, next_role="developer")
+    run = store.get(rid)
+    monkeypatch.setattr("dev_orchestra.orchestration.runner.monotonic", lambda: 100.0)
+
+    class Preparing:
+        def prepare(self, worktree, config, directory, stop):
+            assert store.get(rid)["state"] == "preparing"
+            modules = ModuleProgress(["a", "b"])
+            version = store.get(rid)["version"]
+            for _ in range(50):
+                assert stop() is None
+            modules.complete("a")
+            modules.complete("b", checked=True)
+            assert store.get(rid)["version"] == version
+            assert store.get(rid)["gradle_preparation"]["reused"] == 1
+
+    worker = Runner(store, None, Preparing())
+
+    def resume(run_id):
+        poll = Mock(wraps=store.read_control)
+        monkeypatch.setattr(store, "read_control", poll)
+        worker._prepare(
+            run_id, Path(run["worktree"]), svc.config.tests, Path(run["directory"]) / "preflight"
+        )
+        assert poll.call_count == 2
+        store.update(run_id, "developing")
+
+    monkeypatch.setattr(worker, "_execute", resume)
+    worker.execute(rid)
+    assert store.get(rid)["state"] == "developing"
+    assert not store.get(rid)["gradle_preparation"]["active"]
+
+
+@pytest.mark.parametrize(
+    "difference", ["jdk", "wrapper", "user_cache", "project_cache", "network", "cwd"]
+)
+def test_gradle_environment_differences_require_separate_probes(
+    gradle_pair, jdk, tmp_path, monkeypatch, difference
+):
+    repo, cfg = gradle_pair
+    build = cfg.commands["build"]
+    if difference == "jdk":
+        other = tmp_path / "jdk-alt"
+        other.mkdir()
+        (other / "bin").symlink_to(jdk / "bin", target_is_directory=True)
+        build.env["JAVA_HOME"] = str(other)
+    elif difference == "wrapper":
+        commit_files(
+            repo,
+            {
+                "other/gradlew": "#!/bin/sh\nexit 0\n",
+                "other/gradle/wrapper/gradle-wrapper.properties": (
+                    repo / "gradle/wrapper/gradle-wrapper.properties"
+                ).read_text(),
+            },
+        )
+        build.argv[0] = "./other/gradlew"
+    elif difference in {"user_cache", "project_cache"}:
+        option = "--gradle-user-home" if difference == "user_cache" else "--project-cache-dir"
+        build.argv[build.argv.index(option) + 1] = ".devorchestra-cache/alternate"
+    elif difference == "network":
+        build.network = "loopback"
+    else:
+        build.working_directory = "module"
+        (repo / "module").mkdir()
+        build.argv[0] = "../gradlew"
+        cfg.output_paths.append("module/.devorchestra-cache")
+    probes = []
+    mock_tools(monkeypatch, probes)
+    java.prepare_java(repo, cfg, tmp_path / "preflight")
+    assert [argv[-1] for argv, _ in probes] == ["-version", "--version"] * 2
+
+
+def test_gradle_shared_environment_enforces_each_commands_policy(
+    gradle_pair, tmp_path, monkeypatch
+):
+    repo, cfg = gradle_pair
+    mock_tools(monkeypatch, [])
+    cfg.commands["build"].argv.remove("--offline")
+    with pytest.raises(PipelineError, match="build .*requires offline mode"):
+        java.prepare_java(repo, cfg, tmp_path / "preflight")
+
+
+def test_gradle_shared_environment_checks_native_tools_for_each_command(
+    gradle_pair, tmp_path, monkeypatch
+):
+    repo, cfg = gradle_pair
+    mock_tools(monkeypatch, [])
+    entries = [("module", "com.google.protobuf", "protoc", "3.24.4")]
+    discover = Mock(return_value=entries)
+    native = Mock(side_effect=[None, PipelineError("native compiler unavailable for build")])
+    monkeypatch.setattr(java_native, "declarations", discover)
+    monkeypatch.setattr(java_native, "prepare_native_tools", native)
+    with pytest.raises(PipelineError, match="native compiler unavailable for build"):
+        java.prepare_java(repo, cfg, tmp_path / "preflight")
+    discover.assert_called_once_with(repo)
+    assert [call.args[1] for call in native.call_args_list] == list(cfg.commands.values())
+    assert all(call.kwargs["entries"] == entries for call in native.call_args_list)
 
 
 def test_missing_jdk_stops_before_any_model_call(service, monkeypatch):

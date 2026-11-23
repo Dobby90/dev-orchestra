@@ -361,6 +361,9 @@ def test_unavailable_evidence_identifies_each_failed_command_and_preserves_artif
     from pathlib import Path
 
     assert step["status"] == "failed" and Path(step["data"]["artifact"]).is_file()
+    report = svc.report(rid)
+    assert "명령 2개 중 0개 통과" in report
+    assert "테스트·검사 `browser` · JUnit 파싱 실패" in report
 
 
 def test_ambiguous_plan_needs_input(service):

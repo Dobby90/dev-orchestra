@@ -8,17 +8,13 @@ from dev_orchestra.domain.execution import WORKSPACE_V2, execution_contract
 from dev_orchestra.domain.models import PipelineError
 from dev_orchestra.infrastructure.commit_messages import format_branch_commit
 from dev_orchestra.infrastructure.files import contained, digest, write
+from dev_orchestra.infrastructure.filesystem_identity import directory_identity, same_directory
 from dev_orchestra.infrastructure.git import Git
 from dev_orchestra.infrastructure.process_owner import ensure_stopped
 
 
 class WorkspaceBlocked(PipelineError):
     """Preserved work cannot advance without verified ownership or repair budget."""
-
-
-def file_identity(path):
-    value = Path(path).stat()
-    return {"device": value.st_dev, "inode": value.st_ino}
 
 
 def _checkpoint_data(store, run):
@@ -82,9 +78,14 @@ def _inspect_workspace(store, run):
     if policy != data["policy_hash"] or task != data["task_hash"]:
         raise PipelineError("workspace recovery policy or requirements changed; files preserved")
     git = Git(Path(run["worktree"]))
+    worktree = directory_identity(run["worktree"])
+    common = directory_identity(git.common())
+    confirmation = run.get("workspace_identity_confirmation") or {}
+    if confirmation.get("snapshot_hash") != run["workspace_checkpoint"]["hash"]:
+        confirmation = {}
     if (
-        file_identity(run["worktree"]) != data["worktree_identity"]
-        or file_identity(git.common()) != data["common_identity"]
+        not same_directory(confirmation.get("worktree", data["worktree_identity"]), worktree)
+        or not same_directory(confirmation.get("common", data["common_identity"]), common)
         or digest((Path(run["worktree"]) / ".git").read_bytes()) != data["git_link_hash"]
         or str(git.common().resolve()) != data["common"]
         or Git(Path(run["repo"])).common().resolve() != git.common().resolve()
@@ -136,13 +137,39 @@ def inspect_workspace(store, run):
         ) from error
 
 
+def confirm_workspace_identity(store, run, previous, current):
+    if not run.get("workspace_checkpoint"):
+        return None
+    try:
+        _, data = checkpoint_data(store, run)
+        worktree = directory_identity(run["worktree"])
+        # Both directories must have been recorded on the device being confirmed.
+        if (
+            data["common_identity"] != previous
+            or "volume_uuid" in data["worktree_identity"]
+            or data["worktree_identity"]["device"] != previous["device"]
+            or data["worktree_identity"]["inode"] != worktree["inode"]
+            or worktree.get("volume_uuid") != current["volume_uuid"]
+        ):
+            return None
+        confirmation = {
+            "snapshot_hash": run["workspace_checkpoint"]["hash"],
+            "common": current,
+            "worktree": worktree,
+        }
+        inspect_workspace(store, run | {"workspace_identity_confirmation": confirmation})
+        return confirmation
+    except (PipelineError, OSError, KeyError, TypeError):
+        return None
+
+
 def verify_intent(data, intent, git, parent, *, pending=False):
     args = {
         key: intent[key] for key in ["request_id", "expected_sha", "files", "message", "summary"]
     }
     marker = f"DevOrchestra-Checkpoint: {data['run_id']}:{data['step_id']}:{intent['request_id']}"
     message_format = intent.get("commit_message_format", 1)
-    if message_format not in {1, 2, 3}:
+    if message_format not in {1, 2, 3, 4}:
         raise PipelineError("unsupported workspace commit message format")
     message = (
         intent["message"].strip()
@@ -201,6 +228,8 @@ def recover_workspace(store, run):
         run["id"],
         {"developer": "developing", "fixer": "fixing", "tester": "testing"}[session.data["role"]],
     )
+    session.data["worktree_identity"] = directory_identity(run["worktree"])
+    session.data["common_identity"] = directory_identity(session.git.common())
     for path, intent in pending:
         write(path, intent)
         session.acknowledge(intent)

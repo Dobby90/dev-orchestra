@@ -41,6 +41,14 @@ const messages: Record<string, string> = {
     "Codex 모델 목록을 불러오지 못했습니다. Codex 설치·인증 상태를 확인한 뒤 다시 시도해 주세요.",
   CSRF_INVALID: "세션을 다시 확인해야 합니다. 새로고침 후 다시 시도해 주세요.",
   PROJECT_REQUIRED: "등록되지 않은 CLI 작업입니다. CLI에서 제어해 주세요.",
+  REPOSITORY_REVERIFY_REQUIRED:
+    "이 프로젝트는 등록 당시의 장치 번호를 사용합니다. 프로젝트의 Git 계정·인증 탭에서 저장소를 다시 확인하세요.",
+  REPOSITORY_REVERIFY_UNAVAILABLE:
+    "이 볼륨의 고유 ID를 읽을 수 없어 등록 정보를 갱신할 수 없습니다.",
+  REPOSITORY_CHANGED:
+    "현재 Git 저장소가 등록 정보와 일치하지 않습니다. 등록한 경로에 원래 저장소가 있는지 확인하세요.",
+  FILESYSTEM_UNAVAILABLE:
+    "등록된 저장소 경로를 읽을 수 없습니다. 폴더와 볼륨에 접근할 수 있는지 확인하세요.",
   REPOSITORY_ROOT_REQUIRED: "Git 저장소의 최상위 폴더를 선택해 주세요.",
   UNSAFE_PATH: "심볼릭 링크가 포함되지 않은 실제 저장소 경로를 선택해 주세요.",
   VALIDATION_ERROR: "입력 형식이나 프로젝트 정책을 확인해 주세요.",

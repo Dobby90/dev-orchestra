@@ -1,5 +1,6 @@
 """Keep real environment files private; permit a narrow public example format."""
 
+import os
 import re
 from pathlib import Path
 
@@ -37,11 +38,34 @@ def public_environment_example(path, content):
     return True
 
 
-def secret_path(path):
-    return any(
-        part.startswith(".env") or Path(part).suffix in {".pem", ".key"}
-        for part in Path(path).parts
+def secret_name(name):
+    return name.startswith(".env") or (
+        name.endswith((".pem", ".key")) and Path(name).suffix in {".pem", ".key"}
     )
+
+
+def secret_path(path):
+    return any(secret_name(part) for part in Path(path).parts)
+
+
+def denied_subpaths(worktree):
+    """One rule covers a directory; nested symlinks also need their canonical targets denied."""
+    pending = [(worktree, False)]
+    while pending:
+        directory, denied = pending.pop()
+        with os.scandir(directory) as entries:
+            for entry in entries:
+                child_denied = denied
+                if denied:
+                    if entry.is_symlink():
+                        yield Path(entry.path)
+                elif secret_name(entry.name):
+                    path = Path(entry.path)
+                    if not readable_environment_example(path, path.relative_to(worktree)):
+                        yield path
+                        child_denied = True
+                if entry.is_dir(follow_symlinks=False):
+                    pending.append((entry.path, child_denied))
 
 
 def readable_environment_example(path, relative):

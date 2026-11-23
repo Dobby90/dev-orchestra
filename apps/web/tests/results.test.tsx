@@ -1,5 +1,6 @@
-import { render, screen } from "@testing-library/react";
+import { fireEvent, render, screen, within } from "@testing-library/react";
 import { QueryClientProvider } from "@tanstack/react-query";
+import { MemoryRouter, Route, Routes } from "react-router-dom";
 import { expect, it, vi } from "vitest";
 import { api } from "../src/api/resources";
 import { createQueryClient } from "../src/App";
@@ -8,7 +9,8 @@ import {
   ReviewPanel,
   ChangesPanel,
 } from "../src/components/ResultPanels";
-import type { Schema } from "../src/api/types";
+import type { RunDetail, Schema } from "../src/api/types";
+import { RunDetailPage } from "../src/pages/RunDetailPage";
 function wrap(node: React.ReactNode) {
   return render(
     <QueryClientProvider client={createQueryClient()}>
@@ -16,6 +18,90 @@ function wrap(node: React.ReactNode) {
     </QueryClientProvider>,
   );
 }
+it("최종 보고서에서 상세 테스트를 필요할 때 열고 요약본을 내려받을 수 있다", async () => {
+  const run: RunDetail = {
+    id: "run-report",
+    name: "보고서 확인",
+    state: "completed",
+    version: 2,
+    revision: 0,
+    iteration: 0,
+    event_cursor: 0,
+    questions: [],
+    schema_version: 1,
+    worktree_removed: false,
+    push_status: "not_pushed",
+    test_scope: "full",
+    deletion_pending: false,
+    test_change_pending: false,
+    test_change_count: 0,
+    created_at: null,
+    project_id: null,
+    base_branch: null,
+    max_fix_attempts: null,
+    error: null,
+  };
+  vi.spyOn(api, "run").mockResolvedValue(run);
+  vi.spyOn(api, "steps").mockResolvedValue({ items: [] });
+  vi.spyOn(api, "logWindow").mockResolvedValue({
+    items: [],
+    has_more: false,
+    latest_cursor: 0,
+    before_cursor: 0,
+  });
+  vi.spyOn(api, "report").mockResolvedValue({
+    markdown: "## 변경 요약\n\n## 검증 결과\n\n## 인계\n",
+    artifact_id: "artifact-report",
+    generated_version: 2,
+    current_version: 2,
+    stale: false,
+  });
+  const tests = vi.spyOn(api, "tests").mockResolvedValue({
+    status: "not_run",
+    step_id: null,
+    sha: null,
+    revision: null,
+    duration_seconds: null,
+    total: null,
+    passed: null,
+    failed: null,
+    skipped: null,
+    commands: [],
+    failures: [],
+    history: [],
+    legacy_incomplete: false,
+  });
+  wrap(
+    <MemoryRouter initialEntries={[`/runs/${run.id}?tab=report`]}>
+      <Routes>
+        <Route path="/runs/:id" element={<RunDetailPage />} />
+      </Routes>
+    </MemoryRouter>,
+  );
+
+  expect(
+    await screen.findByRole("heading", { name: "검증 결과" }),
+  ).toBeVisible();
+  const evidence = within(
+    screen.getByRole("navigation", { name: "보고서 상세 근거" }),
+  );
+  expect(
+    evidence.getByRole("link", { name: "보존 보고서 저장" }),
+  ).toHaveAttribute("href", "/api/runs/run-report/artifacts/artifact-report");
+  expect(
+    evidence.getByRole("link", { name: "코드 리뷰 보기" }),
+  ).toHaveAttribute("href", "/runs/run-report?tab=review");
+  expect(tests).not.toHaveBeenCalled();
+  fireEvent.click(evidence.getByRole("link", { name: "테스트 보기" }));
+  expect(
+    await screen.findByRole("heading", { name: "아직 실행되지 않음" }),
+  ).toBeVisible();
+  expect(screen.getByRole("tab", { name: "테스트" })).toHaveAttribute(
+    "aria-selected",
+    "true",
+  );
+});
+
 it("JUnit 상세와 이전 revision 표시를 현재 통과와 구분한다", async () => {
   const data: Schema["TestResultView"] = {
     status: "failed",

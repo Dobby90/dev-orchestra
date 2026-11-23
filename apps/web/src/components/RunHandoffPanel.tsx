@@ -47,6 +47,13 @@ export function RunHandoffPanel({ run }: { run: RunDetail }) {
             </strong>
           </div>
         </div>
+        {run.gradle_preparation && (
+          <p role="status">
+            Gradle 준비 · 기존 결과 사용 {run.gradle_preparation.reused}개 ·
+            점검 완료 {run.gradle_preparation.checked}개 / 전체{" "}
+            {run.gradle_preparation.total}개
+          </p>
+        )}
         <details className="run-policy-details">
           <summary>테스트·리뷰 안내</summary>
           <p className="help">

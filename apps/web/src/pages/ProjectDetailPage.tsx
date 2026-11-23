@@ -117,7 +117,7 @@ export function ProjectDetailPage() {
             hidden={tab !== "git"}
             className="tab-content"
           >
-            <ProjectGitSettings pid={p.id} />
+            <ProjectGitSettings key={p.id} pid={p.id} project={p} />
           </Tabs.Content>
           <aside className="panel panel-body side-panel">
             <h2>프로젝트 등록 해제</h2>

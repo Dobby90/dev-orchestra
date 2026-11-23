@@ -4,17 +4,28 @@ import base64
 import hashlib
 import hmac
 import json
+import sys
 import tempfile
 import time
 import uuid
+from contextlib import ExitStack
 from pathlib import Path
 
 from dev_orchestra.application.agent_settings import AgentSettingsService, settings_fingerprint
 from dev_orchestra.application.errors import ApplicationError
-from dev_orchestra.application.projects import ProjectService
+from dev_orchestra.application.projects import (
+    ProjectService,
+    can_reconfirm_directory,
+    registered_directory,
+    verify_registered_directory,
+)
 from dev_orchestra.application.web_contracts import ProjectCreate, Proposal
+from dev_orchestra.application.workspace_recovery import confirm_workspace_identity
 from dev_orchestra.config import ROLES
+from dev_orchestra.infrastructure.filesystem_identity import directory_identity
 from dev_orchestra.infrastructure.git import Git
+from dev_orchestra.infrastructure.locking import OwnershipError, lock
+from dev_orchestra.infrastructure.process_owner import markers
 from dev_orchestra.infrastructure.store import now
 
 
@@ -39,7 +50,9 @@ class BackendService:
         value = dict(row)
         value["policy"] = json.loads(value["policy"])
         value["branch_prefix"] = self.runs.config.project.branch_prefix
-        value.pop("identity")
+        value["repository_identity_legacy"] = (
+            "volume_uuid" not in json.loads(value.pop("identity")) and sys.platform == "darwin"
+        )
         return value
 
     def verify_identity(self, project):
@@ -52,9 +65,7 @@ class BackendService:
                     0
                 ]
             )
-        stat = info.git_common_directory.stat()
-        if expected != {"device": stat.st_dev, "inode": stat.st_ino}:
-            raise ApplicationError("REPOSITORY_CHANGED", "repository identity changed")
+        verify_registered_directory(info, project["git_common_directory"], expected)
         return info
 
     def policy_config(self, policy):
@@ -81,6 +92,7 @@ class BackendService:
 
     def register(self, value):
         info = self.validate_project(value)
+        identity = directory_identity(info.git_common_directory)
         stamp = now()
         pid = identifier("prj")
         with self.store.transaction() as db:
@@ -91,12 +103,7 @@ class BackendService:
                     value.name,
                     str(info.repository_path),
                     str(info.git_common_directory),
-                    canonical(
-                        {
-                            "device": info.git_common_directory.stat().st_dev,
-                            "inode": info.git_common_directory.stat().st_ino,
-                        }
-                    ),
+                    canonical(identity),
                     value.default_base_branch,
                     value.policy.model_dump_json(),
                     0,
@@ -107,6 +114,79 @@ class BackendService:
             for row in db.execute("SELECT id,data FROM runs WHERE project_id IS NULL").fetchall():
                 if json.loads(row["data"]).get("repo") == str(info.repository_path):
                     db.execute("UPDATE runs SET project_id=? WHERE id=?", (pid, row["id"]))
+        return self.project(pid)
+
+    def reverify_project(self, pid, version):
+        with (
+            lock(self.store.path.with_suffix(".maintenance.lock"), shared=True),
+            ExitStack() as locks,
+        ):
+            project = self.project(pid)
+            if project["version"] != version:
+                raise ApplicationError("VERSION_CONFLICT", "project version changed")
+            if project["archived_at"]:
+                raise ApplicationError("INVALID_STATE", "project archived")
+            info = self.projects.validate_repository(
+                Path(project["repository_path"]), project["default_base_branch"]
+            )
+            current = registered_directory(info, project["git_common_directory"])
+            with self.store.connection() as db:
+                expected = json.loads(
+                    db.execute("SELECT identity FROM projects WHERE id=?", (pid,)).fetchone()[0]
+                )
+                run_ids = [
+                    row[0]
+                    for row in db.execute(
+                        "SELECT id FROM runs WHERE project_id=? ORDER BY id", (pid,)
+                    )
+                ]
+            if not can_reconfirm_directory(expected, current):
+                verify_registered_directory(info, project["git_common_directory"], expected)
+                if "volume_uuid" not in expected:
+                    raise ApplicationError(
+                        "REPOSITORY_REVERIFY_UNAVAILABLE", "volume UUID is unavailable"
+                    )
+                return project
+            common = project["git_common_directory"]
+            legacy = {"common": common, **expected}
+            updates = []
+            for rid in run_ids:
+                run = self.store.get(rid)
+                if (
+                    run.get("repository_identity") != legacy
+                    or run["repo"] != project["repository_path"]
+                    or run.get("deletion_pending")
+                ):
+                    continue
+                directory = Path(run["directory"])
+                try:
+                    locks.enter_context(lock(directory / "execution.lock"))
+                except OwnershipError as error:
+                    raise ApplicationError("RUN_BUSY", "repository has an active Run") from error
+                run = self.store.get(rid)
+                if run.get("repository_identity") != legacy or run.get("deletion_pending"):
+                    continue
+                if any(
+                    not record.get("finished")
+                    or (record.get("protocol") == 2 and not record.get("termination_confirmed"))
+                    for _, record in markers(directory)
+                ):
+                    raise ApplicationError("RUN_BUSY", "Run process termination is unconfirmed")
+                changes = {"repository_identity": {"common": common, **current}}
+                if confirmation := confirm_workspace_identity(self.store, run, expected, current):
+                    changes["workspace_identity_confirmation"] = confirmation
+                updates.append((rid, run["version"], changes))
+
+            with self.store.transaction() as db:
+                result = db.execute(
+                    "UPDATE projects SET identity=?,version=version+1,updated_at=? "
+                    "WHERE id=? AND version=? AND archived_at IS NULL",
+                    (canonical(current), now(), pid, version),
+                )
+                if not result.rowcount:
+                    raise ApplicationError("VERSION_CONFLICT", "project version changed")
+                for rid, run_version, changes in updates:
+                    self.store.update(rid, expected_version=run_version, **changes)
         return self.project(pid)
 
     def change_project(self, pid, version, patch=None):

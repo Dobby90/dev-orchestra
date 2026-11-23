@@ -6,7 +6,32 @@ from pathlib import Path
 from dev_orchestra.application.contracts import RepositoryInfo
 from dev_orchestra.application.errors import ApplicationError
 from dev_orchestra.config import Config
+from dev_orchestra.infrastructure.filesystem_identity import directory_identity, same_directory
 from dev_orchestra.infrastructure.git import Git
+
+
+def registered_directory(info, common):
+    actual = info.git_common_directory.resolve(strict=True)
+    if actual != Path(common):
+        raise ApplicationError("REPOSITORY_CHANGED", "Git common directory changed")
+    return directory_identity(actual)
+
+
+def verify_registered_directory(info, common, expected):
+    current = registered_directory(info, common)
+    if same_directory(expected, current):
+        return
+    if can_reconfirm_directory(expected, current):
+        raise ApplicationError("REPOSITORY_REVERIFY_REQUIRED", "confirm the registered repository")
+    raise ApplicationError("REPOSITORY_CHANGED", "repository identity changed")
+
+
+def can_reconfirm_directory(expected, current):
+    return (
+        "volume_uuid" not in expected
+        and bool(current.get("volume_uuid"))
+        and expected.get("inode") == current["inode"]
+    )
 
 
 class ProjectService:
@@ -52,7 +77,7 @@ class ProjectService:
             raise ApplicationError("REPOSITORY_ROOT_REQUIRED", "register the repository root")
         return RepositoryInfo(
             repository_path=canonical,
-            git_common_directory=git.common(),
+            git_common_directory=git.common().resolve(strict=True),
             base_branch=base_branch,
             base_sha=git.baseline(base_branch),
         )

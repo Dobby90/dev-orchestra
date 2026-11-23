@@ -2,6 +2,7 @@
 
 import json
 import subprocess
+from collections import namedtuple
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from threading import Event
@@ -13,8 +14,10 @@ from test_workflow import FakeAgent, FakeTests
 from test_workflow import service as service
 
 from dev_orchestra.application.errors import ApplicationError
+from dev_orchestra.application.handoff import verify_branch
 from dev_orchestra.application.web_contracts import GitSettingsInput
 from dev_orchestra.domain.models import PipelineError
+from dev_orchestra.infrastructure import filesystem_identity
 from dev_orchestra.infrastructure.git import Git
 from dev_orchestra.infrastructure.git_credentials import credentials, network_git
 from dev_orchestra.infrastructure.locking import OwnershipError, lock
@@ -34,6 +37,103 @@ class Vault:
 
     def delete(self, key):
         self.values.pop(key, None)
+
+
+@pytest.fixture
+def mounted_volume(monkeypatch):
+    get_stat = filesystem_identity.fstat
+    Stat = namedtuple("Stat", "st_dev st_ino st_birthtime")
+    mount = {"device": 42, "uuid": None}
+
+    def stat(fd):
+        actual = get_stat(fd)
+        return Stat(mount["device"], actual.st_ino, getattr(actual, "st_birthtime", 1))
+
+    monkeypatch.setattr(filesystem_identity, "fstat", stat)
+    monkeypatch.setattr(filesystem_identity, "volume_uuid", lambda _: mount["uuid"])
+    return mount
+
+
+def test_reverify_preserves_project_credentials_and_survives_device_change(web, mounted_volume):
+    client, svc, rid, repo, _ = web
+    registered = project(client, svc, repo)
+    pid = registered["id"]
+    base = f"/api/projects/{pid}"
+    git = Git(repo)
+    git.call("remote", "add", "origin", "https://example.invalid/team/repo.git")
+    delivery = client.app.state.delivery
+    delivery.vault = Vault()
+    delivery.transport = lambda *args, **kwargs: {"status": "success", "message": "조회 완료"}
+    settings = client.get(base + "/git").json()
+    saved = client.patch(
+        base + "/git",
+        json={
+            "remote": "origin",
+            "account": "example",
+            "token": "CANARY",
+            "expected_version": settings["version"],
+        },
+    ).json()
+    directory = Path(svc.store.get(rid)["directory"])
+    with svc.store.connection() as db:
+        identity = json.loads(db.execute("SELECT identity FROM projects").fetchone()[0])
+    svc.store.update(rid, repository_identity={"common": str(git.common()), **identity})
+    run = svc.store.get(rid)
+    git.create(Path(run["worktree"]), run["branch"], run["base_sha"])
+    mounted_volume.update(device=43, uuid="volume-a")
+
+    endpoint = base + "/repository/reverify"
+    headers = {
+        "If-Match": f'"project:{pid}:v{registered["version"]}"',
+        "Content-Type": "application/json",
+    }
+    blocked = client.get(base + "/git")
+    assert blocked.status_code == 409 and blocked.json()["code"] == "REPOSITORY_REVERIFY_REQUIRED"
+    with lock(directory / "execution.lock"):
+        busy = client.post(endpoint, headers=headers)
+        assert busy.status_code == 409 and busy.json()["code"] == "RUN_BUSY"
+    repaired = client.post(endpoint, headers=headers)
+    assert repaired.status_code == 200, repaired.text
+    assert repaired.json()["id"] == pid
+    assert repaired.json()["version"] == registered["version"] + 1
+    assert client.post(endpoint, headers=headers).status_code == 412
+    assert client.get(base + "/git").json() == saved
+    assert list(delivery.vault.values.values()) == ["CANARY"]
+
+    mounted_volume["device"] = 44
+    assert client.get(base + "/git").json() == saved
+    tested = client.post(base + "/git/test", json={"expected_version": saved["version"]})
+    assert tested.json()["test"]["status"] == "success"
+    run = svc.store.get(rid)
+    assert delivery.registered_run(rid)["project_id"] == pid
+    Runner(svc.store, FakeAgent(), FakeTests()).validate_registered_repository(run)
+    assert verify_branch(run, run["base_sha"]) == run["base_sha"]
+
+    # The same Git directory path and inode on an unrecognized volume cannot be rebound.
+    mounted_volume["uuid"] = "volume-b"
+    denied = client.get(base + "/git")
+    assert denied.status_code == 409 and denied.json()["code"] == "REPOSITORY_CHANGED"
+    fresh = headers | {"If-Match": f'"project:{pid}:v{repaired.json()["version"]}"'}
+    assert client.post(endpoint, headers=fresh).status_code == 409
+    with pytest.raises(PipelineError, match="repository identity changed"):
+        verify_branch(run, run["base_sha"])
+
+
+def test_legacy_reverify_rejects_recloned_repository(web, mounted_volume, tmp_path):
+    client, svc, _, repo, _ = web
+    registered = project(client, svc, repo)
+    pid = registered["id"]
+    clone = tmp_path / "clone"
+    subprocess.run(["git", "clone", "-q", str(repo), str(clone)], check=True)
+    repo.rename(tmp_path / "previous")
+    clone.rename(repo)
+    mounted_volume.update(device=43, uuid="volume-a")
+    response = client.post(
+        f"/api/projects/{pid}/repository/reverify",
+        headers={"If-Match": f'"project:{pid}:v{registered["version"]}"'},
+        json={},
+    )
+    assert response.status_code == 409 and response.json()["code"] == "REPOSITORY_CHANGED"
 
 
 def setup(web, tmp_path):
@@ -66,11 +166,22 @@ def push(client, svc, rid, preview=None):
     )
 
 
-def test_push_retry_and_cleanup_preserve_approval_and_original(web, tmp_path):
+def test_push_retry_and_cleanup_preserve_approval_and_original(web, tmp_path, mounted_volume):
+    mounted_volume["uuid"] = "volume-a"
     c, svc, rid, repo, pid, remote, delivery = setup(web, tmp_path)
     original = Git(repo)
+    common = original.common()
+    svc.store.update(
+        rid,
+        repository_identity={
+            "common": str(common),
+            **filesystem_identity.directory_identity(common),
+        },
+    )
+    mounted_volume["device"] = 43
     before = original.sha(), original.dirty(), original.call("branch", "--show-current")
     approve(svc, rid)
+    mounted_volume["device"] = 44
     assert Git(remote).call("for-each-ref") == ""  # approval never pushes
     calls = []
 

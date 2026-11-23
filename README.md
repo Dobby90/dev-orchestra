@@ -102,6 +102,8 @@ PRD에는 목표, 구현 범위, 제약 사항, 완료를 판단할 인수 조�
 
 최종 승인은 특정 커밋에 대한 기록입니다. 승인으로 원본 브랜치에 자동 Merge하거나 원격 저장소에 자동 Push하지 않습니다. GUI에서는 프로젝트 Git 연결을 설정한 뒤 사용자가 **작업 브랜치 Push**를 실행할 수 있습니다. 원격 반영을 마친 뒤 Worktree를 정리해도 로컬 브랜치와 보고서는 보존됩니다.
 
+macOS에서 이전 버전으로 등록한 프로젝트에 저장소 확인 안내가 표시되면, **프로젝트 설정 → Git 계정·인증 → 저장소 다시 확인**에서 처음 등록한 저장소인지 확인하세요. 기존 프로젝트 ID와 Git 설정을 사용하며, 볼륨 UUID가 지원되는 저장소는 재부팅으로 장치 번호가 바뀌어도 계속 사용할 수 있습니다.
+
 ## CLI 사용
 
 GUI 없이 사용하려면 `uv sync --frozen`으로 Python 환경만 준비할 수 있습니다. `devorchestra`와 `codex-pipeline`은 같은 CLI이며, 다음 예시는 가상환경의 실행 파일을 직접 사용합니다.
@@ -134,6 +136,7 @@ cp config.example.yaml config.yaml
 기획을 수정하려면 `revise-plan RUN_ID --plan-hash PLAN_HASH --reason "수정할 내용"`을 사용합니다. 일반 `resume`은 기획 승인을 대신하지 않습니다.
 
 최종 승인 대기에 도달하면 보고서와 테스트·리뷰·Diff를 검토한 뒤 승인합니다.
+최종 보고서에는 변경 요약, 검증 결과, 승인 전 확인 항목이 표시됩니다. 웹에서는 보고서 아래의 링크로 테스트·코드 리뷰·변경 내용·요구사항을 열 수 있습니다. CLI에서 원문과 상세 근거가 필요하면 `report RUN_ID --detailed`를 사용합니다.
 
 ```sh
 .venv/bin/devorchestra --config config.yaml report RUN_ID
@@ -160,7 +163,7 @@ GUI의 프로젝트 설정이나 [config.example.yaml](config.example.yaml)을 �
 | 설정 | 의미 |
 | --- | --- |
 | `project.default_base_branch` | 기본 기준 브랜치 |
-| `project.branch_prefix` | 작업 브랜치 접두사. 기본값 `feature`에서는 `feature/RUN_ID`로 생성 |
+| `project.branch_prefix` | 작업 브랜치 접두사. 기본값 `features`에서는 `features/RUN_ID`로 생성 |
 | `codex.model`, `codex.reasoning_effort` | 공통 모델과 추론 강도 |
 | `codex.service_tier` | 공통 실행 속도. `null`은 Codex 기본값, `default`는 일반, `fast`는 패스트 |
 | `codex.roles` | 역할별 모델·추론 강도·속도 재정의 |
@@ -200,6 +203,10 @@ pnpm은 정확한 `packageManager` 버전, 실제 설치로 생성한 `pnpm-lock
 Developer/Fixer는 패키지 설정을 작성한 뒤 `workspace.prepare_environment`로 실제 도구·의존성 설치와 lockfile 생성을 요청합니다. 설치 중에는 프로젝트 소스·사용자 설정·자격 증명을 연결하지 않고 복사한 패키지 명세만 제공하며 저장소 설치 hook은 실행하지 않습니다. 생성되거나 갱신된 lockfile은 기존 호스트 편집·선택 커밋 경계를 거칩니다. 이후 preflight는 고정된 lockfile로 준비하며 Tester는 호스트가 확정한 허용 명령을 컨테이너에서 실행합니다. 테스트 중에는 외부 네트워크·Docker socket을 제공하지 않고 소스를 읽기 전용으로 연결하며 기존 출력 경로와 컨테이너 임시 영역에만 씁니다. DB 서버 등은 테스트 fixture가 컨테이너 내부에서 시작·종료합니다. 호스트는 종료·취소·Worker 중단 시 소유권이 일치하는 컨테이너만 정리하고 정리를 확인할 수 없으면 실행 슬롯 재사용을 차단합니다. 설치 성공과 도구 준비를 기능 검증 통과로 처리하지 않습니다.
 
 테스트 범위의 기본값은 전체 검사(`full`)입니다. 변경 영향 범위 검사(`affected`)는 누적 변경과 인수 조건에 따라 검사를 선택하고 호스트가 검증합니다. CLI에서는 `run --test-scope affected`로 지정합니다. 범위와 정책은 작업 생성 시 고정되며 이후 설정 변경은 새 작업에 적용됩니다.
+
+새 `affected` 작업에서 Gradle 테스트는 표준 `src/test`의 Java·Kotlin·Groovy 클래스 파일을 선택할 수 있습니다. 호스트는 소문자로 시작하는 패키지의 전체 클래스 이름을 단일 Gradle `test` 태스크의 `--tests` 옵션으로 전달합니다. 디렉터리와 Gradle 프로젝트 이름이 다르면 해당 모듈을 작업 디렉터리로 설정하고 `:module:test`나 `:module:assemble`처럼 전체 태스크 경로를 지정합니다. Gradle 빌드 검사는 변경이 속한 모듈을 기준으로 선택하고, 공통 빌드 설정 변경이나 프로젝트가 명시한 필수 회귀·검증 의존 관계도 반영합니다.
+
+Jest는 선택한 spec 경로를 `--runTestsByPath`로 전달합니다. 자체 잠금 파일을 가진 하위 Docusaurus·Vue CLI·Vite 패키지의 표준 빌드는 누적 변경과 연결될 때 준비하고 실행합니다. 공통 설정이 바뀌거나 영향 범위가 불확실하면 빌드 범위를 넓히며, 프로젝트가 지정한 필수 검증과 의존 관계도 반영합니다.
 
 GUI **설정 → 에이전트 모델 설정**에서 공통·역할별 모델, 추론 강도, 속도를 지정하고 새 작업에서 해당 작업에만 적용할 값을 바꿀 수 있습니다. 패스트는 선택한 모델이 지원할 때 사용할 수 있으며, 일반 속도보다 사용량을 더 많이 소모합니다. 저장한 GUI 설정은 같은 DB를 사용하는 CLI의 새 작업에도 적용되며 YAML의 모델 설정보다 우선합니다.
 

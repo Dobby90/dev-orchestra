@@ -8,8 +8,9 @@ import {
 import { MemoryRouter } from "react-router-dom";
 import { QueryClientProvider } from "@tanstack/react-query";
 import { beforeEach, expect, it, vi } from "vitest";
+import { ApiError } from "../src/api/client";
 import { api } from "../src/api/resources";
-import type { RunDetail, Schema } from "../src/api/types";
+import type { Project, RunDetail, Schema } from "../src/api/types";
 import { createQueryClient } from "../src/App";
 import { ProjectGitSettings } from "../src/components/ProjectGitSettings";
 import { RunPushPanel } from "../src/components/RunPushPanel";
@@ -196,6 +197,51 @@ it("토큰 교체는 저장 요청으로만 전달하고 입력을 비운다", a
     expect(screen.getByLabelText("인증 토큰 등록·교체")).toHaveValue(""),
   );
   expect(localStorage.length).toBe(0);
+});
+
+it("저장소 확인을 명시적으로 실행하면 같은 프로젝트의 Git 설정을 다시 표시한다", async () => {
+  const project = {
+    id: "p1",
+    version: 7,
+    repository_path: "/projects/example",
+    repository_identity_legacy: true,
+  } as Project;
+  vi.mocked(api.gitSettings).mockRejectedValue(
+    new ApiError(409, "REPOSITORY_REVERIFY_REQUIRED"),
+  );
+  const reverify = vi
+    .spyOn(api, "reverifyRepository")
+    .mockImplementation(async () => {
+      vi.mocked(api.gitSettings).mockResolvedValue(settings);
+      return { ...project, repository_identity_legacy: false, version: 8 };
+    });
+  wrap(<ProjectGitSettings pid={project.id} project={project} />);
+  fireEvent.click(
+    await screen.findByRole("button", { name: "저장소 다시 확인" }),
+  );
+  expect(await screen.findByRole("dialog")).toHaveTextContent(
+    project.repository_path,
+  );
+  expect(reverify).not.toHaveBeenCalled();
+  fireEvent.click(screen.getByRole("button", { name: "같은 저장소로 확인" }));
+  await waitFor(() => expect(reverify).toHaveBeenCalledWith(project));
+  expect(
+    await screen.findByText("등록됨 (원문 조회 불가)", { exact: false }),
+  ).toBeVisible();
+});
+
+it("사용 가능한 Push 원격이 없으면 설정 방법을 표시한다", async () => {
+  vi.mocked(api.gitSettings).mockResolvedValue({
+    ...settings,
+    remote: "",
+    remote_url: null,
+    remotes: [],
+  });
+  wrap(<ProjectGitSettings pid="p1" />);
+  expect(
+    await screen.findByText(/선택 가능한 Push 원격이 없습니다/),
+  ).toBeVisible();
+  expect(screen.getByRole("button", { name: "Git 설정 저장" })).toBeDisabled();
 });
 
 it.each([
