@@ -432,8 +432,10 @@ def prepare_java(worktree, config, directory, stop=lambda: None):
         return
     worktree = worktree.resolve()
     from dev_orchestra.infrastructure.git import Git
+    from dev_orchestra.infrastructure.java_native import declarations, prepare_native_tools
 
     tracked = [name for name in Git(worktree).call("ls-files", "-z").split("\0") if name]
+    prepared_gradle = {}
     for key, command in commands:
         check_stop(stop)
         try:
@@ -508,6 +510,27 @@ def prepare_java(worktree, config, directory, stop=lambda: None):
                     raise PipelineError("Java cache output contains tracked source")
                 path.mkdir(parents=True, exist_ok=True)
                 outputs.append(path)
+            launcher = runtime_argv[: 2 if runtime_argv[0] == "/bin/sh" else 1]
+            if tool == "gradle":
+                # Cache only within this preparation pass, after validating each command's policy.
+                gradle_environment = (
+                    cwd,
+                    tuple(launcher),
+                    distribution,
+                    tuple(outputs),
+                    tuple(sorted((command.env | {"JAVA_HOME": str(home)}).items())),
+                    command.network,
+                )
+                if gradle_environment in prepared_gradle:
+                    # Native integrity and CPU eligibility still depend on the files and task.
+                    prepare_native_tools(
+                        worktree,
+                        command,
+                        directory,
+                        stop,
+                        entries=prepared_gradle[gradle_environment],
+                    )
+                    continue
             cache = outputs[0]
             source = host_cache(tool) / ("repository" if tool == "maven" else "caches/modules-2")
             seed_cache(source, cache if tool == "maven" else cache / "caches/modules-2", stop)
@@ -526,9 +549,8 @@ def prepare_java(worktree, config, directory, stop=lambda: None):
             )
             directory.mkdir(parents=True, exist_ok=True)
             if tool == "gradle":
-                from dev_orchestra.infrastructure.java_native import prepare_native_tools
-
-                prepare_native_tools(worktree, command, directory, stop)
+                native_entries = declarations(worktree)
+                prepare_native_tools(worktree, command, directory, stop, entries=native_entries)
             with tempfile.TemporaryDirectory(prefix="devorchestra-java-") as temp:
                 scratch = Path(temp).resolve()
                 env = environment() | {
@@ -577,7 +599,7 @@ def prepare_java(worktree, config, directory, stop=lambda: None):
                         worktree,
                         outputs,
                         scratch,
-                        [*runtime_argv[: 2 if runtime_argv[0] == "/bin/sh" else 1], "--version"],
+                        [*launcher, "--version"],
                         command.network,
                     ),
                     cwd,
@@ -590,6 +612,8 @@ def prepare_java(worktree, config, directory, stop=lambda: None):
                     raise PipelineError(
                         f"offline {tool} bootstrap failed: {output[-1200:]}; prepare its distribution in the local host cache or this Run's isolated cache and resume"
                     )
+            if tool == "gradle":
+                prepared_gradle[gradle_environment] = native_entries
         except StopRequested:
             raise
         except (PipelineError, OSError, ValueError, ET.ParseError) as error:

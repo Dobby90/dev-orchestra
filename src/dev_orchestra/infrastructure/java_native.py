@@ -97,8 +97,9 @@ def project_checksum(worktree, group, artifact, version, name):
     )
 
 
-def prepare_native_tools(worktree, command, directory, stop):
-    entries = declarations(worktree)
+def prepare_native_tools(worktree, command, directory, stop, *, entries=None):
+    if entries is None:
+        entries = declarations(worktree)
     if not entries:
         return
     root = tool_root(worktree, command)

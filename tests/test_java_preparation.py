@@ -1,6 +1,7 @@
 """Java readiness must precede model work and preserve source, policy and host caches."""
 
 from pathlib import Path
+from unittest.mock import Mock
 
 import pytest
 from test_validation_policy import commit_files, detect
@@ -10,7 +11,7 @@ from test_workflow import service as service
 from dev_orchestra.config import TestCommand as Command
 from dev_orchestra.config import Tests as Commands
 from dev_orchestra.domain.models import PipelineError, StopRequested
-from dev_orchestra.infrastructure import java
+from dev_orchestra.infrastructure import java, java_native, test_runner
 from dev_orchestra.infrastructure.dependencies import prepare_dependencies
 from dev_orchestra.infrastructure.git import Git
 from dev_orchestra.infrastructure.test_runner import TestRunner
@@ -255,6 +256,120 @@ def test_wrapper_and_dependency_cache_are_reused_offline(service, tmp_path, jdk,
     assert env["MAVEN_USER_HOME" if tool == "maven" else "GRADLE_USER_HOME"] == str(root)
     assert cfg.model_dump() == before and src.read_text() == "artifact"
     assert not Git(repo, cfg.output_paths).dirty()
+
+
+@pytest.fixture
+def gradle_pair(service, tmp_path, jdk, monkeypatch):
+    _, _, repo = service
+    wrapper(repo, "gradle")
+    cfg = java_config("gradle")
+    test = cfg.commands["java"]
+    test.network = "none"
+    cfg.commands["build"] = Command(
+        kind="check", argv=["assemble" if arg == "test" else arg for arg in test.argv]
+    )
+    monkeypatch.setattr(java, "host_cache", lambda _: tmp_path / "host")
+    return repo, cfg
+
+
+def test_gradle_pair_prepares_once_per_pass_and_executes_both_commands(
+    gradle_pair, tmp_path, monkeypatch
+):
+    repo, cfg = gradle_pair
+    commit_files(
+        repo,
+        {
+            "gradlew": """#!/bin/sh
+case "$1" in
+  test) echo '<testsuite><testcase name="unit"/></testsuite>' > build/unit.xml ;;
+  assemble) exit 7 ;;
+  *) exit 2 ;;
+esac
+"""
+        },
+    )
+    probes = []
+    mock_tools(monkeypatch, probes)
+    seed = Mock(wraps=java.seed_cache)
+    monkeypatch.setattr(java, "seed_cache", seed)
+    runner = TestRunner()
+    for passes in (1, 2):
+        runner.prepare(repo, cfg, tmp_path / "preflight")
+        assert [argv[-1] for argv, _ in probes] == ["-version", "--version"] * passes
+        assert seed.call_count == 2 * passes  # One dependency cache and one wrapper distribution.
+
+    monkeypatch.setattr(test_runner, "sandbox_command", lambda w, o, s, argv, network: argv)
+    results = runner.run(repo, cfg, tmp_path / "results")["commands"]
+    assert [(r["command_id"], r["exit_code"]) for r in results] == [("java", 0), ("build", 7)]
+    assert results[0]["passed"] and results[0]["junit_hash"]
+    assert not results[1]["passed"] and results[1]["junit_path"] is None
+
+
+@pytest.mark.parametrize(
+    "difference", ["jdk", "wrapper", "user_cache", "project_cache", "network", "cwd"]
+)
+def test_gradle_environment_differences_require_separate_probes(
+    gradle_pair, jdk, tmp_path, monkeypatch, difference
+):
+    repo, cfg = gradle_pair
+    build = cfg.commands["build"]
+    if difference == "jdk":
+        other = tmp_path / "jdk-alt"
+        other.mkdir()
+        (other / "bin").symlink_to(jdk / "bin", target_is_directory=True)
+        build.env["JAVA_HOME"] = str(other)
+    elif difference == "wrapper":
+        commit_files(
+            repo,
+            {
+                "other/gradlew": "#!/bin/sh\nexit 0\n",
+                "other/gradle/wrapper/gradle-wrapper.properties": (
+                    repo / "gradle/wrapper/gradle-wrapper.properties"
+                ).read_text(),
+            },
+        )
+        build.argv[0] = "./other/gradlew"
+    elif difference in {"user_cache", "project_cache"}:
+        option = "--gradle-user-home" if difference == "user_cache" else "--project-cache-dir"
+        build.argv[build.argv.index(option) + 1] = ".devorchestra-cache/alternate"
+    elif difference == "network":
+        build.network = "loopback"
+    else:
+        build.working_directory = "module"
+        (repo / "module").mkdir()
+        build.argv[0] = "../gradlew"
+        cfg.output_paths.append("module/.devorchestra-cache")
+    probes = []
+    mock_tools(monkeypatch, probes)
+    java.prepare_java(repo, cfg, tmp_path / "preflight")
+    assert [argv[-1] for argv, _ in probes] == ["-version", "--version"] * 2
+
+
+def test_gradle_shared_environment_enforces_each_commands_policy(
+    gradle_pair, tmp_path, monkeypatch
+):
+    repo, cfg = gradle_pair
+    mock_tools(monkeypatch, [])
+    cfg.commands["build"].argv.remove("--offline")
+    with pytest.raises(PipelineError, match="build .*requires offline mode"):
+        java.prepare_java(repo, cfg, tmp_path / "preflight")
+
+
+def test_gradle_shared_environment_checks_native_tools_for_each_command(
+    gradle_pair, tmp_path, monkeypatch
+):
+    repo, cfg = gradle_pair
+    mock_tools(monkeypatch, [])
+    entries = [("module", "com.google.protobuf", "protoc", "3.24.4")]
+    discover = Mock(return_value=entries)
+    native = Mock(side_effect=[None, PipelineError("native compiler unavailable for build")])
+    monkeypatch.setattr(java_native, "declarations", discover)
+    monkeypatch.setattr(java_native, "prepare_native_tools", native)
+    with pytest.raises(PipelineError, match="native compiler unavailable for build"):
+        java.prepare_java(repo, cfg, tmp_path / "preflight")
+    discover.assert_called_once_with(repo)
+    assert [call.args[1] for call in native.call_args_list] == list(cfg.commands.values())
+    assert all(call.kwargs["entries"] == entries for call in native.call_args_list)
 
 
 def test_missing_jdk_stops_before_any_model_call(service, monkeypatch):
