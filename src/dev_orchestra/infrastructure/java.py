@@ -16,6 +16,7 @@ from dev_orchestra.infrastructure.gradle_preparation import (
     readiness_binding,
 )
 from dev_orchestra.infrastructure.java_cache import (
+    GradleCacheBindings,
     GradleSeeds,
     cache_identity,
     check_stop,
@@ -355,16 +356,21 @@ def declared_artifacts(read, tool):
     return result
 
 
-def check_artifacts(cache, read, tool):
+def check_artifacts(cache, read, tool, shared=None):
     missing = []
     for group, artifact, version, kind in declared_artifacts(read, tool):
         if tool == "maven":
             path = cache / group.replace(".", "/") / artifact / version
             ready = (path / f"{artifact}-{version}{kind}").is_file()
         else:
-            path = cache / "caches/modules-2/files-2.1" / group / artifact / version
-            ready = path.is_dir() and any(
-                p.is_file() and not p.is_symlink() for p in path.glob("*/*")
+            roots = [contained(cache, "caches")]
+            if shared:
+                roots.append(shared)
+            relative = Path("modules-2/files-2.1") / group / artifact / version
+            ready = any(
+                not p.parent.is_symlink() and not p.is_symlink() and p.is_file()
+                for root in roots
+                for p in contained(root, str(relative)).glob("*/*")
             )
         if not ready:
             missing.append(f"{group}:{artifact}:{version}")
@@ -389,11 +395,13 @@ def prepare_java(worktree, config, directory, stop=lambda: None):
     gradle_dirs = [c.working_directory for _, c in commands if java_tool(c) == "gradle"]
     progress = ModuleProgress(gradle_dirs)
     seeds = GradleSeeds(directory)
+    bindings = GradleCacheBindings(directory, worktree)
+    shared_caches = {}
     clean_sha = None
     if gradle_dirs and not git.dirty() and not git.call("diff", "--name-only", "HEAD"):
         clean_sha = git.sha()
     policy = fingerprint(config.model_dump(mode="json")) if gradle_dirs else None
-    prepared_gradle = set()
+    prepared_gradle = {}
     tool_stamps = {}
     native_entries = None
     for key, command in commands:
@@ -473,6 +481,7 @@ def prepare_java(worktree, config, directory, stop=lambda: None):
                 path.mkdir(parents=True, exist_ok=True)
                 outputs.append(path)
             launcher = runtime_argv[: 2 if runtime_argv[0] == "/bin/sh" else 1]
+            shared = None
             if tool == "gradle":
                 # Validate each command before consulting either level of readiness records.
                 gradle_environment = (
@@ -484,6 +493,8 @@ def prepare_java(worktree, config, directory, stop=lambda: None):
                     command.network,
                 )
                 if gradle_environment in prepared_gradle:
+                    if reference := prepared_gradle[gradle_environment]:
+                        shared_caches[key] = reference
                     # Native integrity and CPU eligibility still depend on the files and task.
                     prepare_native_tools(
                         worktree,
@@ -521,18 +532,18 @@ def prepare_java(worktree, config, directory, stop=lambda: None):
                             required,
                         )
                 record = ReadinessRecord(directory, gradle_environment, binding)
-                reused = record.matches(outputs, stop)
-                if not reused:
-                    seeds.populate(
-                        worktree,
-                        cwd,
-                        executable,
-                        home,
-                        distribution,
-                        host_cache(tool),
-                        outputs[0],
-                        stop,
-                    )
+                group = (
+                    seeds.build_root(worktree, cwd),
+                    executable,
+                    home,
+                    distribution,
+                    host_cache(tool),
+                )
+                reference, shared, reused = seeds.prepare(
+                    group, outputs, record, bindings, key, stop
+                )
+                if reference:
+                    shared_caches[key] = reference
             else:
                 cache = outputs[0]
                 seed_cache(host_cache(tool) / "repository", cache, stop)
@@ -545,6 +556,7 @@ def prepare_java(worktree, config, directory, stop=lambda: None):
                 outputs[0],
                 lambda name: read(str(PurePosixPath(command.working_directory) / name)),
                 tool,
+                shared,
             )
             directory.mkdir(parents=True, exist_ok=True)
             if tool == "gradle":
@@ -552,7 +564,7 @@ def prepare_java(worktree, config, directory, stop=lambda: None):
                     native_entries = declarations(worktree)
                 prepare_native_tools(worktree, command, directory, stop, entries=native_entries)
                 if reused:
-                    prepared_gradle.add(gradle_environment)
+                    prepared_gradle[gradle_environment] = reference
                     progress.complete(command.working_directory)
                     continue
             with tempfile.TemporaryDirectory(prefix="devorchestra-java-") as temp:
@@ -566,6 +578,8 @@ def prepare_java(worktree, config, directory, stop=lambda: None):
                     "JAVA_TOOL_OPTIONS": f'-Duser.home="{scratch}" -Djava.io.tmpdir="{scratch}"',
                 }
                 env.update(java_environment(worktree, command))
+                if shared:
+                    env["GRADLE_RO_DEP_CACHE"] = str(shared)
                 rc, output = execute(
                     sandbox_command(
                         worktree, outputs, scratch, [str(home / "bin/javac"), "-version"]
@@ -617,8 +631,8 @@ def prepare_java(worktree, config, directory, stop=lambda: None):
                         f"offline {tool} bootstrap failed: {output[-1200:]}; prepare its distribution in the local host cache or this Run's isolated cache and resume"
                     )
             if tool == "gradle":
-                record.save(outputs, stop)
-                prepared_gradle.add(gradle_environment)
+                record.save(outputs, stop, reference)
+                prepared_gradle[gradle_environment] = reference
                 progress.complete(command.working_directory, checked=True)
         except StopRequested:
             raise
@@ -628,3 +642,5 @@ def prepare_java(worktree, config, directory, stop=lambda: None):
                     f"Java environment unavailable for {key} (working directory: {command.working_directory}): {error}"
                 )
             ) from error
+    if gradle_dirs:
+        bindings.publish(shared_caches)

@@ -278,10 +278,15 @@ def test_gradle_pair_reuses_successful_preparation_and_executes_both_commands(
     gradle_pair, tmp_path, monkeypatch
 ):
     repo, cfg = gradle_pair
+    artifact = tmp_path / "host/caches/modules-2/files-2.1/org/lib/1/hash/lib.jar"
+    artifact.parent.mkdir(parents=True)
+    artifact.write_bytes(b"shared")
     commit_files(
         repo,
         {
             "gradlew": """#!/bin/sh
+test -f "$GRADLE_RO_DEP_CACHE/modules-2/files-2.1/org/lib/1/hash/lib.jar" || exit 8
+test ! -e "$GRADLE_USER_HOME/caches/modules-2/files-2.1/org/lib/1/hash/lib.jar" || exit 9
 case "$1" in
   test) echo '<testsuite><testcase name="unit"/></testsuite>' > build/unit.xml ;;
   assemble) exit 7 ;;
@@ -302,23 +307,29 @@ esac
     assert [argv[-1] for argv, _ in probes] == ["-version", "--version"]
 
     monkeypatch.setattr(test_runner, "sandbox_command", lambda w, o, s, argv, network: argv)
+    # The tester host tool also reopens the prepared Run in a separate process.
+    runner = TestRunner(preflight=tmp_path / "preflight")
     results = runner.run(repo, cfg, tmp_path / "results")["commands"]
     assert [(r["command_id"], r["exit_code"]) for r in results] == [("java", 0), ("build", 7)]
     assert results[0]["passed"] and results[0]["junit_hash"]
     assert not results[1]["passed"] and results[1]["junit_path"] is None
+    shared = Path(probes[0][1]["GRADLE_RO_DEP_CACHE"])
+    (shared / "modules-2/files-2.1/org/lib/1/hash/lib.jar").unlink()
+    results = runner.run(repo, cfg, tmp_path / "changed")["commands"]
+    assert all(r["exit_code"] is None and "cache changed" in r["error"] for r in results)
 
 
-def test_gradle_modules_share_private_seed_and_only_recheck_changed_cache(
+def test_gradle_modules_share_dependencies_and_recheck_only_affected_caches(
     service, tmp_path, jdk, monkeypatch
 ):
     _, _, repo = service
-    wrapper(repo, "gradle")
+    distribution = wrapper(repo, "gradle")
     commit_files(
         repo,
         {
             "settings.gradle": 'includeBuild("build-logic")\ninclude("a", "b")\n',
-            "a/build.gradle": "",
-            "b/build.gradle": "",
+            "a/build.gradle": "dependencies { implementation 'org:lib:1'; implementation 'org:local:1' }",
+            "b/build.gradle": "dependencies { implementation 'org:lib:1' }",
             "build-logic/build.gradle": "",
         },
     )
@@ -333,6 +344,13 @@ def test_gradle_modules_share_private_seed_and_only_recheck_changed_cache(
     host = tmp_path / "host"
     (host / artifact).parent.mkdir(parents=True)
     (host / artifact).write_bytes(b"fixture")
+    wrapper_file = Path("wrapper/dists") / distribution / "hash/bin/gradle"
+    (host / wrapper_file).parent.mkdir(parents=True)
+    (host / wrapper_file).write_bytes(b"distribution")
+    private = [repo / name / ".devorchestra-cache/gradle" for name in cfg.commands]
+    local = Path("caches/modules-2/files-2.1/org/local/1/hash/local.jar")
+    (private[0] / local).parent.mkdir(parents=True)
+    (private[0] / local).write_bytes(b"private")
     monkeypatch.setattr(java, "host_cache", lambda _: host)
     probes = []
     mock_tools(monkeypatch, probes)
@@ -343,14 +361,28 @@ def test_gradle_modules_share_private_seed_and_only_recheck_changed_cache(
         assert progress[-1]["checked"] == 3
         seeds = list((preflight / "gradle-seeds").glob("*/" + str(artifact)))
         assert len(seeds) == 2
-        copies = [repo / name / ".devorchestra-cache/gradle" / artifact for name in cfg.commands]
-        assert len({f.stat().st_ino for f in [host / artifact, *seeds, *copies]}) == 6
+        shared = [Path(env["GRADLE_RO_DEP_CACHE"]) for _, env in probes[::2]]
+        assert shared[0] == shared[1] != shared[2]
+        assert len({f.stat().st_ino for f in [host / artifact, *seeds]}) == 3
         assert all(file.stat().st_mode & 0o222 == 0 for file in seeds)
-        copies[0].unlink()
+        assert all(not (p / artifact).exists() for p in private)
+        assert not (private[1] / local).exists()
+        assert all(not (p.parent / local).exists() for p in shared)
+        assert len({(p / wrapper_file).stat().st_ino for p in private}) == 3
+        (private[0] / wrapper_file).unlink()
         java.prepare_java(repo, cfg, preflight)
-    assert copies[0].read_bytes() == b"fixture"
-    assert len(probes) == 8
-    assert progress[-1] == dict(total=3, checked=1, reused=2, active=True)
+        assert (private[0] / wrapper_file).read_bytes() == b"distribution"
+        assert progress[-1] == dict(total=3, checked=1, reused=2, active=True)
+        (shared[0].parent / artifact).unlink()
+        java.prepare_java(repo, cfg, preflight)
+        assert (shared[0].parent / artifact).read_bytes() == b"fixture"
+        assert progress[-1] == dict(total=3, checked=2, reused=1, active=True)
+    assert (private[0] / local).read_bytes() == b"private" and len(probes) == 12
+    override = private[0] / artifact
+    override.parent.mkdir(parents=True)
+    override.symlink_to(host / artifact)
+    with pytest.raises(PipelineError, match="symlink Java cache"):
+        java.prepare_java(repo, cfg, preflight)
 
 
 def test_failed_gradle_check_does_not_issue_reusable_evidence(gradle_pair, tmp_path, monkeypatch):
@@ -366,6 +398,49 @@ def test_failed_gradle_check_does_not_issue_reusable_evidence(gradle_pair, tmp_p
     (repo / "gradlew").write_text("#!/bin/sh\nexit 1\n")
     java.prepare_java(repo, cfg, preflight)
     assert len(probes) == 4
+
+
+def test_previous_run_dependency_survives_partial_host_cache_cleanup(
+    gradle_pair, tmp_path, monkeypatch
+):
+    repo, cfg = gradle_pair
+    deps = tmp_path / "host/caches/modules-2/files-2.1/org"
+    for name in ("old", "keep"):
+        jar = deps / name / "1/hash/lib.jar"
+        jar.parent.mkdir(parents=True)
+        jar.write_text(name)
+    commit_files(repo, {"build.gradle": "dependencies { implementation 'org:old:1' }"})
+    probes = []
+    mock_tools(monkeypatch, probes)
+    preflight = tmp_path / "preflight"
+    java.prepare_java(repo, cfg, preflight)
+    (deps / "old/1/hash/lib.jar").unlink()
+    commit_files(repo, {"note.txt": "new candidate"})
+    java.prepare_java(repo, cfg, preflight)
+    private = repo / ".devorchestra-cache/gradle/caches/modules-2/files-2.1/org"
+    shared = Path(probes[-1][1]["GRADLE_RO_DEP_CACHE"]) / "modules-2/files-2.1/org"
+    assert (private / "old/1/hash/lib.jar").read_text() == "old"
+    assert not (private / "keep").exists()
+    assert (shared / "keep/1/hash/lib.jar").read_text() == "keep"
+
+
+def test_unknown_gradle_distribution_keeps_dependencies_private(gradle_pair, tmp_path, monkeypatch):
+    repo, cfg = gradle_pair
+    commit_files(
+        repo,
+        {
+            "gradle/wrapper/gradle-wrapper.properties": "distributionUrl=https://example.invalid/custom.zip"
+        },
+    )
+    artifact = Path("caches/modules-2/files-2.1/org/lib/1/hash/lib.jar")
+    host = tmp_path / "host"
+    (host / artifact).parent.mkdir(parents=True)
+    (host / artifact).write_text("private fallback")
+    probes = []
+    mock_tools(monkeypatch, probes)
+    java.prepare_java(repo, cfg, tmp_path / "preflight")
+    assert (repo / ".devorchestra-cache/gradle" / artifact).read_text() == "private fallback"
+    assert "GRADLE_RO_DEP_CACHE" not in probes[-1][1]
 
 
 def test_same_path_jdk_replacement_invalidates_readiness(gradle_pair, jdk, tmp_path, monkeypatch):
@@ -433,9 +508,9 @@ def test_cancel_during_seed_copy_can_retry_cleanly(gradle_pair, tmp_path, monkey
     assert not probes
     java.prepare_java(repo, cfg, preflight)
     assert len(probes) == 2
-    assert (
-        repo / ".devorchestra-cache/gradle/caches/modules-2/lib.jar"
-    ).read_bytes() == artifact.read_bytes()
+    shared = Path(probes[0][1]["GRADLE_RO_DEP_CACHE"])
+    assert (shared / "modules-2/lib.jar").read_bytes() == artifact.read_bytes()
+    assert not (repo / ".devorchestra-cache/gradle/caches/modules-2/lib.jar").exists()
 
 
 def test_resumed_preparation_reports_progress_and_polls_only_control(service, monkeypatch):

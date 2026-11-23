@@ -73,7 +73,7 @@ def readiness_binding(worktree, cwd, executable, sha, policy, jdk, environment, 
                 )
             )
     return [
-        1,
+        2,
         sha,
         policy,
         worktree.stat().st_ino,
@@ -89,19 +89,26 @@ class ReadinessRecord:
         self.path = directory / "gradle-readiness" / (fingerprint(environment) + ".json")
         self.binding = fingerprint(binding) if binding is not None else None
 
-    def matches(self, outputs, stop):
+    def matches(self, outputs, stop, shared_cache=None):
         if self.binding is not None and self.path.is_file():
             try:
                 data = json.loads(self.path.read_text())
             except (OSError, ValueError):
                 data = None
-            if isinstance(data, dict) and data.get("binding") == self.binding:
+            if (
+                isinstance(data, dict)
+                and data.get("binding") == self.binding
+                and data.get("shared_cache") == shared_cache
+            ):
                 previous = data.get("cache")
                 if previous and previous == cache_identity(outputs, stop):
                     return True
         self.path.unlink(missing_ok=True)
         return False
 
-    def save(self, outputs, stop):
+    def save(self, outputs, stop, shared_cache=None):
         if self.binding is not None and (identity := cache_identity(outputs, stop)):
-            write(self.path, {"binding": self.binding, "cache": identity})
+            write(
+                self.path,
+                {"binding": self.binding, "cache": identity, "shared_cache": shared_cache},
+            )

@@ -10,10 +10,12 @@ import stat
 import sys
 import tempfile
 import uuid
+from dataclasses import dataclass
+from functools import cached_property
 from pathlib import Path
 
 from dev_orchestra.domain.models import PipelineError, StopRequested
-from dev_orchestra.infrastructure.files import write
+from dev_orchestra.infrastructure.files import contained, write
 
 
 def check_stop(stop):
@@ -148,7 +150,17 @@ def validate_destination(path):
         raise PipelineError("symlink Java cache paths are not allowed")
 
 
-def seed_cache(source, target, stop):
+def check_private_overrides(private, shared, stop):
+    """Preserve the destination link checks even when shared entries aren't copied."""
+    for parent, dirs, files in os.walk(private, followlinks=False):
+        check_stop(stop)
+        for name in (*dirs, *files):
+            path = Path(parent) / name
+            if path.is_symlink() and (shared / path.relative_to(private)).exists():
+                raise PipelineError("symlink Java cache paths are not allowed")
+
+
+def seed_cache(source, target, stop, *, available=None):
     if not source.is_dir() or source.is_symlink():
         return
     if source.resolve() == target.resolve():
@@ -159,6 +171,8 @@ def seed_cache(source, target, stop):
         raise PipelineError("source and isolated Java caches must not overlap")
     count = size = 0
     for relative, before in cache_files(source, stop):
+        if available is not None and (available / relative).is_file():
+            continue
         dst = target / relative
         validate_destination(dst)
         if dst.exists():
@@ -167,12 +181,80 @@ def seed_cache(source, target, stop):
         size += before.st_size
         if count > 100000 or size > 4 * 2**30:
             raise PipelineError("Java cache seeding exceeds safety limit")
-        copy_artifact(source / relative, dst, before.st_mode & 0o755, stop, file_identity(before))
+        mode = before.st_mode & 0o755
+        if available is not None:
+            mode |= stat.S_IWUSR  # Restoring a read-only Run artifact to a private writable cache.
+        copy_artifact(source / relative, dst, mode, stop, file_identity(before))
+
+
+@dataclass
+class GradleSeed:
+    path: Path
+    stamp: str
+    files: dict
+
+    @cached_property
+    def wrapper_files(self):
+        return {
+            name: identity
+            for name, identity in self.files.items()
+            if name.startswith("wrapper/dists/")
+        }
+
+
+class GradleCacheBindings:
+    """Only the host publishes the command-to-seed map, outside the writable worktree."""
+
+    def __init__(self, directory, worktree):
+        self.directory = Path(directory).resolve()
+        self.worktree = worktree.resolve()
+        self.path = contained(self.directory, "gradle-dependencies.json")
+        self.verified = {}
+
+    @cached_property
+    def commands(self):
+        if self.directory.is_relative_to(self.worktree) or not self.path.exists():
+            return {}
+        try:
+            manifest = json.loads(self.path.read_text())
+            if manifest["worktree"] != str(self.worktree):
+                raise PipelineError("Gradle dependency cache belongs to a different worktree")
+            commands = manifest["commands"]
+            for ref in commands.values():
+                if not all(
+                    re.fullmatch(r"[0-9a-f]{64}", ref[k]) for k in ("group", "seed", "stamp")
+                ):
+                    raise ValueError("invalid seed identity")
+            return commands
+        except (ValueError, KeyError, TypeError, AttributeError) as error:
+            raise PipelineError("invalid Run Gradle dependency cache manifest") from error
+
+    def publish(self, commands):
+        if not self.directory.is_relative_to(self.worktree) and (commands or self.path.exists()):
+            write(self.path, {"worktree": str(self.worktree), "commands": commands})
+
+    def lookup(self, reference, stop):
+        key, stamp = reference["seed"], reference["stamp"]
+        if (key, stamp) not in self.verified:
+            seed = contained(self.directory, f"gradle-seeds/{key}")
+            if not stamp or cache_identity([seed], stop) != stamp:
+                return None
+            self.verified[key, stamp] = seed / "caches"
+        return self.verified[key, stamp]
+
+    def environment_for(self, command_id, stop):
+        reference = self.commands.get(command_id)
+        if reference is None:
+            return {}
+        shared = self.lookup(reference, stop)
+        if shared is None:
+            raise PipelineError("shared Gradle dependency cache changed; repeat preparation")
+        return {"GRADLE_RO_DEP_CACHE": str(shared)}
 
 
 class GradleSeeds:
     def __init__(self, directory):
-        self.directory = directory
+        self.directory = Path(directory).resolve()
         self.groups = {}
         self.included_builds = {}
 
@@ -194,28 +276,68 @@ class GradleSeeds:
                 return next((p for p in (cwd, *cwd.parents) if p in included), root)
         return cwd
 
-    def populate(self, worktree, cwd, executable, jdk, distribution, host, target, stop):
-        root = self.build_root(worktree, cwd)
+    def prepare(self, group, outputs, record, bindings, command_id, stop):
+        _, executable, _, distribution, host = group
+        group_id = fingerprint(group)
+        previous = bindings.commands.get(command_id)
+        if previous and previous["group"] != group_id:
+            previous = None
+        previous_cache = bindings.lookup(previous, stop) if previous else None
+        if (not previous or previous_cache) and record.matches(outputs, stop, previous):
+            return previous, previous_cache, True
+        seed = self.select(group, host, distribution, outputs[0], stop)
+        reference = shared = None
+        if (
+            seed
+            and not self.directory.is_relative_to(bindings.worktree)
+            and supports_shared_dependencies(executable, distribution)
+        ):
+            if (seed.path / "caches/modules-2").is_dir():
+                reference = {"group": group_id, "seed": seed.path.name, "stamp": seed.stamp}
+                shared = seed.path / "caches"
+            elif previous_cache:
+                # An already prepared Run remains usable if the host cache was cleared.
+                reference, shared = previous, previous_cache
+        self.populate(seed, host, distribution, outputs[0], shared, stop)
+        if shared:
+            private = contained(outputs[0], "caches/modules-2")
+            check_private_overrides(private, shared / "modules-2", stop)
+        if previous_cache and reference != previous:
+            # Preserve previously available artifacts if the host pruned part of its cache.
+            seed_cache(
+                previous_cache / "modules-2",
+                outputs[0] / "caches/modules-2",
+                stop,
+                available=(shared or outputs[0] / "caches") / "modules-2",
+            )
+        return reference, shared, False
+
+    def select(self, group, host, distribution, target, stop):
         if target.resolve() == host.resolve():
             return
         parts = [Path("caches/modules-2")]
         if distribution:
             parts.append(Path("wrapper/dists") / distribution)
         for part in parts:
-            source, destination = (host / part).resolve(), (target / part).resolve()
+            source = contained(host, str(part))
+            destination = contained(target, str(part))
             if destination.is_relative_to(source) or source.is_relative_to(destination):
                 raise PipelineError("source and isolated Java caches must not overlap")
-        group = (root, executable, jdk, distribution, host)
         if group not in self.groups:
             self.groups[group] = self.shared_seed(group, host, parts, stop)
-        if self.groups[group] is None:
+        return self.groups[group]
+
+    def populate(self, seed, host, distribution, target, shared, stop):
+        if seed is None:
             # An already populated module may only need a small subset of an oversized host cache.
-            for part in parts:
+            seed_cache(host / "caches/modules-2", target / "caches/modules-2", stop)
+            if distribution:
+                part = Path("wrapper/dists") / distribution
                 seed_cache(host / part, target / part, stop)
             return
-        seed, entries = self.groups[group]
         checked_parents = set()
-        for name, identity in entries.items():
+        files = seed.wrapper_files if shared else seed.files
+        for name, identity in files.items():
             check_stop(stop)
             dst = target / name
             if dst.parent not in checked_parents:
@@ -223,7 +345,7 @@ class GradleSeeds:
                 checked_parents.add(dst.parent)
             if dst.is_symlink():
                 raise PipelineError("symlink Java cache paths are not allowed")
-            src = seed / name
+            src = seed.path / name
             if not dst.exists():
                 copy_artifact(
                     src, dst, identity[2] & 0o755, stop, file_identity(src.stat()), clone=True
@@ -243,7 +365,7 @@ class GradleSeeds:
         if seed.is_dir() and seal.is_file():
             stamp = cache_identity([seed], stop)
             if stamp and seal.read_bytes() == stamp.encode():
-                return seed, entries
+                return GradleSeed(seed, stamp, entries)
         seed.parent.mkdir(parents=True, exist_ok=True)
         with tempfile.TemporaryDirectory(dir=seed.parent) as staging:
             pending = Path(staging) / "seed"
@@ -254,8 +376,11 @@ class GradleSeeds:
             if seed.exists() or seed.is_symlink():
                 seed.rename(Path(staging) / "previous")
             pending.rename(seed)
-            write(seal, cache_identity([seed], stop))
-        return seed, entries
+            stamp = cache_identity([seed], stop)
+            if not stamp:
+                raise PipelineError("cannot verify Run Gradle cache")
+            write(seal, stamp)
+        return GradleSeed(seed, stamp, entries)
 
 
 def included_roots(settings):
@@ -272,3 +397,16 @@ def included_roots(settings):
             return None
         roots.add((settings.parent / literal[2]).resolve())
     return roots
+
+
+def supports_shared_dependencies(executable, distribution):
+    if distribution:
+        version = re.fullmatch(r"gradle-(\d+)\.(\d+).*-(?:bin|all)", distribution)
+    elif executable.name != "gradlew":
+        jars = list((executable.resolve().parent.parent / "lib").glob("gradle-launcher-*.jar"))
+        version = len(jars) == 1 and re.fullmatch(
+            r"gradle-launcher-(\d+)\.(\d+).*\.jar", jars[0].name
+        )
+    else:
+        return False
+    return bool(version and (int(version[1]), int(version[2])) >= (6, 2))

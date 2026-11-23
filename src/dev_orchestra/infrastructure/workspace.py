@@ -570,7 +570,9 @@ class WorkspaceSession:
 
         evidence_id = "test-" + uuid.uuid4().hex
         directory = self.path.parent / evidence_id
-        runner = getattr(self, "_test_runner", None) or TestRunner()
+        runner = getattr(self, "_test_runner", None) or TestRunner(
+            preflight=Path(run["directory"]) / "preflight"
+        )
         self.data["testing"] = True
         self.save()
         try:
