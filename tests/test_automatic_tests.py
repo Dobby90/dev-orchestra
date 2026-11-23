@@ -187,7 +187,10 @@ def test_jest_exact_file_selection_preserves_package_invocation_and_evidence(can
 def test_jest_keeps_frontend_builds_scoped_to_affected_packages(candidate):
     svc, rid, repo = candidate
     manifests = {
-        ".": {"scripts": {"test": "jest", "build": "vue-cli-service build"}},
+        ".": {
+            "scripts": {"test": "jest", "build": "vue-cli-service build"},
+            "devDependencies": {"@vue/cli-service": "5.0.1"},
+        },
         "manual": {
             "scripts": {"build": "docusaurus build"},
             "dependencies": {"@docusaurus/core": "2.4.3"},
@@ -205,11 +208,13 @@ def test_jest_keeps_frontend_builds_scoped_to_affected_packages(candidate):
         root.mkdir(exist_ok=True)
         (root / "package.json").write_text(json.dumps(manifest))
         (root / "yarn.lock").write_text("# yarn lockfile v1\n")
+    popup = repo / "src/views/AlarmAddPopup.vue"
+    popup.parent.mkdir(parents=True)
+    popup.write_text("<template><p>before</p></template>\n")
     git = Git(repo)
     git.commit("독립 패키지 빌드 준비")
-    sha = git.sha()
     run = svc.store.get(rid)
-    run.update(base_sha=sha, test_selection_contract=AUTOMATIC_TEST_CONTRACT)
+    run.update(base_sha=git.sha(), test_selection_contract=AUTOMATIC_TEST_CONTRACT)
     tests = run["config"]["tests"]
     tests["commands"]["unit"]["argv"] = [
         "yarn",
@@ -231,28 +236,59 @@ def test_jest_keeps_frontend_builds_scoped_to_affected_packages(candidate):
             "working_directory": directory,
         }
     check_plan = plan(["tests/selected.test.mjs"])
-    app_change = ["src/AlarmAddPopup.vue"]
-    assert deferred_builds(run, sha, run_test_policy(run)) == {"manual", "portal", "studio"}
-    selection = model_selection(run, sha, app_change, check_plan)
-    assert selection["included"] == ["app", "static", "unit"]
-    assert selection["excluded"] == ["manual", "portal", "studio", "unrelated"]
+    app_change = ["src/views/AlarmAddPopup.vue"]
+    popup.write_text("<template><p>changed</p></template>\n")
+    git.commit("알람 팝업 동작 변경")
+    sha = git.sha()
+    assert set(deferred_builds(run, sha, run_test_policy(run))) == {
+        "app",
+        "manual",
+        "portal",
+        "studio",
+    }
+    selection = select_tests(run, repo, sha, plan=check_plan)
+    assert selection["included"] == ["static", "unit"]
+    assert selection["excluded"] == ["app", "manual", "portal", "studio", "unrelated"]
     assert selection["resolved_commands"]["unit"]["argv"][-2:] == [
         "--runTestsByPath",
         "./tests/selected.test.mjs",
     ]
-    assert model_selection(run, sha, ["portal/src/Page.vue"], check_plan)["included"] == [
-        "app",
+    assert model_selection(run, sha, ["portal/src/main.ts"], check_plan)["included"] == [
         "portal",
         "static",
         "unit",
     ]
+    assert model_selection(run, sha, ["src/main.js"], check_plan)["included"] == [
+        "app",
+        "static",
+        "unit",
+    ]
     assert model_selection(run, sha, ["yarn.lock"], check_plan)["excluded"] == ["unrelated"]
-    tests["affected"] = {"required_commands": ["manual"], "dependencies": {"portal": ["unit"]}}
+    tests["affected"] = {
+        "required_commands": ["manual"],
+        "dependencies": {"portal": ["unit"]},
+        "inputs": {"app": ["src/views/**"]},
+    }
     assert model_selection(run, sha, app_change, check_plan)["excluded"] == ["studio", "unrelated"]
     tests["affected"] = None
+    explicit_build = {"command_id": "app", "files": [], "reason": "인수 조건의 번들 확인"}
+    assert select_tests(run, repo, sha, plan=[*check_plan, explicit_build])["included"] == [
+        "app",
+        "static",
+        "unit",
+    ]
+    run["test_selection_contract"] = 5
+    assert select_tests(run, repo, sha, plan=check_plan)["included"] == ["app", "static", "unit"]
     run["test_selection_contract"] = 4
     assert model_selection(run, sha, app_change, check_plan)["excluded"] == ["manual", "unrelated"]
     run["test_selection_contract"] = AUTOMATIC_TEST_CONTRACT
+    popup.write_text(popup.read_text().replace("<p>changed</p>", '<img src="./alarm.svg">'))
+    git.commit("번들 자산 참조 변경")
+    assert select_tests(run, repo, git.sha(), plan=check_plan)["included"] == [
+        "app",
+        "static",
+        "unit",
+    ]
     manifest = manifests["."] | {"workspaces": ["portal"]}
     (repo / "package.json").write_text(json.dumps(manifest))
     git.commit("상위 워크스페이스 선언")
