@@ -2,6 +2,12 @@
 
 from fnmatch import fnmatchcase
 
+from dev_orchestra.application.automatic_tests import (
+    AUTOMATIC_TEST_CONTRACT,
+    AUTOMATIC_TEST_CONTRACTS,
+    automatic,
+    model_selection,
+)
 from dev_orchestra.application.test_changes import checksum
 from dev_orchestra.application.validation import run_test_policy, run_test_policy_hash
 from dev_orchestra.domain.models import PipelineError
@@ -11,8 +17,6 @@ SELECTOR_VERSION = 1
 
 
 def selection_for_paths(run, candidate, paths, input_error=None, plan=None):
-    from dev_orchestra.application.automatic_tests import automatic, model_selection
-
     if automatic(run):
         return model_selection(run, candidate, paths, plan, input_error)
 
@@ -118,7 +122,15 @@ def selection_for_paths(run, candidate, paths, input_error=None, plan=None):
 
 def select_tests(run, worktree, candidate, plan=None):
     try:
-        names = Git(worktree).call("diff", "--name-only", "-z", run["base_sha"], candidate, "--")
+        # Keep both paths of a move when finding affected modules.
+        options = (
+            ["--no-renames"]
+            if run.get("test_selection_contract") == AUTOMATIC_TEST_CONTRACT
+            else []
+        )
+        names = Git(worktree).call(
+            "diff", "--name-only", "-z", *options, run["base_sha"], candidate, "--"
+        )
         paths = list(filter(None, names.split("\0")))
     except PipelineError:
         return selection_for_paths(
@@ -135,7 +147,7 @@ def selected_config(run, selection):
                 key: command.model_copy(
                     update={"argv": selection["resolved_commands"][key]["argv"]}
                 )
-                if selection.get("selector_version") == 2
+                if selection.get("selector_version") in AUTOMATIC_TEST_CONTRACTS
                 else command
                 for key, command in config.commands.items()
                 if key in selection["included"]
@@ -150,7 +162,7 @@ def verify_selection(run, payload):
         if run.get("test_selection_contract"):
             raise PipelineError("missing host test selection evidence")
         return
-    if run.get("test_selection_contract") == 2 and not selection.get("selection_hash"):
+    if automatic(run) and not selection.get("selection_hash"):
         raise PipelineError("automatic test selection is not finalized")
     expected = selection_for_paths(
         run,

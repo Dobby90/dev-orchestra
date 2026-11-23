@@ -159,6 +159,123 @@ def test_required_regression_cannot_be_filtered(candidate):
         select_tests(run, repo, run["base_sha"], plan=plan())
 
 
+@pytest.fixture
+def gradle_candidate(candidate):
+    svc, rid, repo = candidate
+    run = svc.store.get(rid)
+    (repo / "settings.gradle").write_text("include 'api', 'api:child', 'core'\n")
+    tests = run["config"]["tests"]
+    tests["commands"] = {}
+    for directory in ("api", "api/child", "core"):
+        path = repo / directory
+        path.mkdir(parents=True)
+        (path / "build.gradle").touch()
+        prefix = ["gradle", "--offline", "-g", ".cache/gradle", "--rerun-tasks"]
+        name = directory.replace("/", "_")
+        tests["commands"][name + "_build"] = {
+            "argv": prefix + ["assemble"],
+            "kind": "check",
+            "working_directory": directory,
+        }
+        tests["commands"][name] = {
+            "argv": prefix + ["test"],
+            "working_directory": directory,
+            "junit_report": directory + "/build/test-results/test/TEST-*.xml",
+        }
+    git = Git(repo)
+    git.commit("Gradle 모듈 준비")
+    run.update(base_sha=git.sha(), test_selection_contract=3)
+    for directory, name in (("api", "ApiTest"), ("core", "CoreTest")):
+        source = repo / directory / "src/test/java/example" / (name + ".java")
+        source.parent.mkdir(parents=True)
+        source.write_text(f"package example;\nclass {name} {{}}\n")
+    git.commit("관련 Gradle 테스트 추가")
+    return run, repo, git.sha()
+
+
+def gradle_plan():
+    return [
+        {
+            "command_id": module,
+            "files": [f"src/test/java/example/{name}.java"],
+            "reason": "이번 변경의 인수 조건을 검증합니다.",
+        }
+        for module, name in (("api", "ApiTest"), ("core", "CoreTest"))
+    ]
+
+
+def test_gradle_selects_exact_classes_and_excludes_nested_unrelated_build(gradle_candidate):
+    run, repo, sha = gradle_candidate
+    pending = select_tests(run, repo, sha)
+    assert pending["mandatory_command_ids"] == ["api_build", "core_build"]
+    selection = select_tests(run, repo, sha, plan=gradle_plan())
+    assert selection["included"] == ["api", "api_build", "core", "core_build"]
+    assert selection["excluded"] == ["api_child", "api_child_build"]
+    assert selection["actual_scope"] == "affected" and not selection["expanded"]
+    commands = selected_config(run, selection).commands
+    assert commands["api"].argv == [
+        "gradle",
+        "--offline",
+        "-g",
+        ".cache/gradle",
+        "--rerun-tasks",
+        ":api:test",
+        "--tests",
+        "example.ApiTest",
+    ]
+    assert commands["core"].argv[-3:] == [":core:test", "--tests", "example.CoreTest"]
+    assert commands["api_build"].argv[-1] == ":api:assemble"
+    assert commands["core_build"].argv[-1] == ":core:assemble"
+    legacy = copy.deepcopy(run)
+    legacy["test_selection_contract"] = 2
+    legacy_plan = [item | {"files": []} for item in gradle_plan()]
+    assert "api_child_build" in select_tests(legacy, repo, sha, plan=legacy_plan)["included"]
+    with pytest.raises(PipelineError, match="exact relative"):
+        select_tests(legacy, repo, sha, plan=gradle_plan())
+
+
+def test_gradle_retains_explicit_required_build_and_resolves_shared_changes(gradle_candidate):
+    run, repo, sha = gradle_candidate
+    tests = run["config"]["tests"]
+    tests["affected"] = {"required_commands": ["api_child_build"]}
+    selection = select_tests(run, repo, sha, plan=gradle_plan())
+    assert selection["resolved_commands"]["api_child_build"]["argv"][-1] == "assemble"
+    tests["affected"] = None
+    (repo / "settings.gradle").write_text("include 'api', 'api:child', 'core'\n// changed\n")
+    git = Git(repo)
+    git.commit("Gradle 공통 설정 변경")
+    assert "api_child_build" in select_tests(run, repo, git.sha())["mandatory_command_ids"]
+
+
+def test_gradle_respects_qualified_tasks_from_build_root(gradle_candidate):
+    run, repo, sha = gradle_candidate
+    for command in run["config"]["tests"]["commands"].values():
+        module = command["working_directory"].replace("/", ":")
+        command["argv"][-1] = f":{module}:{command['argv'][-1]}"
+        command["working_directory"] = "."
+    targets = gradle_plan()
+    for target in targets:
+        target["files"] = [target["command_id"] + "/" + path for path in target["files"]]
+    selection = select_tests(run, repo, sha, plan=targets)
+    assert selection["included"] == ["api", "api_build", "core", "core_build"]
+    assert selection["resolved_commands"]["api"]["argv"][-3:] == [
+        ":api:test",
+        "--tests",
+        "example.ApiTest",
+    ]
+    targets[0]["files"] = targets[1]["files"]
+    with pytest.raises(PipelineError, match="belong to the selected module"):
+        select_tests(run, repo, sha, plan=targets)
+
+
+@pytest.mark.parametrize("extra", [["check"], ["--tests", "example.OtherTest"]])
+def test_gradle_targeting_rejects_extra_tasks_or_existing_filters(gradle_candidate, extra):
+    run, repo, sha = gradle_candidate
+    run["config"]["tests"]["commands"]["api"]["argv"] += extra
+    with pytest.raises(PipelineError, match="one test task"):
+        select_tests(run, repo, sha, plan=gradle_plan())
+
+
 def test_real_pytest_execution_excludes_failing_unrelated_test_and_checks_evidence(candidate):
     svc, rid, repo = candidate
     session, _ = start_session(candidate, "tester")
@@ -205,6 +322,7 @@ def test_automatic_selection_reaches_final_approval_without_static_mapping(candi
     from dev_orchestra.orchestration.runner import Runner
 
     svc, rid, repo = candidate
+    svc.store.update(rid, test_selection_contract=3)
 
     class Agent(FakeAgent):
         def run(self, request, *args):
@@ -237,6 +355,7 @@ def test_automatic_selection_reaches_final_approval_without_static_mapping(candi
     runner.execute(rid)
     run = svc.store.get(rid)
     assert run["state"] == "waiting_approval", run.get("error")
+    assert run["test_result"]["test_selection"]["selector_version"] == 3
     assert run["test_result"]["test_selection"]["excluded"] == ["unrelated"]
     assert run["test_result"]["execution"]["commands"][0]["total"] == 1
     svc.approve(rid)

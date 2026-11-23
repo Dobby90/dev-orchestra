@@ -84,7 +84,7 @@ AUTOMATIC_TESTS = (
     "When impact cannot be established safely, explain the uncertainty and broaden coverage. "
     "Explain how each target covers changed behavior and regressions. Prefer file targets; "
     "files=[] runs the entire selected command and requires a concrete broad-impact or unsupported-runner reason. "
-    "The host supports pytest, node --test, Playwright and Vitest file targeting, including simple package scripts. "
+    "Use the capabilities and mandatory_command_ids described by the host test policy. "
     "Do not invent argv, bypass reports, weaken tests, or skip required checks/regressions/dependencies. "
     "Include those mandatory command IDs in command_ids. Cover every criterion with executed test commands. "
     "After fixes reassess the cumulative changes and prior failures. Reviewer must independently "

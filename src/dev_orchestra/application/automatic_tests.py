@@ -3,16 +3,25 @@
 import json
 import re
 import shlex
+from fnmatch import fnmatchcase
 from pathlib import Path, PurePosixPath
 
+from dev_orchestra.application.gradle_tests import SOURCE_DIRS, GradleSelection, gradle_target_class
 from dev_orchestra.application.test_changes import checksum
 from dev_orchestra.application.validation import run_test_policy, run_test_policy_hash
 from dev_orchestra.domain.models import PipelineError, TestTarget
 from dev_orchestra.infrastructure.git import Git
+from dev_orchestra.infrastructure.java import java_tool
+
+AUTOMATIC_TEST_CONTRACT = 3
+AUTOMATIC_TEST_CONTRACTS = {2, AUTOMATIC_TEST_CONTRACT}
 
 
 def automatic(run):
-    return run.get("test_selection_contract") == 2 and run.get("test_scope") == "affected"
+    return (
+        run.get("test_selection_contract") in AUTOMATIC_TEST_CONTRACTS
+        and run.get("test_scope") == "affected"
+    )
 
 
 def candidate_file(run, candidate, name):
@@ -24,24 +33,48 @@ def candidate_file(run, candidate, name):
     return git.call("show", f"{candidate}:{name}")
 
 
-def targeted_argv(run, candidate, command, files):
+def targeted_argv(run, candidate, command, files, gradle=None):
     """Keep trusted runner options; replace positional test paths with exact files."""
     if not files:
         return command.argv
     cwd = PurePosixPath(command.working_directory)
+    gradle_command = gradle is not None and java_tool(command) == "gradle"
+    suffixes = (
+        SOURCE_DIRS.keys()
+        if gradle_command
+        else {".py", ".js", ".mjs", ".cjs", ".ts", ".tsx", ".jsx"}
+    )
+    classes = []
+    module = gradle.command_directory(command) if gradle_command else cwd
     for name in files:
         path = PurePosixPath(name)
         if (
             not re.fullmatch(r"[A-Za-z0-9_./-]+", name)
             or path.is_absolute()
             or ".." in path.parts
+            or gradle_command
+            and name != path.as_posix()
             or name.startswith("-")
-            or path.suffix not in {".py", ".js", ".mjs", ".cjs", ".ts", ".tsx", ".jsx"}
+            or path.suffix not in suffixes
         ):
             raise PipelineError("test target must be an exact relative test file")
         content = candidate_file(run, candidate, str(cwd / path))
         if not content:
             raise PipelineError("test target is empty")
+        if gradle_command:
+            source = cwd / path
+            if not source.is_relative_to(module):
+                raise PipelineError("Gradle test file must belong to the selected module")
+            classes.append(gradle_target_class(source.relative_to(module), content))
+    if gradle_command:
+        if len(classes) != len(set(classes)):
+            raise PipelineError("Gradle test targets must name distinct classes")
+        argv = gradle.task_argv(command, "test")
+        if argv is None:
+            raise PipelineError(
+                "Gradle class targeting requires one test task without existing filters"
+            )
+        return argv + [arg for name in classes for arg in ("--tests", name)]
     argv = list(command.argv)
     manager = Path(argv[0]).name
     exec_prefix = []
@@ -167,32 +200,7 @@ def targeted_argv(run, candidate, command, files):
     return exec_prefix + result
 
 
-def model_selection(run, candidate, paths, plan=None, input_error=None):
-    tests = run_test_policy(run)
-    if input_error:
-        raise PipelineError(
-            "cannot analyze cumulative changes; refusing automatic full test fallback"
-        )
-    if plan is None:
-        return {
-            "selector_version": 2,
-            "included": [],
-            "changed_files": sorted(paths),
-            "available_commands": {
-                key: value.model_dump() for key, value in tests.commands.items()
-            },
-            "instructions": "Analyze cumulative diff, callers, dependencies and tests. Supply test_plan with command_id, files (relative to command working_directory), reason. No static mapping required. Use exact test files; files=[] expands one command only with a concrete reason. Cover every criterion and changed behavior. Mandatory checks/regressions remain host-owned.",
-        }
-    targets = [TestTarget.model_validate(item) for item in plan]
-    if any(not item.reason.strip() or len(item.files) != len(set(item.files)) for item in targets):
-        raise PipelineError("test targets require a reason and unique files")
-    ids = [item.command_id for item in targets]
-    if not targets or len(ids) != len(set(ids)) or not set(ids) <= set(tests.commands):
-        raise PipelineError("automatic test plan requires unique configured command IDs")
-    if not any(tests.commands[key].kind == "test" for key in ids):
-        raise PipelineError("automatic test plan must execute real tests")
-    chosen = set(ids) | {key for key, command in tests.commands.items() if command.kind == "check"}
-    policy = tests.affected
+def command_dependencies(chosen, policy):
     if policy:
         chosen |= set(policy.required_commands)
         while True:
@@ -202,6 +210,79 @@ def model_selection(run, candidate, paths, plan=None, input_error=None):
             if expanded == chosen:
                 break
             chosen = expanded
+    return chosen
+
+
+def mandatory_checks(tests, paths, gradle):
+    checks = {key for key, command in tests.commands.items() if command.kind == "check"}
+    if gradle is None:
+        return checks
+    policy = tests.affected
+    affected_modules = gradle.affected_modules(tests.commands.values(), paths)
+    if affected_modules is None or (
+        policy
+        and any(fnmatchcase(path, pattern) for path in paths for pattern in policy.global_paths)
+    ):
+        return checks
+    return {
+        key
+        for key in checks
+        if java_tool(tests.commands[key]) != "gradle"
+        or gradle.command_directory(tests.commands[key]) in affected_modules
+        or (
+            policy
+            and any(
+                fnmatchcase(path, pattern)
+                for path in paths
+                for pattern in policy.inputs.get(key, [])
+            )
+        )
+    }
+
+
+def model_selection(run, candidate, paths, plan=None, input_error=None):
+    tests = run_test_policy(run)
+    if input_error:
+        raise PipelineError(
+            "cannot analyze cumulative changes; refusing automatic full test fallback"
+        )
+    version = run.get("test_selection_contract", 2)
+    gradle = (
+        GradleSelection(run, candidate)
+        if version == AUTOMATIC_TEST_CONTRACT
+        and any(java_tool(c) == "gradle" for c in tests.commands.values())
+        else None
+    )
+    policy = tests.affected
+    checks = mandatory_checks(tests, paths, gradle)
+    if plan is None:
+        pending = {
+            "selector_version": version,
+            "included": [],
+            "changed_files": sorted(paths),
+            "available_commands": {
+                key: value.model_dump() for key, value in tests.commands.items()
+            },
+            "instructions": "Analyze cumulative diff, callers, dependencies and tests. Supply test_plan with command_id, files (relative to command working_directory), reason. No static mapping required. Use exact test files; files=[] expands one command only with a concrete reason. Cover every criterion and changed behavior. Mandatory checks/regressions remain host-owned.",
+        }
+        if version == AUTOMATIC_TEST_CONTRACT:
+            pending["mandatory_command_ids"] = sorted(command_dependencies(checks, policy))
+            pending["instructions"] += (
+                " For Gradle, supply exact Java, Kotlin or Groovy class files under src/test. "
+                "The host scopes supported test tasks to the selected classes and includes Gradle "
+                "build checks for affected modules. Include mandatory_command_ids and any configured "
+                "dependents of your selected commands."
+            )
+        return pending
+    targets = [TestTarget.model_validate(item) for item in plan]
+    if any(not item.reason.strip() or len(item.files) != len(set(item.files)) for item in targets):
+        raise PipelineError("test targets require a reason and unique files")
+    ids = [item.command_id for item in targets]
+    if not targets or len(ids) != len(set(ids)) or not set(ids) <= set(tests.commands):
+        raise PipelineError("automatic test plan requires unique configured command IDs")
+    if not any(tests.commands[key].kind == "test" for key in ids):
+        raise PipelineError("automatic test plan must execute real tests")
+    chosen = command_dependencies(set(ids) | checks, policy)
     commands, decisions = {}, {}
     by_id = {item.command_id: item for item in targets}
     for key in sorted(chosen):
@@ -212,7 +293,16 @@ def model_selection(run, candidate, paths, plan=None, input_error=None):
         # Required regression commands cannot be narrowed by a model.
         if item and item.files and policy and key in policy.required_commands:
             raise PipelineError("required regression command must run unfiltered")
-        argv = targeted_argv(run, candidate, command, item.files) if item else command.argv
+        argv = command.argv
+        if item and item.files:
+            argv = targeted_argv(run, candidate, command, item.files, gradle)
+        elif (
+            gradle
+            and java_tool(command) == "gradle"
+            and not (policy and key in policy.required_commands)
+        ):
+            task = "assemble" if command.kind == "check" else "test"
+            argv = gradle.task_argv(command, task) or argv
         commands[key] = command.model_copy(update={"argv": argv}).model_dump()
         decisions[key] = (
             item.reason + " 대상: " + (", ".join(item.files) if item.files else "명령 전체")
@@ -220,12 +310,17 @@ def model_selection(run, candidate, paths, plan=None, input_error=None):
             else "필수 정적 검사·회귀·의존 명령입니다."
         )
     for key in set(tests.commands) - chosen:
-        decisions[key] = "모델이 누적 변경·의존 관계·인수 조건을 분석해 실행 대상에서 제외했습니다."
+        command = tests.commands[key]
+        decisions[key] = (
+            "누적 변경의 Gradle 모듈과 프로젝트 검증 정책에 연결되지 않아 제외했습니다."
+            if gradle and command.kind == "check" and java_tool(command) == "gradle"
+            else "모델이 누적 변경·의존 관계·인수 조건을 분석해 실행 대상에서 제외했습니다."
+        )
     broad = any(
         not item.files and tests.commands[item.command_id].kind == "test" for item in targets
     )
     value = {
-        "selector_version": 2,
+        "selector_version": version,
         "input_error": None,
         "requested_scope": "affected",
         "actual_scope": "full"

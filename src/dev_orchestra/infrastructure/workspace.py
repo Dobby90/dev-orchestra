@@ -526,6 +526,7 @@ class WorkspaceSession:
         return select_tests(self.store.get(self.run_id), self.root, self.git.sha())
 
     def run_tests(self, command_ids, test_plan=None, commit_message=""):
+        from dev_orchestra.application.automatic_tests import automatic
         from dev_orchestra.application.test_selection import select_tests, selected_config
         from dev_orchestra.infrastructure.test_runner import TestRunner
 
@@ -555,7 +556,7 @@ class WorkspaceSession:
             if test_plan is not None
             else None,
         )
-        if selection.get("selector_version") == 2 and "selection_hash" not in selection:
+        if automatic(run) and "selection_hash" not in selection:
             raise PipelineError("automatic test selection requires test_plan")
         if set(command_ids) != set(selection["included"]) or len(command_ids) != len(
             set(command_ids)

@@ -9,6 +9,11 @@ from pathlib import Path
 from time import monotonic
 
 from dev_orchestra.agents.contracts import ResponseError, validate_role
+from dev_orchestra.application.automatic_tests import (
+    AUTOMATIC_TEST_CONTRACTS,
+    automatic,
+    command_dependencies,
+)
 from dev_orchestra.application.errors import ApplicationError
 from dev_orchestra.application.handoff import repository_identity, same_repository
 from dev_orchestra.application.projects import ProjectService, verify_registered_directory
@@ -391,7 +396,7 @@ class Runner:
                     "base_sha": run["base_sha"],
                     "test_paths": config.tests.write_paths,
                     "test_scope": run.get("test_scope", "full"),
-                    "automatic_test_selection": run.get("test_selection_contract") == 2,
+                    "automatic_test_selection": automatic(run),
                     "test_commands": {k: v.model_dump() for k, v in config.tests.commands.items()},
                     "approved_test_changes": run.get("test_change_approvals", []),
                     "test_change_records": run.get("test_change_records", []),
@@ -478,7 +483,7 @@ class Runner:
                         request.context["response_contract"]["checkpoint_tool"] = (
                             "workspace.checkpoint_commit"
                         )
-                if role == "tester" and run.get("test_selection_contract") == 2:
+                if role == "tester" and automatic(run):
                     request.context["response_contract"].pop("command_ids", None)
                     request.context["response_contract"]["available_command_ids"] = list(
                         config.tests.commands
@@ -753,7 +758,10 @@ class Runner:
                     if request.role == "tester":
                         request.context["test_selection"] = session.test_policy()
                         policy = request.context["test_selection"]
-                        if policy.get("selection_hash") or policy.get("selector_version") != 2:
+                        if (
+                            policy.get("selection_hash")
+                            or policy.get("selector_version") not in AUTOMATIC_TEST_CONTRACTS
+                        ):
                             request.context["response_contract"]["command_ids"] = policy["included"]
                         else:
                             request.context["response_contract"].pop("command_ids", None)
@@ -840,30 +848,21 @@ class Runner:
     @staticmethod
     def validate_test_result(run, result, config, selection=None):
         if run.get("test_selection_contract") == 2 and not (selection or {}).get("selection_hash"):
-            plan_ids = [item.command_id for item in result.test_plan]
+            plan_ids = {item.command_id for item in result.test_plan}
             if (
                 not plan_ids
-                or len(plan_ids) != len(set(plan_ids))
-                or not set(plan_ids) <= set(config.tests.commands)
+                or len(plan_ids) != len(result.test_plan)
+                or not plan_ids <= set(config.tests.commands)
                 or any(not item.reason.strip() for item in result.test_plan)
             ):
                 raise ResponseError(
                     "automatic tester requires a unique configured test_plan with reasons"
                 )
-            ids = {item.command_id for item in result.test_plan}
-            ids |= {key for key, cmd in config.tests.commands.items() if cmd.kind == "check"}
-            if config.tests.affected:
-                ids |= set(config.tests.affected.required_commands)
-                while True:
-                    expanded = ids | {
-                        key
-                        for key, deps in config.tests.affected.dependencies.items()
-                        if set(deps) & ids
-                    }
-                    if expanded == ids:
-                        break
-                    ids = expanded
+            checks = {key for key, cmd in config.tests.commands.items() if cmd.kind == "check"}
+            ids = command_dependencies(plan_ids | checks, config.tests.affected)
         else:
+            if automatic(run) and not (selection or {}).get("selection_hash"):
+                raise ResponseError("automatic tester requires finalized host test selection")
             ids = set(selection["included"]) if selection else set(config.tests.commands)
         reported_ids = ids
         if set(result.command_ids) != reported_ids or len(result.command_ids) != len(reported_ids):

@@ -4,6 +4,7 @@ import uuid
 from pathlib import Path
 
 from dev_orchestra.application.approvals import ApprovalService
+from dev_orchestra.application.automatic_tests import AUTOMATIC_TEST_CONTRACT
 from dev_orchestra.application.contracts import CreateRun, RepositoryInfo
 from dev_orchestra.application.events import EventService
 from dev_orchestra.application.execution import ExecutionService
@@ -95,7 +96,9 @@ class RunService:
         data = {
             "repository_identity": repository_identity(repo),
             "test_scope": command.test_scope,
-            "test_selection_contract": 2 if command.test_scope == "affected" else 1,
+            "test_selection_contract": AUTOMATIC_TEST_CONTRACT
+            if command.test_scope == "affected"
+            else 1,
             "execution_contract": self.default_execution_contract(),
             "id": run_id,
             "name": command.name or run_id,
