@@ -38,6 +38,7 @@ export function eventLog(event: RunEvent): Log | null {
 export type Connection = "connecting" | "live" | "reconnecting";
 const kinds = [
   "state.changed",
+  "preparation.progress",
   "issue.assessed",
   "issue.disposition",
   "changes.requested",
@@ -116,6 +117,7 @@ export function useRunEvents(rid: string) {
     let pendingBytes = 0,
       pendingRemoved = 0;
     let invalidate: ReturnType<typeof setTimeout> | undefined;
+    let refreshEvidence = false;
     const change = (value: Connection) => {
       current = value;
       if (!disposed) setConnection(value);
@@ -139,17 +141,20 @@ export function useRunEvents(rid: string) {
         }
       } else {
         if (event.kind.endsWith(".unavailable")) setUnavailable(true);
+        if (event.kind !== "preparation.progress") refreshEvidence = true;
         if (!invalidate)
           invalidate = setTimeout(() => {
             invalidate = undefined;
             if (!disposed) {
               client.invalidateQueries({ queryKey: ["run", rid] });
-              client.invalidateQueries({ queryKey: ["steps", rid] });
               client.invalidateQueries({ queryKey: ["runs"] });
               client.invalidateQueries({ queryKey: ["dashboard"] });
-              ["tests", "reviews", "changes", "report"].forEach((key) =>
-                client.invalidateQueries({ queryKey: [key, rid] }),
-              );
+              if (refreshEvidence) {
+                ["steps", "tests", "reviews", "changes", "report"].forEach(
+                  (key) => client.invalidateQueries({ queryKey: [key, rid] }),
+                );
+                refreshEvidence = false;
+              }
             }
           }, 200);
       }

@@ -1395,6 +1395,17 @@ export interface components {
              */
             push_permission: "unknown";
         };
+        /** GradlePreparation */
+        GradlePreparation: {
+            /** Total */
+            total: number;
+            /** Checked */
+            checked: number;
+            /** Reused */
+            reused: number;
+            /** Active */
+            active: boolean;
+        };
         /** HTTPValidationError */
         HTTPValidationError: {
             /** Detail */
@@ -1908,6 +1919,7 @@ export interface components {
             iteration: number;
             /** Current Role */
             current_role?: string | null;
+            gradle_preparation?: components["schemas"]["GradlePreparation"] | null;
             /** Control */
             control?: ("cancel" | "pause") | null;
             handoff?: components["schemas"]["LocalHandoffView"] | null;
@@ -2023,6 +2035,7 @@ export interface components {
             iteration: number;
             /** Current Role */
             current_role?: string | null;
+            gradle_preparation?: components["schemas"]["GradlePreparation"] | null;
             /** Control */
             control?: ("cancel" | "pause") | null;
         };

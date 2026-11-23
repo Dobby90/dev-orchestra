@@ -247,7 +247,7 @@ function RunDetailBody({ rid }: { rid: string }) {
         작업 목록으로
       </Link>
       <Heading eyebrow="WORKSPACE / RUN DETAIL" title={r.name || rid}>
-        <Status state={r.state} large />
+        <Status state={r.state} preparation={r.gradle_preparation} large />
       </Heading>
       <div className="run-identity">
         <p className="subtle">

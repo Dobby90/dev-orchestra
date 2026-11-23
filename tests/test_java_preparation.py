@@ -1,5 +1,6 @@
 """Java readiness must precede model work and preserve source, policy and host caches."""
 
+import os
 from pathlib import Path
 from unittest.mock import Mock
 
@@ -11,9 +12,10 @@ from test_workflow import service as service
 from dev_orchestra.config import TestCommand as Command
 from dev_orchestra.config import Tests as Commands
 from dev_orchestra.domain.models import PipelineError, StopRequested
-from dev_orchestra.infrastructure import java, java_native, test_runner
+from dev_orchestra.infrastructure import java, java_cache, java_native, test_runner
 from dev_orchestra.infrastructure.dependencies import prepare_dependencies
 from dev_orchestra.infrastructure.git import Git
+from dev_orchestra.infrastructure.gradle_preparation import ModuleProgress, observe_preparation
 from dev_orchestra.infrastructure.test_runner import TestRunner
 from dev_orchestra.orchestration.runner import Runner
 
@@ -272,7 +274,7 @@ def gradle_pair(service, tmp_path, jdk, monkeypatch):
     return repo, cfg
 
 
-def test_gradle_pair_prepares_once_per_pass_and_executes_both_commands(
+def test_gradle_pair_reuses_successful_preparation_and_executes_both_commands(
     gradle_pair, tmp_path, monkeypatch
 ):
     repo, cfg = gradle_pair
@@ -290,19 +292,186 @@ esac
     )
     probes = []
     mock_tools(monkeypatch, probes)
-    seed = Mock(wraps=java.seed_cache)
-    monkeypatch.setattr(java, "seed_cache", seed)
     runner = TestRunner()
-    for passes in (1, 2):
+    progress = []
+    with observe_preparation(progress.append):
         runner.prepare(repo, cfg, tmp_path / "preflight")
-        assert [argv[-1] for argv, _ in probes] == ["-version", "--version"] * passes
-        assert seed.call_count == 2 * passes  # One dependency cache and one wrapper distribution.
+        assert progress[-1] == dict(total=1, checked=1, reused=0, active=True)
+        TestRunner().prepare(repo, cfg, tmp_path / "preflight")
+        assert progress[-1] == dict(total=1, checked=0, reused=1, active=True)
+    assert [argv[-1] for argv, _ in probes] == ["-version", "--version"]
 
     monkeypatch.setattr(test_runner, "sandbox_command", lambda w, o, s, argv, network: argv)
     results = runner.run(repo, cfg, tmp_path / "results")["commands"]
     assert [(r["command_id"], r["exit_code"]) for r in results] == [("java", 0), ("build", 7)]
     assert results[0]["passed"] and results[0]["junit_hash"]
     assert not results[1]["passed"] and results[1]["junit_path"] is None
+
+
+def test_gradle_modules_share_private_seed_and_only_recheck_changed_cache(
+    service, tmp_path, jdk, monkeypatch
+):
+    _, _, repo = service
+    wrapper(repo, "gradle")
+    commit_files(
+        repo,
+        {
+            "settings.gradle": 'includeBuild("build-logic")\ninclude("a", "b")\n',
+            "a/build.gradle": "",
+            "b/build.gradle": "",
+            "build-logic/build.gradle": "",
+        },
+    )
+    cfg = Commands()
+    for name in ("a", "b", "build-logic"):
+        module = java_config("gradle", directory=name)
+        cfg.output_paths.extend(module.output_paths)
+        command = module.commands["java"]
+        command.argv[0] = "../gradlew"
+        cfg.commands[name] = command
+    artifact = Path("caches/modules-2/files-2.1/org/lib/1/hash/lib.jar")
+    host = tmp_path / "host"
+    (host / artifact).parent.mkdir(parents=True)
+    (host / artifact).write_bytes(b"fixture")
+    monkeypatch.setattr(java, "host_cache", lambda _: host)
+    probes = []
+    mock_tools(monkeypatch, probes)
+    preflight = tmp_path / "preflight"
+    progress = []
+    with observe_preparation(progress.append):
+        java.prepare_java(repo, cfg, preflight)
+        assert progress[-1]["checked"] == 3
+        seeds = list((preflight / "gradle-seeds").glob("*/" + str(artifact)))
+        assert len(seeds) == 2
+        copies = [repo / name / ".devorchestra-cache/gradle" / artifact for name in cfg.commands]
+        assert len({f.stat().st_ino for f in [host / artifact, *seeds, *copies]}) == 6
+        assert all(file.stat().st_mode & 0o222 == 0 for file in seeds)
+        copies[0].unlink()
+        java.prepare_java(repo, cfg, preflight)
+    assert copies[0].read_bytes() == b"fixture"
+    assert len(probes) == 8
+    assert progress[-1] == dict(total=3, checked=1, reused=2, active=True)
+
+
+def test_failed_gradle_check_does_not_issue_reusable_evidence(gradle_pair, tmp_path, monkeypatch):
+    repo, cfg = gradle_pair
+    preflight = tmp_path / "preflight"
+    mock_tools(monkeypatch, [], fails=True)
+    with pytest.raises(PipelineError, match="bootstrap failed"):
+        java.prepare_java(repo, cfg, preflight)
+    assert not list(preflight.glob("gradle-readiness/*.json"))
+    probes = []
+    mock_tools(monkeypatch, probes)
+    java.prepare_java(repo, cfg, preflight)
+    (repo / "gradlew").write_text("#!/bin/sh\nexit 1\n")
+    java.prepare_java(repo, cfg, preflight)
+    assert len(probes) == 4
+
+
+def test_same_path_jdk_replacement_invalidates_readiness(gradle_pair, jdk, tmp_path, monkeypatch):
+    repo, cfg = gradle_pair
+    module = jdk / "lib/modules"
+    module.parent.mkdir()
+    module.write_bytes(b"before")
+    probes = []
+    mock_tools(monkeypatch, probes)
+    preflight = tmp_path / "preflight"
+    java.prepare_java(repo, cfg, preflight)
+    original = module.stat()
+    module.with_suffix(".new").write_bytes(b"change")
+    module.with_suffix(".new").replace(module)
+    os.utime(module, ns=(original.st_atime_ns, original.st_mtime_ns))
+    java.prepare_java(repo, cfg, preflight)
+    java.prepare_java(repo, cfg, preflight)
+    assert len(probes) == 4
+
+
+def test_installed_gradle_library_change_rechecks_launcher(gradle_pair, tmp_path, monkeypatch):
+    repo, cfg = gradle_pair
+    install = tmp_path / "gradle"
+    (install / "bin").mkdir(parents=True)
+    (install / "lib").mkdir()
+    binary = install / "bin/gradle"
+    binary.write_text("#!/bin/sh\nexit 0\n")
+    binary.chmod(0o755)
+    library = install / "lib/gradle-launcher-8.jar"
+    library.write_text("gradle")
+    monkeypatch.setenv("PATH", str(binary.parent) + os.pathsep + os.environ["PATH"])
+    for command in cfg.commands.values():
+        command.argv[0] = "gradle"
+    probes = []
+    mock_tools(monkeypatch, probes)
+    preflight = tmp_path / "preflight"
+    java.prepare_java(repo, cfg, preflight)
+    java.prepare_java(repo, cfg, preflight)
+    library.write_text("updated")
+    java.prepare_java(repo, cfg, preflight)
+    assert len(probes) == 4
+
+
+def test_cancel_during_seed_copy_can_retry_cleanly(gradle_pair, tmp_path, monkeypatch):
+    repo, cfg = gradle_pair
+    artifact = tmp_path / "host/caches/modules-2/lib.jar"
+    artifact.parent.mkdir(parents=True)
+    artifact.write_bytes(b"fixture" * 200000)
+    copy = java_cache.copy_artifact
+    copying = False
+
+    def interrupted_copy(*args, **kwargs):
+        nonlocal copying
+        copying = True
+        return copy(*args, **kwargs)
+
+    monkeypatch.setattr(java_cache, "copy_artifact", interrupted_copy)
+    probes = []
+    mock_tools(monkeypatch, probes)
+    preflight = tmp_path / "preflight"
+    with pytest.raises(StopRequested):
+        java.prepare_java(repo, cfg, preflight, lambda: "cancel" if copying else None)
+    assert not list((preflight / "gradle-seeds").iterdir())
+    assert not list(preflight.glob("gradle-readiness/*.json"))
+    assert not probes
+    java.prepare_java(repo, cfg, preflight)
+    assert len(probes) == 2
+    assert (
+        repo / ".devorchestra-cache/gradle/caches/modules-2/lib.jar"
+    ).read_bytes() == artifact.read_bytes()
+
+
+def test_resumed_preparation_reports_progress_and_polls_only_control(service, monkeypatch):
+    svc, rid, _ = service
+    store = svc.store
+    store.update(rid, next_role="developer")
+    run = store.get(rid)
+    monkeypatch.setattr("dev_orchestra.orchestration.runner.monotonic", lambda: 100.0)
+
+    class Preparing:
+        def prepare(self, worktree, config, directory, stop):
+            assert store.get(rid)["state"] == "preparing"
+            modules = ModuleProgress(["a", "b"])
+            version = store.get(rid)["version"]
+            for _ in range(50):
+                assert stop() is None
+            modules.complete("a")
+            modules.complete("b", checked=True)
+            assert store.get(rid)["version"] == version
+            assert store.get(rid)["gradle_preparation"]["reused"] == 1
+
+    worker = Runner(store, None, Preparing())
+
+    def resume(run_id):
+        poll = Mock(wraps=store.read_control)
+        monkeypatch.setattr(store, "read_control", poll)
+        worker._prepare(
+            run_id, Path(run["worktree"]), svc.config.tests, Path(run["directory"]) / "preflight"
+        )
+        assert poll.call_count == 2
+        store.update(run_id, "developing")
+
+    monkeypatch.setattr(worker, "_execute", resume)
+    worker.execute(rid)
+    assert store.get(rid)["state"] == "developing"
+    assert not store.get(rid)["gradle_preparation"]["active"]
 
 
 @pytest.mark.parametrize(

@@ -1,3 +1,4 @@
+import { Status } from "../src/components/common";
 import { render, screen } from "@testing-library/react";
 import { expect, it } from "vitest";
 import { RunHandoffPanel } from "../src/components/RunHandoffPanel";
@@ -81,3 +82,17 @@ it.each(["metadata", "same_role"] as const)(
     ).toBeVisible();
   },
 );
+
+it("Gradle 환경 준비와 실제 점검·재사용 개수를 구분한다", () => {
+  const preparation = { total: 23, checked: 2, reused: 3, active: true };
+  const { rerender } = render(
+    <Status state="preparing" preparation={preparation} />,
+  );
+  expect(screen.getByText("Gradle 환경 준비 중 · 5/23")).toBeVisible();
+  rerender(<Status state="queued" />);
+  expect(screen.getByText("실행 대기")).toBeVisible();
+  rerender(
+    <RunHandoffPanel run={{ ...run, gradle_preparation: preparation }} />,
+  );
+  expect(screen.getByText(/기존 결과 사용 3개 · 점검 완료 2개/)).toBeVisible();
+});

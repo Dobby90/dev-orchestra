@@ -107,6 +107,22 @@ class Store:
             "version": row["version"],
         }
 
+    def read_control(self, run_id):
+        with self.connection() as db:
+            row = db.execute("SELECT control FROM runs WHERE id=?", (run_id,)).fetchone()
+        if row is None:
+            raise PipelineError(f"unknown run: {run_id}")
+        return row[0]
+
+    def gradle_progress(self, run_id, progress):
+        # Progress is observational. It must not invalidate a pending pause/cancel version.
+        with self.connection() as db:
+            db.execute(
+                "UPDATE runs SET data=json_set(data,'$.gradle_preparation',json(?)) WHERE id=?",
+                (json.dumps(progress), run_id),
+            )
+            self._event(db, run_id, "preparation.progress", progress)
+
     def list(self):
         with self.connection() as db:
             return [
@@ -129,6 +145,8 @@ class Store:
             if json.loads(row["data"]).get("deletion_pending"):
                 raise PipelineError("run deletion is pending; retry deletion")
             target = state or row["state"]
+            if state and data.get("gradle_preparation"):
+                data["gradle_preparation"]["active"] = False
             State(target)
             active = {
                 "queued",
@@ -162,7 +180,7 @@ class Store:
                 if row["state"] in active
                 else set()
             )
-            if row["state"] == "queued":
+            if row["state"] in {"queued", "preparing"}:
                 resume_target = {
                     "planner": "planning",
                     "developer": "developing",
@@ -170,7 +188,11 @@ class Store:
                     "reviewer": "reviewing",
                     "fixer": "fixing",
                     "done": "reporting",
-                }.get(data.get("next_role"))
+                }.get(
+                    json.loads(row["data"]).get("next_role")
+                    if row["state"] == "preparing"
+                    else data.get("next_role")
+                )
                 if resume_target:
                     allowed.add(resume_target)
             if (

@@ -10,6 +10,18 @@ from urllib.parse import urlsplit
 
 from dev_orchestra.domain.models import PipelineError, StopRequested
 from dev_orchestra.infrastructure.files import contained, relative_path
+from dev_orchestra.infrastructure.gradle_preparation import (
+    ModuleProgress,
+    ReadinessRecord,
+    readiness_binding,
+)
+from dev_orchestra.infrastructure.java_cache import (
+    GradleSeeds,
+    cache_identity,
+    check_stop,
+    fingerprint,
+    seed_cache,
+)
 from dev_orchestra.infrastructure.process import environment, execute, sanitize
 from dev_orchestra.infrastructure.test_runner import sandbox_command
 
@@ -252,68 +264,6 @@ def java_environment(worktree, command):
     return env
 
 
-def check_stop(stop):
-    if value := stop():
-        raise StopRequested(value)
-
-
-def seed_cache(source, target, stop):
-    """Copy regular artifacts only; never share writable inodes or user settings."""
-    if not source.is_dir() or source.is_symlink():
-        return
-    if source.resolve() == target.resolve():
-        return
-    if target.resolve().is_relative_to(source.resolve()) or source.resolve().is_relative_to(
-        target.resolve()
-    ):
-        raise PipelineError("source and isolated Java caches must not overlap")
-    count, size = 0, 0
-    for parent, dirs, files in os.walk(source, followlinks=False):
-        check_stop(stop)
-        dirs[:] = [
-            name
-            for name in dirs
-            if not name.startswith(".") and not (Path(parent) / name).is_symlink()
-        ]
-        for name in files:
-            check_stop(stop)
-            src = Path(parent) / name
-            if (
-                src.is_symlink()
-                or not src.is_file()
-                or name.startswith(".env")
-                or name
-                in {"settings.xml", "settings-security.xml", "gradle.properties", "gc.properties"}
-                or src.suffix in {".lock", ".lck", ".key", ".pem", ".part", ".lastUpdated"}
-            ):
-                continue
-            dst = target / src.relative_to(source)
-            if any(p.is_symlink() for p in [dst, *dst.parents]):
-                raise PipelineError("symlink Java cache paths are not allowed")
-            if dst.exists():
-                continue
-            before = src.stat()
-            count += 1
-            size += before.st_size
-            if count > 100000 or size > 4 * 2**30:
-                raise PipelineError("Java cache seeding exceeds safety limit")
-            dst.parent.mkdir(parents=True, exist_ok=True)
-            fd, name = tempfile.mkstemp(prefix=".seed-", dir=dst.parent)
-            temp = Path(name)
-            try:
-                with os.fdopen(fd, "wb") as output, src.open("rb") as input_file:
-                    while chunk := input_file.read(2**20):
-                        check_stop(stop)
-                        output.write(chunk)
-                after = src.stat()
-                if (before.st_size, before.st_mtime_ns) != (after.st_size, after.st_mtime_ns):
-                    raise PipelineError("host Java cache changed during copy; retry preparation")
-                temp.chmod(before.st_mode & 0o755)
-                temp.replace(dst)
-            finally:
-                temp.unlink(missing_ok=True)
-
-
 def host_cache(tool):
     value = os.environ.get("MAVEN_USER_HOME" if tool == "maven" else "GRADLE_USER_HOME")
     return (
@@ -434,8 +384,18 @@ def prepare_java(worktree, config, directory, stop=lambda: None):
     from dev_orchestra.infrastructure.git import Git
     from dev_orchestra.infrastructure.java_native import declarations, prepare_native_tools
 
-    tracked = [name for name in Git(worktree).call("ls-files", "-z").split("\0") if name]
-    prepared_gradle = {}
+    git = Git(worktree, config.output_paths)
+    tracked = [name for name in git.call("ls-files", "-z").split("\0") if name]
+    gradle_dirs = [c.working_directory for _, c in commands if java_tool(c) == "gradle"]
+    progress = ModuleProgress(gradle_dirs)
+    seeds = GradleSeeds(directory)
+    clean_sha = None
+    if gradle_dirs and not git.dirty() and not git.call("diff", "--name-only", "HEAD"):
+        clean_sha = git.sha()
+    policy = fingerprint(config.model_dump(mode="json")) if gradle_dirs else None
+    prepared_gradle = set()
+    tool_stamps = {}
+    native_entries = None
     for key, command in commands:
         check_stop(stop)
         try:
@@ -456,13 +416,13 @@ def prepare_java(worktree, config, directory, stop=lambda: None):
                 return None
 
             required = project_jdk(read, command.working_directory)
-            if (
-                tool == "gradle"
-                and required
-                and has_toolchain(read, command.working_directory)
-                and required not in local_jdks().values()
-            ):
-                raise PipelineError(f"JDK toolchain {required} unavailable; install it and resume")
+            toolchains = []
+            if tool == "gradle" and required and has_toolchain(read, command.working_directory):
+                toolchains = [path for path, version in local_jdks().items() if version == required]
+                if not toolchains:
+                    raise PipelineError(
+                        f"JDK toolchain {required} unavailable; install it and resume"
+                    )
             jdk = command.env.get("JAVA_HOME") or choose_project_jdk(
                 read, command.working_directory, tool
             )
@@ -492,7 +452,9 @@ def prepare_java(worktree, config, directory, stop=lambda: None):
                 executable = Path(os.path.normpath(cwd / executable))
                 executable = contained(worktree, executable.relative_to(worktree).as_posix())
                 distribution = wrapper_distribution(executable.parent, tool)
-            elif not shutil.which(command.argv[0]):
+            elif binary := shutil.which(command.argv[0]):
+                executable = Path(binary)
+            else:
                 raise PipelineError(
                     f"{command.argv[0]} not installed; use the project's Wrapper or install the build tool"
                 )
@@ -512,7 +474,7 @@ def prepare_java(worktree, config, directory, stop=lambda: None):
                 outputs.append(path)
             launcher = runtime_argv[: 2 if runtime_argv[0] == "/bin/sh" else 1]
             if tool == "gradle":
-                # Cache only within this preparation pass, after validating each command's policy.
+                # Validate each command before consulting either level of readiness records.
                 gradle_environment = (
                     cwd,
                     tuple(launcher),
@@ -528,29 +490,71 @@ def prepare_java(worktree, config, directory, stop=lambda: None):
                         command,
                         directory,
                         stop,
-                        entries=prepared_gradle[gradle_environment],
+                        entries=native_entries,
                     )
+                    progress.complete(command.working_directory)
                     continue
-            cache = outputs[0]
-            source = host_cache(tool) / ("repository" if tool == "maven" else "caches/modules-2")
-            seed_cache(source, cache if tool == "maven" else cache / "caches/modules-2", stop)
-            if distribution:
-                host_dists = host_cache(tool) / "wrapper/dists"
-                # Maven's script-only Wrapper omits -bin in its cache directory name.
-                names = (
-                    {distribution, distribution.removesuffix("-bin")}
-                    if tool == "maven"
-                    else {distribution}
-                )
-                for name in names:
-                    seed_cache(host_dists / name, cache / "wrapper/dists" / name, stop)
+                binding = None
+                if clean_sha:
+                    tools = [home, *toolchains]
+                    if executable.name != "gradlew":
+                        lib = executable.resolve().parent.parent / "lib"
+                        # A custom launcher may delegate to an installation we cannot identify.
+                        if any(lib.glob("gradle-launcher-*.jar")):
+                            tools.append(lib)
+                        else:
+                            tools = []
+                    for path in tools:
+                        if path not in tool_stamps:
+                            tool_stamps[path] = cache_identity(
+                                [path.resolve()], stop, toolchain=True
+                            )
+                    if tools and all(tool_stamps[path] for path in tools):
+                        binding = readiness_binding(
+                            worktree,
+                            cwd,
+                            executable,
+                            clean_sha,
+                            policy,
+                            [tool_stamps[path] for path in tools],
+                            java_environment(worktree, command),
+                            required,
+                        )
+                record = ReadinessRecord(directory, gradle_environment, binding)
+                reused = record.matches(outputs, stop)
+                if not reused:
+                    seeds.populate(
+                        worktree,
+                        cwd,
+                        executable,
+                        home,
+                        distribution,
+                        host_cache(tool),
+                        outputs[0],
+                        stop,
+                    )
+            else:
+                cache = outputs[0]
+                seed_cache(host_cache(tool) / "repository", cache, stop)
+                if distribution:
+                    # Maven's script-only Wrapper omits -bin in its cache directory name.
+                    for name in {distribution, distribution.removesuffix("-bin")}:
+                        subpath = Path("wrapper/dists") / name
+                        seed_cache(host_cache(tool) / subpath, cache / subpath, stop)
             check_artifacts(
-                cache, lambda name: read(str(PurePosixPath(command.working_directory) / name)), tool
+                outputs[0],
+                lambda name: read(str(PurePosixPath(command.working_directory) / name)),
+                tool,
             )
             directory.mkdir(parents=True, exist_ok=True)
             if tool == "gradle":
-                native_entries = declarations(worktree)
+                if native_entries is None:
+                    native_entries = declarations(worktree)
                 prepare_native_tools(worktree, command, directory, stop, entries=native_entries)
+                if reused:
+                    prepared_gradle.add(gradle_environment)
+                    progress.complete(command.working_directory)
+                    continue
             with tempfile.TemporaryDirectory(prefix="devorchestra-java-") as temp:
                 scratch = Path(temp).resolve()
                 env = environment() | {
@@ -613,7 +617,9 @@ def prepare_java(worktree, config, directory, stop=lambda: None):
                         f"offline {tool} bootstrap failed: {output[-1200:]}; prepare its distribution in the local host cache or this Run's isolated cache and resume"
                     )
             if tool == "gradle":
-                prepared_gradle[gradle_environment] = native_entries
+                record.save(outputs, stop)
+                prepared_gradle.add(gradle_environment)
+                progress.complete(command.working_directory, checked=True)
         except StopRequested:
             raise
         except (PipelineError, OSError, ValueError, ET.ParseError) as error:

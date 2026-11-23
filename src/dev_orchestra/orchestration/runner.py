@@ -6,6 +6,7 @@ import os
 from collections import Counter
 from contextlib import nullcontext
 from pathlib import Path
+from time import monotonic
 
 from dev_orchestra.agents.contracts import ResponseError, validate_role
 from dev_orchestra.application.errors import ApplicationError
@@ -25,6 +26,7 @@ from dev_orchestra.domain.models import AgentRequest, PipelineError, StopRequest
 from dev_orchestra.infrastructure.evidence import checkpoints, verified_candidate
 from dev_orchestra.infrastructure.files import contained, digest, write
 from dev_orchestra.infrastructure.git import Git
+from dev_orchestra.infrastructure.gradle_preparation import observe_preparation
 from dev_orchestra.infrastructure.locking import lock
 from dev_orchestra.infrastructure.process import execution_scope, redact, sanitize
 from dev_orchestra.infrastructure.process_owner import ensure_stopped, identity
@@ -71,6 +73,23 @@ class Runner:
     def __init__(self, store, agent, tests):
         self.store, self.agent, self.tests = store, agent, tests
 
+    def _prepare(self, run_id, worktree, config, directory):
+        next_poll = 0.0
+        action = None
+
+        def stop():
+            nonlocal next_poll, action
+            now = monotonic()
+            if now >= next_poll:
+                action = self.store.read_control(run_id)
+                next_poll = now + 0.2
+            return action
+
+        with observe_preparation(lambda progress: self.store.gradle_progress(run_id, progress)):
+            self.tests.prepare(worktree, config, directory, stop)
+        if action := self.store.read_control(run_id):
+            raise StopRequested(action)
+
     def execute(self, run_id, claim=None):
         run = self.store.get(run_id)
         directory = Path(run["directory"])
@@ -99,7 +118,7 @@ class Runner:
             logger.addHandler(handler)
 
             def stop():
-                return self.store.get(run_id)["control"]
+                return self.store.read_control(run_id)
 
             try:
                 from dev_orchestra.infrastructure.coordination import execution_capacity
@@ -120,6 +139,8 @@ class Runner:
                             raise PipelineError(
                                 "workspace-v2 requires schema 6; run database-upgrade --workspace"
                             )
+                    if run["state"] == "queued":
+                        self.store.update(run_id, "preparing")
                     if hasattr(self.tests, "check_policy"):
                         self.tests.check_policy(Config.model_validate(run["config"]).tests)
                     if hasattr(self.agent, "check"):
@@ -178,7 +199,8 @@ class Runner:
             raise WorkspaceBlocked("recorded workspace is missing; refusing to recreate it")
         # Each repository mutation has an intent in the run record before it is attempted.
         if not worktree.exists():
-            self.store.update(run_id, "preparing")
+            if run["state"] != "preparing":
+                self.store.update(run_id, "preparing")
             original.create(worktree, run["branch"], run["base_sha"])
         git = Git(worktree, configured.tests.output_paths)
         if git.call("branch", "--show-current") != run["branch"]:
@@ -256,12 +278,7 @@ class Runner:
                     return
             if config.tests.commands and hasattr(self.tests, "prepare"):
                 try:
-                    self.tests.prepare(
-                        worktree,
-                        config.tests,
-                        directory / "preflight",
-                        lambda: self.store.get(run_id)["control"],
-                    )
+                    self._prepare(run_id, worktree, config.tests, directory / "preflight")
                     if resumed_workspace:
                         resumed_workspace.guard()
                     elif git.dirty():

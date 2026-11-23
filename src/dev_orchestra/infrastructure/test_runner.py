@@ -18,7 +18,7 @@ from dev_orchestra.infrastructure.process import (
     execution_scope,
     sanitize,
 )
-from dev_orchestra.infrastructure.secret_files import readable_environment_example, secret_path
+from dev_orchestra.infrastructure.secret_files import denied_subpaths
 
 
 def sandbox_command(worktree, outputs, scratch, argv, network="none", *, browser=False):
@@ -62,10 +62,8 @@ def sandbox_command(worktree, outputs, scratch, argv, network="none", *, browser
             profile += '(allow network-bind (local ip "*:*"))'
             profile += '(allow network-inbound (local ip "localhost:*"))'
             profile += '(allow network-outbound (remote ip "localhost:*"))'
-        for item in worktree.rglob("*"):
-            relative = item.relative_to(worktree)
-            if secret_path(relative) and not readable_environment_example(item, relative):
-                profile += "(deny file-read* " + sub(item) + ")"
+        for item in denied_subpaths(worktree):
+            profile += "(deny file-read* " + sub(item) + ")"
         return ["/usr/bin/sandbox-exec", "-p", profile, *argv]
     if platform.system() == "Linux" and shutil.which("bwrap"):
         if network == "loopback":

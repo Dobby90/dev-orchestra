@@ -32,6 +32,13 @@ class ApprovalCommand(Contract):
     expected_sha: str = Field(pattern=r"^(?:[0-9a-f]{40}|[0-9a-f]{64})$")
 
 
+class GradlePreparation(Contract):
+    total: int = Field(ge=0)
+    checked: int = Field(ge=0)
+    reused: int = Field(ge=0)
+    active: bool
+
+
 class RunSummary(Contract):
     schema_version: Literal[1] = 1
     id: str
@@ -49,6 +56,7 @@ class RunSummary(Contract):
     final_sha: str | None = None
     iteration: int = 0
     current_role: str | None = None
+    gradle_preparation: GradlePreparation | None = None
     control: Literal["cancel", "pause"] | None = None
 
     @model_validator(mode="before")

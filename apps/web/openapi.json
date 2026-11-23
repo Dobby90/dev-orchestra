@@ -4254,6 +4254,38 @@
         ],
         "title": "GitTestView"
       },
+      "GradlePreparation": {
+        "properties": {
+          "total": {
+            "type": "integer",
+            "minimum": 0.0,
+            "title": "Total"
+          },
+          "checked": {
+            "type": "integer",
+            "minimum": 0.0,
+            "title": "Checked"
+          },
+          "reused": {
+            "type": "integer",
+            "minimum": 0.0,
+            "title": "Reused"
+          },
+          "active": {
+            "type": "boolean",
+            "title": "Active"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "total",
+          "checked",
+          "reused",
+          "active"
+        ],
+        "title": "GradlePreparation"
+      },
       "HTTPValidationError": {
         "properties": {
           "detail": {
@@ -5745,6 +5777,16 @@
             ],
             "title": "Current Role"
           },
+          "gradle_preparation": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/GradlePreparation"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "control": {
             "anyOf": [
               {
@@ -6095,6 +6137,16 @@
               }
             ],
             "title": "Current Role"
+          },
+          "gradle_preparation": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/GradlePreparation"
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "control": {
             "anyOf": [
