@@ -118,9 +118,9 @@ def test_project_exposes_configured_branch_prefix(web):
 
 def test_default_branch_prefix_applies_to_cli_and_web_preview(web):
     c, svc, rid, repo, _ = web
-    assert svc.store.get(rid)["branch"] == f"feature/{rid}"
+    assert svc.store.get(rid)["branch"] == f"features/{rid}"
     p = project(c, svc, repo)
-    assert p["branch_prefix"] == "feature"
+    assert p["branch_prefix"] == "features"
     url = f"/api/projects/{p['id']}/run-previews"
     proposal = {
         "name": "테스트 작업",
@@ -130,10 +130,10 @@ def test_default_branch_prefix_applies_to_cli_and_web_preview(web):
     response = c.post(url, json=proposal)
     assert response.status_code == 200, response.text
     preview = response.json()
-    assert preview["branch"] == f"feature/{preview['run_id']}"
-    response = c.post(url, json={**proposal, "feature_branch": "feature/add-task-search"})
+    assert preview["branch"] == f"features/{preview['run_id']}"
+    response = c.post(url, json={**proposal, "feature_branch": "features/add-task-search"})
     assert response.status_code == 200, response.text
-    assert response.json()["branch"] == "feature/add-task-search"
+    assert response.json()["branch"] == "features/add-task-search"
 
 
 @pytest.mark.parametrize("include_archived", [False, True])

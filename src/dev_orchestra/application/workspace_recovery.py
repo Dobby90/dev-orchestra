@@ -169,7 +169,7 @@ def verify_intent(data, intent, git, parent, *, pending=False):
     }
     marker = f"DevOrchestra-Checkpoint: {data['run_id']}:{data['step_id']}:{intent['request_id']}"
     message_format = intent.get("commit_message_format", 1)
-    if message_format not in {1, 2, 3}:
+    if message_format not in {1, 2, 3, 4}:
         raise PipelineError("unsupported workspace commit message format")
     message = (
         intent["message"].strip()

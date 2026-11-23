@@ -444,9 +444,8 @@ class WorkspaceSession:
             return {"sha": intent["sha"], "parent": intent["parent"], "tree": intent["tree"]}
         run = self.guard()
         # Use the Run's stored prefix so changes in startup config do not affect it.
-        message_format = (
-            3 if run["config"].get("project", {}).get("branch_prefix") == "feature" else 2
-        )
+        branch_prefix = run["config"].get("project", {}).get("branch_prefix")
+        message_format = {"feature": 3, "features": 4}.get(branch_prefix, 2)
         formatted_message = format_branch_commit(
             message, self.data["branch"], version=message_format
         )

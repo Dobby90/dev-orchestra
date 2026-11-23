@@ -8,7 +8,7 @@ from pydantic import Field, StringConstraints, model_serializer, model_validator
 
 from dev_orchestra.domain.models import Model
 
-DEFAULT_BRANCH_PREFIX = "feature"
+DEFAULT_BRANCH_PREFIX = "features"
 
 
 class Project(Model):

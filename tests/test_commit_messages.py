@@ -46,9 +46,10 @@ def test_branch_prefix_preserves_description(branch, message, expected):
 
 
 @pytest.mark.parametrize("message", ["응답 개선", "[task/subtask] 응답 개선"])
-def test_feature_prefix_formats_subject_once(message):
+@pytest.mark.parametrize(("prefix", "version"), [("feature", 3), ("features", 4)])
+def test_feature_prefix_formats_subject_once(message, prefix, version):
     assert (
-        format_branch_commit(message, "feature/task/subtask", version=3)
+        format_branch_commit(message, f"{prefix}/task/subtask", version=version)
         == "[task/subtask] 응답 개선"
     )
 
@@ -56,7 +57,7 @@ def test_feature_prefix_formats_subject_once(message):
 @pytest.mark.parametrize("message", ["[한글] English only", "[한글] 자동 개발: 작업"])
 @pytest.mark.parametrize(
     ("branch", "version"),
-    [("feature/codex/한글", 2), ("feature/ai/한글", 2), ("feature/한글", 3)],
+    [("feature/codex/한글", 2), ("feature/ai/한글", 2), ("feature/한글", 3), ("features/한글", 4)],
 )
 def test_branch_prefix_cannot_bypass_subject_validation(message, branch, version):
     with pytest.raises(PipelineError, match="concrete Korean subject"):
@@ -170,7 +171,7 @@ def test_prefixed_checkpoint_retry_and_recovery(setup, role):
 def test_legacy_checkpoint_recovery_keeps_original_message(setup, monkeypatch, version):
     session, _ = start_session(setup)
     edit(session, "main.py", "first\n")
-    # Reproduce the original subject on a feature branch created by an older Run.
+    # Reproduce a subject stored by an older Run without branch formatting.
     monkeypatch.setattr(
         "dev_orchestra.infrastructure.workspace.format_branch_commit",
         lambda message, branch, **kwargs: message,
