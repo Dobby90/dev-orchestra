@@ -6,6 +6,7 @@ import shlex
 from fnmatch import fnmatchcase
 from pathlib import Path, PurePosixPath
 
+from dev_orchestra.application.frontend_build_scope import frontend_bundle_changed
 from dev_orchestra.application.gradle_tests import SOURCE_DIRS, GradleSelection, gradle_target_class
 from dev_orchestra.application.test_changes import checksum
 from dev_orchestra.application.validation import (
@@ -18,8 +19,9 @@ from dev_orchestra.domain.models import PipelineError, TestTarget
 from dev_orchestra.infrastructure.git import Git
 from dev_orchestra.infrastructure.java import java_tool
 
-AUTOMATIC_TEST_CONTRACT = 5
-JEST_TEST_CONTRACTS = {4, AUTOMATIC_TEST_CONTRACT}
+AUTOMATIC_TEST_CONTRACT = 6
+FRONTEND_PACKAGE_CONTRACTS = {5, AUTOMATIC_TEST_CONTRACT}
+JEST_TEST_CONTRACTS = {4, *FRONTEND_PACKAGE_CONTRACTS}
 GRADLE_TEST_CONTRACTS = {3, *JEST_TEST_CONTRACTS}
 AUTOMATIC_TEST_CONTRACTS = {2, *GRADLE_TEST_CONTRACTS}
 NODE_LOCKFILES = {"npm": "package-lock.json", "pnpm": "pnpm-lock.yaml", "yarn": "yarn.lock"}
@@ -64,6 +66,8 @@ def has_parent_workspace(git, candidate, cwd):
         for parent in cwd.parents
         for name in ("package.json", "pnpm-workspace.yaml")
     ]
+    if not names:
+        return False
     present = git.call("ls-tree", "--name-only", "-z", candidate, "--", *names).split("\0")
     return any(
         name.endswith("pnpm-workspace.yaml")
@@ -73,18 +77,21 @@ def has_parent_workspace(git, candidate, cwd):
 
 
 def deferred_builds(run, candidate, tests):
-    """Defer independent nested builds until the host has selected commands."""
+    """Identify eligible build commands for selection and on-demand preparation."""
     if not automatic(run) or run["test_selection_contract"] not in JEST_TEST_CONTRACTS:
-        return set()
-    scoped_frontend = run["test_selection_contract"] == AUTOMATIC_TEST_CONTRACT
+        return {}
+    version = run["test_selection_contract"]
+    scoped_frontend = version in FRONTEND_PACKAGE_CONTRACTS
+    repo_root = PurePosixPath(".")
     git = Git(Path(run["repo"]))
-    deferred = set()
+    deferred = {}
     for key, command in tests.commands.items():
         cwd = PurePosixPath(command.working_directory)
         lockfile = NODE_LOCKFILES.get(Path(command.argv[0]).name)
         if (
             command.kind != "check"
-            or cwd == PurePosixPath(".")
+            or cwd == repo_root
+            and version != AUTOMATIC_TEST_CONTRACT
             or not lockfile
             or command.argv[1:] != ["run", "build"]
         ):
@@ -92,12 +99,9 @@ def deferred_builds(run, candidate, tests):
         try:
             package = json.loads(candidate_file(run, candidate, str(cwd / "package.json")))
             dependencies = package.get("dependencies", {}) | package.get("devDependencies", {})
+            bundle = scoped_frontend and frontend_build(package, dependencies)
             if (
-                (
-                    docusaurus_build(package)
-                    or scoped_frontend
-                    and frontend_build(package, dependencies)
-                )
+                (bundle or cwd != repo_root and docusaurus_build(package))
                 and not package.get("workspaces")
                 and not {"prebuild", "postbuild"}.intersection(package["scripts"])
                 and not any(
@@ -108,8 +112,12 @@ def deferred_builds(run, candidate, tests):
                     ("100644 ", "100755 ")
                 )
                 and (not scoped_frontend or not has_parent_workspace(git, candidate, cwd))
+                and (
+                    version != AUTOMATIC_TEST_CONTRACT
+                    or not git.call("ls-tree", candidate, "--", str(cwd / "pnpm-workspace.yaml"))
+                )
             ):
-                deferred.add(key)
+                deferred[key] = "bundle" if bundle else "docs"
         except (PipelineError, ValueError, TypeError, AttributeError):
             continue
     return deferred
@@ -327,26 +335,41 @@ def command_dependencies(chosen, policy):
     return chosen
 
 
-def mandatory_checks(tests, paths, gradle, deferred, scoped_frontend=False):
+def mandatory_checks(run, candidate, tests, paths, gradle, deferred):
     checks = {key for key, command in tests.commands.items() if command.kind == "check"}
     policy = tests.affected
     if policy and any(
         fnmatchcase(path, pattern) for path in paths for pattern in policy.global_paths
     ):
         return checks
+    version = run.get("test_selection_contract")
+    scoped_frontend = version in FRONTEND_PACKAGE_CONTRACTS
     directories = {key: PurePosixPath(tests.commands[key].working_directory) for key in deferred}
+    nested = set(directories.values()) - {PurePosixPath(".")}
     if paths and all(
         PurePosixPath(path).parts[:1] in {("src",), ("tests",)}
         or scoped_frontend
-        and any(PurePosixPath(path).is_relative_to(cwd) for cwd in directories.values())
+        and any(PurePosixPath(path).is_relative_to(cwd) for cwd in nested)
         for path in paths
     ):
         for key, cwd in directories.items():
-            if not any(
-                PurePosixPath(path).is_relative_to(cwd)
-                or (policy and any(fnmatchcase(path, p) for p in policy.inputs.get(key, [])))
+            if policy and any(
+                fnmatchcase(path, pattern)
                 for path in paths
+                for pattern in policy.inputs.get(key, [])
             ):
+                continue
+            owned = [path for path in paths if PurePosixPath(path).is_relative_to(cwd)]
+            if version == AUTOMATIC_TEST_CONTRACT and deferred[key] == "bundle":
+                children = {p for p in nested if p != cwd and p.is_relative_to(cwd)}
+                owned = [
+                    path
+                    for path in owned
+                    if not any(PurePosixPath(path).is_relative_to(child) for child in children)
+                ]
+                if not frontend_bundle_changed(run, candidate, cwd, owned):
+                    checks.remove(key)
+            elif not owned:
                 checks.remove(key)
     if gradle is None:
         return checks
@@ -384,16 +407,15 @@ def model_selection(run, candidate, paths, plan=None, input_error=None):
     )
     policy = tests.affected
     deferred = deferred_builds(run, candidate, tests)
-    checks = mandatory_checks(
-        tests, paths, gradle, deferred, scoped_frontend=version == AUTOMATIC_TEST_CONTRACT
-    )
+    checks = mandatory_checks(run, candidate, tests, paths, gradle, deferred)
     if policy and deferred:
         checks.update(
-            deferred.intersection(
+            deferred.keys()
+            & {
                 key
                 for criterion in run.get("criteria", [])
                 for key in policy.criterion_commands.get(criterion["id"], [])
-            )
+            }
         )
     if plan is None:
         pending = {
@@ -416,8 +438,12 @@ def model_selection(run, candidate, paths, plan=None, input_error=None):
         if version in JEST_TEST_CONTRACTS:
             pending["instructions"] += (
                 " Jest supports exact test files. Include builds when the change or acceptance "
-                "criteria affect the generated output of the corresponding package."
+                "criteria require bundle verification, for example loader changes, dynamic "
+                "imports, emitted assets or compatibility against the production configuration."
                 if version == AUTOMATIC_TEST_CONTRACT
+                else " Jest supports exact test files. Include builds when the change or acceptance "
+                "criteria affect the generated output of the corresponding package."
+                if version in FRONTEND_PACKAGE_CONTRACTS
                 else " Jest supports exact test files. Include documentation builds whenever the change "
                 "or acceptance criteria affect the generated documentation."
             )
@@ -462,8 +488,10 @@ def model_selection(run, candidate, paths, plan=None, input_error=None):
         decisions[key] = (
             "누적 변경의 Gradle 모듈과 프로젝트 검증 정책에 연결되지 않아 제외했습니다."
             if gradle and command.kind == "check" and java_tool(command) == "gradle"
+            else "누적 변경과 검증 정책에서 별도 번들 검사가 필요하지 않아 제외했습니다."
+            if deferred.get(key) == "bundle" and version == AUTOMATIC_TEST_CONTRACT
             else "누적 변경과 연결되지 않은 프런트엔드 패키지의 빌드를 제외했습니다."
-            if key in deferred and version == AUTOMATIC_TEST_CONTRACT
+            if key in deferred and version in FRONTEND_PACKAGE_CONTRACTS
             else "문서 빌드에 영향이 없는 앱 변경으로 검증에서 제외했습니다."
             if key in deferred
             else "모델이 누적 변경·의존 관계·인수 조건을 분석해 실행 대상에서 제외했습니다."
