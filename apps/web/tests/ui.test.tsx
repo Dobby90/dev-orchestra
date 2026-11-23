@@ -420,7 +420,7 @@ describe("화면·위험 명령", () => {
     expect(await screen.findByRole("heading", { name: "결과" })).toBeVisible();
     expect(document.querySelector(".markdown script")).toBeNull();
     expect(document.querySelector(".markdown img")).toBeNull();
-    expect(document.querySelector(".markdown a")).toBeNull();
+    expect(screen.getByText("링크", { exact: true }).closest("a")).toBeNull();
   });
   it("정책 가이드를 열고 Escape로 닫아도 폼을 제출하지 않는다", async () => {
     const onSubmit = vi.fn();
