@@ -531,8 +531,16 @@ class WorkspaceSession:
         return select_tests(self.store.get(self.run_id), self.root, self.git.sha())
 
     def run_tests(self, command_ids, test_plan=None, commit_message=""):
-        from dev_orchestra.application.automatic_tests import automatic, deferred_builds
+        from dev_orchestra.application.automatic_tests import (
+            automatic,
+            deferred_builds,
+            prepare_selected_only,
+        )
         from dev_orchestra.application.test_selection import select_tests, selected_config
+        from dev_orchestra.infrastructure.gradle_preparation import (
+            observe_preparation,
+            preparation_control,
+        )
         from dev_orchestra.infrastructure.test_runner import TestRunner
 
         self.reload()
@@ -586,7 +594,15 @@ class WorkspaceSession:
         self.data["testing"] = True
         self.save()
         try:
-            if deferred := deferred_builds(run, self.git.sha(), tests):
+            if prepare_selected_only(run):
+                with observe_preparation(
+                    lambda progress: self.store.gradle_progress(self.run_id, progress), finish=True
+                ):
+                    runner.prepare(self.root, tests, preflight, preparation_control(stop))
+                if action := stop():
+                    raise StopRequested(action)
+                self.guard()
+            elif deferred := deferred_builds(run, self.git.sha(), tests):
                 runner.prepare(
                     self.root,
                     tests.model_copy(

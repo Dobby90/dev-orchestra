@@ -254,6 +254,7 @@ class TestRunner:
                 p.mkdir(parents=True, exist_ok=True)
             from dev_orchestra.infrastructure.runtime_adapters import (
                 convert_jest_report,
+                gradle_directory_command,
                 jest_json_path,
                 runtime_command,
             )
@@ -322,20 +323,24 @@ class TestRunner:
 
                     prepared = toolchain(worktree, directory, stop)
                     if prepared:
+                        runtime_argv, adapters, files = gradle_directory_command(
+                            command, command.argv, directory
+                        )
                         argv, owner_env = run_arguments(
                             worktree,
                             worktree,
                             outputs,
                             scratch,
-                            command.argv,
+                            runtime_argv,
                             prepared,
                             directory,
                             cwd=cwd,
                             extra_env=command.env,
+                            adapters=files,
                         )
                         env.update(owner_env)
-                        result["runtime_argv"] = command.argv
-                        result["runtime_adapters"] = ["docker"]
+                        result["runtime_argv"] = runtime_argv
+                        result["runtime_adapters"] = ["docker", *adapters]
                         result["container_environment"] = {
                             k: v for k, v in prepared.items() if k != "docker"
                         }

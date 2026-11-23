@@ -26,6 +26,8 @@ from dev_orchestra.infrastructure.java_cache import (
 from dev_orchestra.infrastructure.process import environment, execute, sanitize
 from dev_orchestra.infrastructure.test_runner import sandbox_command
 
+GRADLE_DIRECTORY_TASK = "-Ddevorchestra.gradle.directory-task="
+
 
 def java_tool(command):
     name = Path(wrapper_argv(command.argv)[0]).name

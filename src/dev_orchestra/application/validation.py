@@ -4,11 +4,12 @@ import json
 import platform
 import posixpath
 import re
-import shlex
 import sys
+from functools import cache
 from pathlib import Path, PurePosixPath
 
 from dev_orchestra.application.errors import ApplicationError
+from dev_orchestra.application.frontend_build_scope import preferred_build_script, script_tokens
 from dev_orchestra.application.test_changes import checksum
 from dev_orchestra.application.web_contracts import ValidationCandidate, ValidationDetection
 from dev_orchestra.config import TestCommand, Tests
@@ -19,20 +20,11 @@ from dev_orchestra.infrastructure.git import Git
 from dev_orchestra.infrastructure.java import (
     cache_paths,
     choose_project_jdk,
+    gradle_release,
     java_tool,
     option,
 )
 from dev_orchestra.infrastructure.playwright import browser_cache
-
-
-def script_tokens(value):
-    """Only analyze a single literal command; never interpret shell expressions."""
-    if re.search(r"[;&|<>`$\n\r]", value):
-        return []
-    try:
-        return shlex.split(value)
-    except ValueError:
-        return []
 
 
 def flag_values(tokens, flag):
@@ -257,7 +249,7 @@ def docusaurus_build(package):
     )
 
 
-def detect_validation(info, *, supported_only=False):
+def detect_validation(info, *, supported_only=False, optimized=True):
     git = Git(info.repository_path)
     # Git blobs avoid following repository symlinks and ignore uncommitted source changes.
     entries = git.call("ls-tree", "-rlz", info.base_sha).split("\0")
@@ -310,6 +302,16 @@ def detect_validation(info, *, supported_only=False):
                 return value if value.startswith(".") else "./" + value
         return fallback
 
+    @cache
+    def wrapper_release(directory):
+        def read(name):
+            entry = files.get(name)
+            if entry and entry[1] <= 262144:
+                return git.call("cat-file", "blob", entry[0])
+            return None
+
+        return gradle_release(read, directory) or (0,)
+
     for path in manifests:
         relative_path(path)
         oid, size = files[path]
@@ -347,6 +349,9 @@ def detect_validation(info, *, supported_only=False):
                     if not isinstance(value, str) or not isinstance(script, str):
                         continue
                     if script == "build" or script in {"typecheck", "lint"}:
+                        if script == "build" and optimized:
+                            script = preferred_build_script(package, dependencies)
+                            value = scripts[script]
                         if re.search(r"(?:^|\s)--(?:fix|write)(?:\s|=|$)", value):
                             warnings.append(
                                 f"{path}: {script}는 소스를 수정하는 옵션이 있어 자동 검증에서 제외했습니다."
@@ -477,13 +482,19 @@ def detect_validation(info, *, supported_only=False):
                 label=f"{directory} · Maven 빌드",
             )
         elif name.startswith("build.gradle"):
-            prefix = "" if directory == "." else directory + "/"
             item = add("gradle", path, label=f"{directory} · Gradle 테스트")
             item.command.argv[0] = wrapper(directory, "gradlew", "gradle")
+            if optimized and item.command.argv[0] != "gradle":
+                wrapper_directory = posixpath.normpath(
+                    posixpath.join(directory, posixpath.dirname(item.command.argv[0]))
+                )
+
+                if wrapper_release(wrapper_directory) >= (8,):
+                    item.command.argv[-1] = "--rerun"
             add(
                 "gradle-build",
                 path,
-                argv=item.command.argv.copy(),
+                argv=[arg for arg in item.command.argv if arg != "--rerun"],
                 label=f"{directory} · Gradle 빌드",
             )
         elif name == "pytest.ini" or "pytest" in text:
@@ -756,10 +767,15 @@ def complete_run_validation(config, info):
         return snapshot
     detected = detected or detect_validation(info)
     for command in selected:
+        identity = script_identity(command.argv)
         for item in detected.candidates:
-            if command.working_directory != item.command.working_directory or script_identity(
-                command.argv
-            ) != script_identity(item.command.argv):
+            detected_identity = script_identity(item.command.argv)
+            same_build_outputs = (
+                detected_identity == (identity[0], "build:production") and identity[1] == "build"
+            )
+            if command.working_directory != item.command.working_directory or not (
+                identity == detected_identity or same_build_outputs
+            ):
                 continue
             for output in item.output_paths:
                 if output.endswith(
@@ -778,6 +794,7 @@ def validation_binding(run):
 
 def resolve_candidate_validation(run, sha):
     """Record commands once for the first Tester entry of a revision and iteration."""
+    from dev_orchestra.application.automatic_tests import prepare_selected_only
     from dev_orchestra.application.contracts import RepositoryInfo
 
     binding = validation_binding(run)
@@ -799,7 +816,7 @@ def resolve_candidate_validation(run, sha):
         base_branch=run["base"],
         base_sha=sha,
     )
-    detected = detect_validation(info, supported_only=True)
+    detected = detect_validation(info, supported_only=True, optimized=prepare_selected_only(run))
     entries = git.call("ls-tree", "-rlz", sha).split("\0")
     sources = []
     for entry in filter(None, entries):

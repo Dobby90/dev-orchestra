@@ -250,11 +250,12 @@ def run_arguments(
     network=False,
     cwd=None,
     extra_env=None,
+    adapters=(),
 ):
     """Only trusted dependency installation gets network, with a manifest-only source tree."""
     if any(
         any(char in str(path) for char in (",", "\n", "\r"))
-        for path in (worktree, source, *outputs)
+        for path in (worktree, source, *outputs, *adapters)
     ):
         raise PipelineError("unsupported comma or newline in container mount path")
     name = "devorchestra-" + uuid.uuid4().hex
@@ -306,6 +307,8 @@ def run_arguments(
     ]
     for output in outputs:
         args += ["--mount", f"type=bind,source={output},target={output}"]
+    for path in adapters:
+        args += ["--mount", f"type=bind,source={path},target={path},readonly"]
     if not network:
         for path in worktree.rglob("*"):
             relative = path.relative_to(worktree)

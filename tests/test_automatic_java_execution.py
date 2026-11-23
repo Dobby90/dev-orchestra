@@ -14,7 +14,9 @@ import pytest
 from test_validation_policy import commit_files
 from test_workflow import service as service
 
+from dev_orchestra.application.automatic_tests import AUTOMATIC_TEST_CONTRACT
 from dev_orchestra.application.projects import ProjectService
+from dev_orchestra.application.test_selection import select_tests, selected_config
 from dev_orchestra.application.validation import complete_run_validation
 from dev_orchestra.config import Config
 from dev_orchestra.config import TestCommand as Command
@@ -97,6 +99,94 @@ def test_automatic_java_policy_runs_real_project_launcher(service, tmp_path, mon
     result = runner.run(repo, tests, tmp_path / "failing")
     assert not result["passed"], result
     assert result["commands"][0]["failed"] == 1, result
+
+
+def test_gradle_uses_remapped_directory_without_running_descendant_tests(
+    service, tmp_path, monkeypatch
+):
+    _, _, repo = service
+    gradle = local_tool("gradle")
+    monkeypatch.setenv("GRADLE_USER_HOME", str(tmp_path / "empty-host-cache"))
+    monkeypatch.setattr(coordination, "host_root", lambda: tmp_path / "resources")
+    module = "physical"
+    for coordinate, name in [
+        ("junit/junit/4.12/junit-4.12.jar", "junit.jar"),
+        ("org/hamcrest/hamcrest-core/1.3/hamcrest-core-1.3.jar", "hamcrest.jar"),
+    ]:
+        jar = Path.home() / ".m2/repository" / coordinate
+        if not jar.is_file():
+            pytest.skip("Cached JUnit and Hamcrest required")
+        target = repo / module / "libs" / name
+        target.parent.mkdir(exist_ok=True, parents=True)
+        shutil.copyfile(jar, target)
+    commit_files(
+        repo,
+        {
+            "gradlew": "#!/bin/sh\nexec " + shlex.quote(str(gradle)) + ' "$@"\n',
+            "gradle/wrapper/gradle-wrapper.properties": (
+                f"distributionUrl=https://example.invalid/{gradle.parent.parent.name}-bin.zip\n"
+            ),
+            "settings.gradle": (
+                "include ':renamed', ':renamed:child'\n"
+                "project(':renamed').projectDir = file('physical')\n"
+                "project(':renamed:child').projectDir = file('physical/child')\n"
+            ),
+            "physical/build.gradle": (
+                "plugins { id 'java' }; "
+                "dependencies { testImplementation files('libs/junit.jar', 'libs/hamcrest.jar') }; "
+                "test { useJUnit() }\n"
+            ),
+            "physical/child/build.gradle": (
+                "tasks.register('test') { doLast { throw new GradleException('unrelated') } }\n"
+            ),
+        },
+    )
+    info = ProjectService().validate_repository(repo, "main")
+    config = complete_run_validation(Config(), info)
+    commit_files(
+        repo,
+        {
+            "physical/src/test/java/example/SelectedTest.java": (
+                "package example; public class SelectedTest extends junit.framework.TestCase { "
+                "public void testSelected() { assertTrue(true); } }"
+            ),
+            "physical/src/test/java/example/UnrelatedTest.java": (
+                "package example; public class UnrelatedTest extends junit.framework.TestCase { "
+                "public void testUnrelated() { fail(); } }"
+            ),
+        },
+    )
+    candidate = ProjectService().validate_repository(repo, "main").base_sha
+    run = {
+        "repo": str(repo),
+        "base_sha": info.base_sha,
+        "test_scope": "affected",
+        "test_selection_contract": AUTOMATIC_TEST_CONTRACT,
+        "config": config.model_dump(),
+    }
+    key = next(
+        key
+        for key, command in config.tests.commands.items()
+        if command.kind == "test" and command.working_directory == module
+    )
+    plan = [
+        {
+            "command_id": key,
+            "files": ["src/test/java/example/SelectedTest.java"],
+            "reason": "changed",
+        }
+    ]
+    selection = select_tests(run, repo, candidate, plan=plan)
+    tests = selected_config(run, selection)
+    assert {c.working_directory for c in tests.commands.values()} == {module}
+    assert "--rerun" in tests.commands[key].argv
+    runner = TestRunner()
+    runner.prepare(repo, tests, tmp_path / "preflight")
+    result = runner.run(repo, tests, tmp_path / "results")
+    assert result["passed"], result
+    test = next(c for c in result["commands"] if c["command_id"] == key)
+    assert test["total"] == 1
+    assert test["runtime_adapters"][-1]["adapter"] == "gradle-project-directory"
 
 
 def test_gradle_resolves_offline_from_run_owned_read_only_cache(service, tmp_path, monkeypatch):

@@ -5,6 +5,7 @@ from collections import Counter
 from contextlib import contextmanager
 from contextvars import ContextVar
 from pathlib import Path
+from time import monotonic
 
 from dev_orchestra.infrastructure.files import write
 from dev_orchestra.infrastructure.java_cache import cache_identity, file_identity, fingerprint
@@ -12,13 +13,38 @@ from dev_orchestra.infrastructure.java_cache import cache_identity, file_identit
 _progress = ContextVar("gradle_preparation_observer", default=None)
 
 
+def preparation_control(stop, clock=monotonic):
+    """Batch control reads when scanning dependency caches entry by entry."""
+    next_poll = 0.0
+    action = None
+
+    def poll():
+        nonlocal next_poll, action
+        now = clock()
+        if now >= next_poll:
+            action = stop()
+            next_poll = now + 0.2
+        return action
+
+    return poll
+
+
 @contextmanager
-def observe_preparation(observer):
-    token = _progress.set(observer)
+def observe_preparation(observer, *, finish=False):
+    latest = None
+
+    def record(value):
+        nonlocal latest
+        latest = value
+        observer(value)
+
+    token = _progress.set(record if finish else observer)
     try:
         yield
     finally:
         _progress.reset(token)
+        if latest is not None:
+            observer(latest | {"active": False})
 
 
 class ModuleProgress:
