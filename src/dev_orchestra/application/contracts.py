@@ -24,6 +24,7 @@ class CreateRun(Contract):
     base: str | None = None
     max_fixes: int | None = Field(default=None, ge=0, strict=True)
     test_scope: Literal["full", "affected"] = "full"
+    auto_approve_plan: bool = Field(default=False, strict=True)
 
 
 class ApprovalCommand(Contract):

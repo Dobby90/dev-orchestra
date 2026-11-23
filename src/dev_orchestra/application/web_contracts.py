@@ -138,6 +138,7 @@ class Proposal(Input):
     agent_settings: AgentSettings | None = None
     name: RunName
     test_scope: Literal["full", "affected"] = "full"
+    auto_approve_plan: bool = Field(default=False, strict=True)
     project_id: str = Field(pattern=r"^prj-[0-9a-f]{32}$")
     spec: Annotated[TextSpec | StoredSpec, Field(discriminator="kind")]
     base_branch: str | None = None
@@ -333,6 +334,8 @@ class RunDetail(RunSummary):
     capacity: CapacityView = Field(default_factory=CapacityView)
     workspace_progress: WorkspaceProgressView | None = None
     test_scope: Literal["full", "affected"] = "full"
+    auto_approve_plan: bool = False
+    automatic_plan_approved_at: str | None = None
     plan: str | None = None
     criteria: list[dict[str, str]] = Field(default_factory=list)
     plan_hash: str | None = None
@@ -376,6 +379,7 @@ class PreviewView(BaseModel):
     resolved_validation: Tests | None = None
     agent_settings: AgentSettings | None = None
     test_scope: Literal["full", "affected"] = "full"
+    auto_approve_plan: bool = False
     test_scope_notice: str = ""
     run_id: str
     branch: str

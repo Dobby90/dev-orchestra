@@ -42,6 +42,7 @@ const detail: Schema["RunDetail"] = {
   worktree_removed: false,
   push_status: "not_pushed",
   test_scope: "full",
+  auto_approve_plan: false,
   deletion_pending: false,
   test_change_pending: false,
   test_change_count: 0,
@@ -452,27 +453,30 @@ describe("화면·위험 명령", () => {
     });
     vi.spyOn(api, "project").mockResolvedValue(p);
     vi.spyOn(api, "branches").mockResolvedValue({ items: ["main"] });
-    vi.spyOn(api, "preview").mockResolvedValue({
-      test_scope: "full",
-      test_scope_notice: "영향 판단 실패 시 전체 검사",
-      resolved_validation: {
-        commands: {},
-        write_paths: ["tests"],
-        output_paths: ["build"],
-      },
-      run_id: "r1",
-      branch: "feature/x",
-      base_sha: "b".repeat(40),
-      project_version: 0,
-      agent_settings_hash: "settings",
-      agent_settings: {
-        roles: { developer: { model: "task-model", service_tier: "fast" } },
-      },
-      proposal_hash: "h",
-      expires: Date.now() / 1000 + 300,
-      preview_token: "receipt",
-      spec_sha256: "hash",
-    });
+    vi.spyOn(api, "preview").mockImplementation(
+      async ({ auto_approve_plan }) => ({
+        auto_approve_plan,
+        test_scope: "full",
+        test_scope_notice: "영향 판단 실패 시 전체 검사",
+        resolved_validation: {
+          commands: {},
+          write_paths: ["tests"],
+          output_paths: ["build"],
+        },
+        run_id: "r1",
+        branch: "feature/x",
+        base_sha: "b".repeat(40),
+        project_version: 0,
+        agent_settings_hash: "settings",
+        agent_settings: {
+          roles: { developer: { model: "task-model", service_tier: "fast" } },
+        },
+        proposal_hash: "h",
+        expires: Date.now() / 1000 + 300,
+        preview_token: "receipt",
+        spec_sha256: "hash",
+      }),
+    );
     wrap(<NewRunPage />, "/runs/new?project=prj-1");
     await userEvent.click(screen.getByText("브랜치·추가 지시사항 (선택)"));
     expect(
@@ -501,6 +505,8 @@ describe("화면·위험 명령", () => {
     expect(screen.getByLabelText("PRD")).toHaveValue("작업 요구사항");
     expect(api.preview).not.toHaveBeenCalled();
     expect(screen.getByLabelText("테스트 범위")).toHaveValue("affected");
+    const automatic = screen.getByRole("checkbox", { name: "기획 자동 승인" });
+    expect(automatic).not.toBeChecked();
     await userEvent.click(screen.getByText("모델·자동 수정 설정 (선택)"));
     await userEvent.click(
       screen.getByRole("button", { name: "이 작업만 변경" }),
@@ -513,6 +519,7 @@ describe("화면·위험 명령", () => {
     expect(api.preview).toHaveBeenCalledWith(
       expect.objectContaining({
         test_scope: "affected",
+        auto_approve_plan: false,
         name: "로그인 화면 개선",
         commit_prefix: "PROJ-123",
         agent_settings: { model: "task-model", roles: {} },
@@ -520,6 +527,7 @@ describe("화면·위험 명령", () => {
     );
     expect(screen.getByRole("dialog", { name: "실행 미리보기" })).toBeVisible();
     expect(screen.getByText("[PROJ-123]")).toBeVisible();
+    expect(screen.getByText("수동")).toBeVisible();
     expect(screen.getByText("feature/x")).toBeVisible();
     expect(screen.getByText(/developer.*패스트/)).toBeVisible();
     expect(screen.getByText(/개발 후 확정 · 후보 커밋/)).toBeVisible();
@@ -528,11 +536,16 @@ describe("화면·위험 명령", () => {
     expect(screen.getByLabelText("PRD")).toHaveValue("작업 요구사항");
     await userEvent.clear(prefix);
     await userEvent.selectOptions(screen.getByLabelText("테스트 범위"), "full");
+    await userEvent.click(automatic);
     expect(
       screen.queryByRole("button", { name: "확인하고 작업 시작" }),
     ).not.toBeInTheDocument();
     await userEvent.click(screen.getByRole("button", { name: "실행 전 확인" }));
     await screen.findByRole("dialog", { name: "실행 미리보기" });
+    expect(vi.mocked(api.preview).mock.lastCall?.[0].auto_approve_plan).toBe(
+      true,
+    );
+    expect(screen.getByText("자동")).toBeVisible();
     expect(vi.mocked(api.preview).mock.lastCall?.[0]).not.toHaveProperty(
       "commit_prefix",
     );

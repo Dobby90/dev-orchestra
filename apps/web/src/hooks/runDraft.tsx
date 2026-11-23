@@ -19,6 +19,7 @@ type Draft = {
   instructions: string;
   budget: string;
   testScope: "full" | "affected";
+  autoApprovePlan: boolean;
   agentSettings: Schema["AgentSettings"] | null;
 };
 const empty: Draft = {
@@ -32,6 +33,7 @@ const empty: Draft = {
   instructions: "",
   budget: "",
   testScope: "affected",
+  autoApprovePlan: false,
   agentSettings: null,
 };
 const Context = createContext<{

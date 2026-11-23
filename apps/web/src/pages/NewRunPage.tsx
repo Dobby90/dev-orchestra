@@ -40,6 +40,7 @@ export function NewRunPage() {
     [instructions, setInstructions] = useDraftField("instructions"),
     [budget, setBudget] = useDraftField("budget"),
     [testScope, setTestScope] = useDraftField("testScope"),
+    [autoApprovePlan, setAutoApprovePlan] = useDraftField("autoApprovePlan"),
     [previewOpen, setPreviewOpen] = useState(false),
     [localError, setLocalError] = useState("");
   useEffect(() => {
@@ -135,6 +136,7 @@ export function NewRunPage() {
           : { kind: "stored", spec_id: upload.data!.id },
       additional_instructions: instructions,
       test_scope: testScope,
+      auto_approve_plan: autoApprovePlan,
       run_tests: true,
       run_review: true,
       ...(base ? { base_branch: base } : {}),
@@ -390,6 +392,21 @@ export function NewRunPage() {
                 테스트를 분석해 자동 선택합니다. 필요한 경우 관련 모듈로 범위를
                 확대하고 이유를 기록합니다.
               </p>
+              <label className="check-row">
+                <input
+                  type="checkbox"
+                  checked={autoApprovePlan}
+                  aria-describedby="auto-approve-plan-guide"
+                  onChange={(e) =>
+                    edit(() => setAutoApprovePlan(e.target.checked))
+                  }
+                />
+                기획 자동 승인
+              </label>
+              <p id="auto-approve-plan-guide" className="help">
+                기획안이 확정되면 바로 개발을 시작합니다. 최종 승인은 직접
+                진행합니다.
+              </p>
               <details>
                 <summary>모델·자동 수정 설정 (선택)</summary>
                 <RunAgentSettings
@@ -429,7 +446,7 @@ export function NewRunPage() {
             )}
             <div className="form-action-bar">
               <span className="help">
-                실행 전에 브랜치와 테스트 범위를 확인합니다.
+                실행 전에 브랜치와 테스트 범위, 기획 승인 방식을 확인합니다.
               </span>
               <Button
                 type="submit"
@@ -532,7 +549,7 @@ export function NewRunPage() {
             if (!locked) setPreviewOpen(open);
           }}
           title="실행 미리보기"
-          description="실행할 브랜치와 테스트 범위를 확인한 뒤 작업을 시작하세요."
+          description="브랜치와 테스트 범위, 기획 승인 방식을 확인한 뒤 작업을 시작하세요."
         >
           <dl>
             <dt>작업명</dt>
@@ -573,6 +590,8 @@ export function NewRunPage() {
                 ? "변경 영향 범위 테스트"
                 : "전체 테스트"}
             </dd>
+            <dt>기획 승인</dt>
+            <dd>{preview.data.receipt.auto_approve_plan ? "자동" : "수동"}</dd>
             {deferredValidation && (
               <>
                 <dt>검증 명령</dt>

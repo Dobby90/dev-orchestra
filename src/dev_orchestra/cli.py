@@ -53,9 +53,19 @@ def run(
     max_fix_attempts: int | None = typer.Option(None, min=0),
     detach: bool = False,
     test_scope: Literal["full", "affected"] = typer.Option("full", "--test-scope"),
+    auto_approve_plan: bool = typer.Option(
+        False, "--auto-approve-plan", help="Start development after verified planning."
+    ),
 ):
     service = ctx.obj
-    run_id = service.create(repo, spec, base, max_fix_attempts, test_scope=test_scope)
+    run_id = service.create(
+        repo,
+        spec,
+        base,
+        max_fix_attempts,
+        test_scope=test_scope,
+        auto_approve_plan=auto_approve_plan,
+    )
     typer.echo(run_id)
     service.start(run_id, detached=detach)
     if not detach:

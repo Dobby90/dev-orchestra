@@ -4712,6 +4712,11 @@
             "title": "Test Scope",
             "default": "full"
           },
+          "auto_approve_plan": {
+            "type": "boolean",
+            "title": "Auto Approve Plan",
+            "default": false
+          },
           "test_scope_notice": {
             "type": "string",
             "title": "Test Scope Notice",
@@ -4982,6 +4987,11 @@
             ],
             "title": "Test Scope",
             "default": "full"
+          },
+          "auto_approve_plan": {
+            "type": "boolean",
+            "title": "Auto Approve Plan",
+            "default": false
           },
           "project_id": {
             "type": "string",
@@ -5563,6 +5573,11 @@
             "title": "Test Scope",
             "default": "full"
           },
+          "auto_approve_plan": {
+            "type": "boolean",
+            "title": "Auto Approve Plan",
+            "default": false
+          },
           "project_id": {
             "type": "string",
             "pattern": "^prj-[0-9a-f]{32}$",
@@ -5857,6 +5872,22 @@
             ],
             "title": "Test Scope",
             "default": "full"
+          },
+          "auto_approve_plan": {
+            "type": "boolean",
+            "title": "Auto Approve Plan",
+            "default": false
+          },
+          "automatic_plan_approved_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Automatic Plan Approved At"
           },
           "plan": {
             "anyOf": [

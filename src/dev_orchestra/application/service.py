@@ -43,9 +43,23 @@ class RunService:
             )
         return WORKSPACE_V2
 
-    def create(self, repo: Path, spec: Path, base=None, max_fixes=None, test_scope="full"):
+    def create(
+        self,
+        repo: Path,
+        spec: Path,
+        base=None,
+        max_fixes=None,
+        test_scope="full",
+        *,
+        auto_approve_plan=False,
+    ):
         command = CreateRun(
-            repo=repo, spec=spec, base=base, max_fixes=max_fixes, test_scope=test_scope
+            repo=repo,
+            spec=spec,
+            base=base,
+            max_fixes=max_fixes,
+            test_scope=test_scope,
+            auto_approve_plan=auto_approve_plan,
         )
         return self.create_run(command)
 
@@ -114,6 +128,7 @@ class RunService:
             "iteration": 0,
             "revision": 0,
             "plan_approval_required": True,
+            "auto_approve_plan": command.auto_approve_plan,
             "next_role": "planner",
             "created_at": now(),
         }
@@ -142,7 +157,7 @@ class RunService:
         if run.get("test_change_proposal") and answers and answers.strip():
             raise PipelineError("discard the saved test change proposal before adding instructions")
         ensure_stopped(Path(run["directory"]))
-        checkpoints(self.store, run)
+        saved_plan = checkpoints(self.store, run).get("planner")
         release_checkpoint = False
         if run.get("workspace_checkpoint"):
             from dev_orchestra.application.workspace_recovery import inspect_workspace
@@ -174,7 +189,11 @@ class RunService:
                 },
             ]
             changes["questions"] = []
-            if run.get("next_role") == "done":
+            if run.get("next_role") == "done" or (
+                run.get("next_role") == "planner"
+                and saved_plan is not None
+                and saved_plan.get("revision", 0) == run.get("revision", 0)
+            ):
                 changes.update(
                     next_role="planner",
                     revision=run.get("revision", 0) + 1,

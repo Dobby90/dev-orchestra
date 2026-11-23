@@ -1552,6 +1552,11 @@ export interface components {
              */
             test_scope: "full" | "affected";
             /**
+             * Auto Approve Plan
+             * @default false
+             */
+            auto_approve_plan: boolean;
+            /**
              * Test Scope Notice
              * @default
              */
@@ -1657,6 +1662,11 @@ export interface components {
              * @enum {string}
              */
             test_scope: "full" | "affected";
+            /**
+             * Auto Approve Plan
+             * @default false
+             */
+            auto_approve_plan: boolean;
             /** Project Id */
             project_id: string;
             /** Spec */
@@ -1841,6 +1851,11 @@ export interface components {
              * @enum {string}
              */
             test_scope: "full" | "affected";
+            /**
+             * Auto Approve Plan
+             * @default false
+             */
+            auto_approve_plan: boolean;
             /** Project Id */
             project_id: string;
             /** Spec */
@@ -1935,6 +1950,13 @@ export interface components {
              * @enum {string}
              */
             test_scope: "full" | "affected";
+            /**
+             * Auto Approve Plan
+             * @default false
+             */
+            auto_approve_plan: boolean;
+            /** Automatic Plan Approved At */
+            automatic_plan_approved_at?: string | null;
             /** Plan */
             plan?: string | null;
             /** Criteria */

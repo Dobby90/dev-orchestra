@@ -587,6 +587,13 @@ function RunDetailBody({ rid }: { rid: string }) {
             ))}
           </Tabs.List>
           <Tabs.Content value="plan" className="tab-content">
+            {r.auto_approve_plan && (
+              <p className="subtle">
+                {r.automatic_plan_approved_at
+                  ? `기획 자동 승인 완료 · ${new Date(r.automatic_plan_approved_at).toLocaleString("ko-KR")}`
+                  : "기획 자동 승인 설정됨"}
+              </p>
+            )}
             {r.plan ? (
               <>
                 <article className="markdown">

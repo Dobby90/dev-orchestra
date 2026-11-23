@@ -1,11 +1,11 @@
-"""Human decisions bound to immutable planner checkpoints."""
+"""Plan decisions bound to immutable planner checkpoints."""
 
 import json
 from pathlib import Path
 
 from dev_orchestra.application.results import Results
 from dev_orchestra.config import Config
-from dev_orchestra.domain.models import PipelineError
+from dev_orchestra.domain.models import PipelineError, StopRequested
 from dev_orchestra.infrastructure.files import digest
 from dev_orchestra.infrastructure.git import Git
 from dev_orchestra.infrastructure.locking import lock
@@ -56,7 +56,34 @@ def verify_development(store, run):
     expected = binding(store, run)
     approval = run.get("plan_approval") or {}
     if any(approval.get(k) != v for k, v in expected.items()):
-        raise PipelineError("human plan approval required for current plan")
+        raise PipelineError("plan approval required for current plan")
+
+
+def verify_worktree(run, evidence):
+    git = Git(Path(run["worktree"]), Config.model_validate(run["config"]).tests.output_paths)
+    if git.dirty() or git.sha() != evidence["input_sha"]:
+        raise PipelineError("plan decision requires unchanged HEAD and clean worktree")
+
+
+def approve_automatically(store, run, plan):
+    evidence = binding(store, run | plan)
+    verify_worktree(run, evidence)
+    with store.transaction() as db:
+        if action := store.read_control(run["id"]):
+            raise StopRequested(action)
+        store.update(
+            run["id"],
+            expected_version=run["version"],
+            next_role="developer",
+            plan_approval=evidence | {"approved_at": now(), "source": "automatic"},
+            **plan,
+        )
+        store._event(
+            db,
+            run["id"],
+            "plan.decided",
+            {"approved": True, "plan_hash": evidence["plan_hash"], "source": "automatic"},
+        )
 
 
 def decision_changes(store, run, plan_hash, approve, reason=""):
@@ -65,9 +92,7 @@ def decision_changes(store, run, plan_hash, approve, reason=""):
     evidence = binding(store, run)
     if evidence["plan_hash"] != plan_hash:
         raise PipelineError("plan changed; refresh before deciding")
-    git = Git(Path(run["worktree"]), Config.model_validate(run["config"]).tests.output_paths)
-    if git.dirty() or git.sha() != evidence["input_sha"]:
-        raise PipelineError("plan decision requires unchanged HEAD and clean worktree")
+    verify_worktree(run, evidence)
     if approve:
         return {"plan_approval": evidence | {"approved_at": now()}, "next_role": "developer"}
     if not reason.strip() or len(reason.encode()) > 65536:

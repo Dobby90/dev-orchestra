@@ -32,6 +32,7 @@ it("최종 보고서에서 상세 테스트를 필요할 때 열고 요약본을
     worktree_removed: false,
     push_status: "not_pushed",
     test_scope: "full",
+    auto_approve_plan: false,
     deletion_pending: false,
     test_change_pending: false,
     test_change_count: 0,

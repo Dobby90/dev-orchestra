@@ -39,7 +39,9 @@ def canonical(value):
 
 def submission_hash(request: Proposal):
     # Keep pre-existing preview tokens and idempotent submissions replayable.
-    omit = {"commit_prefix"} if request.commit_prefix is None else None
+    omit = {"commit_prefix"} if request.commit_prefix is None else set()
+    if not request.auto_approve_plan:
+        omit.add("auto_approve_plan")
     return hashlib.sha256(
         canonical(request.model_dump(mode="json", exclude=omit)).encode()
     ).hexdigest()
@@ -312,6 +314,7 @@ class BackendService:
             **value,
             "resolved_validation": config.tests.model_dump(mode="json"),
             "test_scope": proposal.test_scope,
+            "auto_approve_plan": proposal.auto_approve_plan,
             "test_scope_notice": (
                 "모델이 변경 코드와 관련 테스트를 분석해 자동 선택합니다. 필요한 경우 관련 모듈로 범위를 확대하고 이유를 기록합니다."
                 if proposal.test_scope == "affected"
@@ -391,6 +394,7 @@ class BackendService:
                     base=proposal.base_branch,
                     max_fixes=proposal.max_fix_attempts,
                     test_scope=proposal.test_scope,
+                    auto_approve_plan=proposal.auto_approve_plan,
                 ),
                 run_id=receipt["run_id"],
                 branch=receipt["branch"],

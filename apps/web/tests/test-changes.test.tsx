@@ -11,6 +11,7 @@ const run: RunDetail = {
   worktree_removed: false,
   push_status: "not_pushed",
   test_scope: "full",
+  auto_approve_plan: false,
   schema_version: 1,
   id: "r1",
   state: "waiting_approval",

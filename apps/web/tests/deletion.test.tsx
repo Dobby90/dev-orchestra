@@ -13,6 +13,7 @@ const run: RunDetail = {
   worktree_removed: false,
   push_status: "not_pushed",
   test_scope: "full",
+  auto_approve_plan: false,
   id: "run-1234567890abcdef",
   state: "cancelled",
   version: 4,

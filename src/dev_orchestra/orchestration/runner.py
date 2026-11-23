@@ -329,6 +329,13 @@ class Runner:
                     raise PipelineError("checkpoint artifact checksum mismatch")
                 payload = json.loads(artifact.read_text())
             else:
+                if (
+                    role == "developer"
+                    and run.get("auto_approve_plan") is True
+                    and not resumed_workspace
+                    and sha != run["plan_approval"]["input_sha"]
+                ):
+                    raise PipelineError("developer HEAD differs from the approved plan")
                 instruction_hash = digest(
                     json.dumps(
                         {k: run.get(k) for k in ("answers", "clarifications", "directives")},
@@ -911,15 +918,23 @@ class Runner:
         if role == "planner":
             write(directory / "implementation-plan.md", payload["plan"])
             write(directory / "acceptance-criteria.json", payload["criteria"])
-            self.store.update(
-                run_id,
-                state="waiting_plan_approval" if run.get("plan_approval_required") else None,
-                next_role="developer",
-                plan=payload["plan"],
-                criteria=payload["criteria"],
-                planning_draft=None,
-                questions=[],
-            )
+            plan = {
+                "plan": payload["plan"],
+                "criteria": payload["criteria"],
+                "planning_draft": None,
+                "questions": [],
+            }
+            if run.get("auto_approve_plan") is True:
+                from dev_orchestra.application.plan_approval import approve_automatically
+
+                approve_automatically(self.store, run, plan)
+            else:
+                self.store.update(
+                    run_id,
+                    state="waiting_plan_approval" if run.get("plan_approval_required") else None,
+                    next_role="developer",
+                    **plan,
+                )
         elif role in {"developer", "fixer"}:
             self.store.update(run_id, next_role="tester")
         elif role == "tester":
