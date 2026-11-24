@@ -11,6 +11,7 @@ from pathlib import Path
 
 from dev_orchestra.domain.models import PipelineError, StopRequested
 from dev_orchestra.infrastructure.files import contained, digest, write
+from dev_orchestra.infrastructure.jest_outputs import cache_files, cache_path, generated_outputs
 from dev_orchestra.infrastructure.process import (
     environment,
     execute,
@@ -247,7 +248,8 @@ class TestRunner:
             # Never grant write access to any tracked production/test file via output paths.
             from dev_orchestra.infrastructure.git import Git
 
-            tracked = [name for name in Git(worktree).call("ls-files", "-z").split("\0") if name]
+            git = Git(worktree)
+            tracked = [name for name in git.call("ls-files", "-z").split("\0") if name]
             if any((worktree / name).is_relative_to(p) for name in tracked for p in outputs):
                 raise PipelineError("output path contains tracked source files")
             for p in outputs:
@@ -366,6 +368,11 @@ class TestRunner:
                         argv = sandbox_command(
                             worktree, outputs, scratch, runtime_argv, command.network, **options
                         )
+                    jest_cache = cache_path(worktree, command, outputs) if jest_json else None
+                    try:
+                        cache_before = cache_files(git, jest_cache)
+                    except (OSError, PipelineError):
+                        cache_before = None
                     rc, output = execute(
                         argv,
                         cwd,
@@ -414,6 +421,13 @@ class TestRunner:
                     copy = directory / f"{command_id}.junit.xml"
                     write(copy, junit_bundle(reports))
                     result.update(junit_path=str(copy), junit_hash=digest(copy.read_bytes()))
+                    if jest_json:
+                        try:
+                            result["jest_outputs"] = generated_outputs(
+                                git, jest_json, jest_cache, cache_before
+                            )
+                        except (OSError, PipelineError):
+                            pass  # Unidentified files remain protected during cleanup.
             except StopRequested:
                 raise
             except (PipelineError, OSError) as error:
