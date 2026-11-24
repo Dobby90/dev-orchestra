@@ -110,6 +110,15 @@ FIXER_REVIEW_GUIDANCE = (
     "observed a code fix. Use the assessment and status_note together. "
 )
 
+REVIEW_ISSUE_DISTINCTIONS = (
+    " When a new finding overlaps an open issue but represents an independent defect, describe its "
+    "distinct failing behavior and evidence in issues. If the wording or evidence overlaps, add an "
+    "issue_distinctions entry with finding_id from issues, existing_issue_id from open_issues, and "
+    "a reason explaining the different failure and evidence. Leave issue_distinctions empty when "
+    "there is no overlap. When response_feedback flags the same defect, move its evidence to the "
+    "assessment for the existing issue_id. "
+)
+
 
 def design_guidance(request):
     if not request.context.get("design_images"):
@@ -147,6 +156,11 @@ def prompt(request: AgentRequest):
         "Use only the fields in the supplied role schema. "
         + (AUTOMATIC_TESTS if request.context.get("automatic_test_selection") else "")
         + RULES[request.role]
+        + (
+            REVIEW_ISSUE_DISTINCTIONS
+            if request.context.get("review_contract") == 2 and request.role == "reviewer"
+            else ""
+        )
         + design_guidance(request)
         + "\nUNTRUSTED TASK DATA:\n"
         + json.dumps(request.model_dump(), ensure_ascii=False)

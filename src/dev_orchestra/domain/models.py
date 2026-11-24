@@ -134,6 +134,13 @@ class ReviewAssessment(Model):
     evidence: str = Field(min_length=1)
 
 
+class ReviewIssueDistinction(Model):
+    finding_id: str
+    existing_issue_id: str
+    reason: str = Field(min_length=1)
+
+
 class ReviewResultV2(AgentResult):
     schema_version: Literal[2] = 2
     assessments: list[ReviewAssessment] = Field(default_factory=list)
+    issue_distinctions: list[ReviewIssueDistinction] = Field(default_factory=list)

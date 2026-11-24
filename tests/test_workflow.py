@@ -43,7 +43,7 @@ class FakeAgent:
                         suggestion="fix value",
                     )
                 ]
-                if req.iteration < self.block
+                if req.iteration == 0 and self.block
                 else []
             )
             return ReviewResultV2(
@@ -53,7 +53,7 @@ class FakeAgent:
                     ReviewAssessment(
                         issue_id=item["issue_id"],
                         candidate_sha=req.input_sha,
-                        status="unresolved" if issues else "resolved",
+                        status="unresolved" if req.iteration < self.block else "resolved",
                         evidence="현재 후보 코드 확인",
                     )
                     for item in req.context.get("open_issues", [])

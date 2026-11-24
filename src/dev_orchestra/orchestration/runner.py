@@ -20,6 +20,7 @@ from dev_orchestra.application.errors import ApplicationError
 from dev_orchestra.application.handoff import repository_identity, same_repository
 from dev_orchestra.application.projects import ProjectService, verify_registered_directory
 from dev_orchestra.application.results import test_case_counts
+from dev_orchestra.application.reviews import Reviews, validate_review_findings
 from dev_orchestra.application.test_changes import TestChangeService
 from dev_orchestra.application.validation import (
     is_test_source,
@@ -29,7 +30,7 @@ from dev_orchestra.application.validation import (
 from dev_orchestra.application.workspace_recovery import WorkspaceBlocked
 from dev_orchestra.config import Config
 from dev_orchestra.domain.execution import execution_contract, writes_workspace
-from dev_orchestra.domain.models import AgentRequest, PipelineError, StopRequested
+from dev_orchestra.domain.models import AgentRequest, PipelineError, ReviewResultV2, StopRequested
 from dev_orchestra.infrastructure.design_images import design_image_binding, verified_run_images
 from dev_orchestra.infrastructure.evidence import checkpoints, verified_candidate
 from dev_orchestra.infrastructure.files import contained, digest, write
@@ -437,8 +438,6 @@ class Runner:
                     context["diff"] = git.diff(run["base_sha"], sha)
                     context["candidate_sha"] = sha
                     if run.get("review_contract") == 2:
-                        from dev_orchestra.application.reviews import Reviews
-
                         context["open_issues"] = Reviews(self.store).open(run_id)
                 image_paths = verified_run_images(run) if role != "tester" else ()
                 if image_paths:
@@ -462,8 +461,6 @@ class Runner:
                 if selection:
                     request.context["test_selection"] = selection
                 if role == "fixer" and run.get("review_contract") == 2:
-                    from dev_orchestra.application.reviews import Reviews
-
                     request.context["open_issues"] = Reviews(self.store).fixer_issues(run)
                 from dev_orchestra.agents.context import role_context
 
@@ -545,6 +542,14 @@ class Runner:
                     if not workspace and (git.sha() != sha or git.dirty()):
                         raise PipelineError("read-only agent changed the worktree")
                     validate_role(role, result)
+                    if (
+                        role == "reviewer"
+                        and isinstance(result, ReviewResultV2)
+                        and not result.questions
+                    ):
+                        validate_review_findings(
+                            result, request.context.get("open_issues", []), sha
+                        )
                 except ResponseError as error:
                     if workspace:
                         raise PipelineError(
@@ -719,9 +724,6 @@ class Runner:
                 )
                 with self.store.transaction() if atomic_result else nullcontext() as db:
                     if role == "reviewer" and run.get("review_contract") == 2:
-                        from dev_orchestra.application.reviews import Reviews
-                        from dev_orchestra.domain.models import ReviewResultV2
-
                         if not isinstance(result, ReviewResultV2):
                             raise PipelineError("reviewer must return contract V2")
                         payload["issue_states"] = Reviews(self.store).apply(run, step_id, payload)

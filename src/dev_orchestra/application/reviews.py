@@ -2,11 +2,83 @@
 
 import json
 import uuid
+from collections import Counter
+from difflib import SequenceMatcher
 
+from dev_orchestra.agents.contracts import ResponseError
 from dev_orchestra.domain.models import PipelineError
 from dev_orchestra.infrastructure.files import digest
-from dev_orchestra.infrastructure.process import sanitize
+from dev_orchestra.infrastructure.process import redact, sanitize
 from dev_orchestra.infrastructure.store import now
+
+
+def _normalized_statement(text):
+    return " ".join(text.split()).rstrip(".!?。")
+
+
+def validate_review_findings(result, open_issues, candidate_sha):
+    """Ask for a retry on overlapping claims while preserving independent findings."""
+    existing_ids = {issue["issue_id"] for issue in open_issues}
+    finding_ids = Counter(finding.id for finding in result.issues)
+    distinctions = set()
+    for item in result.issue_distinctions:
+        pair = (item.finding_id, item.existing_issue_id)
+        if (
+            finding_ids[item.finding_id] != 1
+            or item.existing_issue_id not in existing_ids
+            or not item.reason.strip()
+            or pair in distinctions
+        ):
+            raise ResponseError(
+                "issue_distinctions must link a new finding and an open issue once with a concrete reason"
+            )
+        distinctions.add(pair)
+
+    reassessments = {
+        item.issue_id: _normalized_statement(redact(item.evidence))
+        for item in result.assessments
+        if item.candidate_sha == candidate_sha
+    }
+    overlaps = []
+    for finding in result.issues:
+        raw_description = redact(finding.description)
+        description = _normalized_statement(raw_description)
+        evidence = _normalized_statement(redact(finding.evidence))
+        file = redact(finding.file)
+        for issue in open_issues:
+            issue_id = issue["issue_id"]
+            same_file = file == issue["file"]
+            existing_description = _normalized_statement(issue["description"])
+            same_evidence = bool(evidence) and evidence in {
+                _normalized_statement(issue["evidence"]),
+                reassessments.get(issue_id),
+            }
+            if (same_file and raw_description == issue["description"]) or (
+                description == existing_description and same_evidence
+            ):
+                overlaps.append(
+                    f"{finding.id!r} repeats {issue_id!r}; use assessments for this ID or describe the independent behavior with distinct evidence"
+                )
+            elif (
+                same_file
+                and (
+                    same_evidence
+                    or description == existing_description
+                    or (
+                        min(len(description), len(existing_description)) >= 16
+                        and SequenceMatcher(
+                            None, description[:512], existing_description[:512]
+                        ).ratio()
+                        >= 0.88
+                    )
+                )
+                and (finding.id, issue_id) not in distinctions
+            ):
+                overlaps.append(
+                    f"{finding.id!r} overlaps {issue_id!r}; use assessments for this ID or give the independent failure and evidence in issue_distinctions"
+                )
+    if overlaps:
+        raise ResponseError("overlapping review findings: " + "; ".join(overlaps))
 
 
 class Reviews:
