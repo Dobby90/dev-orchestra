@@ -30,6 +30,7 @@ from dev_orchestra.application.workspace_recovery import WorkspaceBlocked
 from dev_orchestra.config import Config
 from dev_orchestra.domain.execution import execution_contract, writes_workspace
 from dev_orchestra.domain.models import AgentRequest, PipelineError, StopRequested
+from dev_orchestra.infrastructure.design_images import design_image_binding, verified_run_images
 from dev_orchestra.infrastructure.evidence import checkpoints, verified_candidate
 from dev_orchestra.infrastructure.files import contained, digest, write
 from dev_orchestra.infrastructure.git import Git
@@ -190,6 +191,7 @@ class Runner:
             raise StopRequested(run["control"])
         configured = Config.model_validate(run["config"])
         checkpoints(self.store, run)
+        verified_run_images(run)
         directory, worktree = Path(run["directory"]), Path(run["worktree"])
         original = Git(Path(run["repo"]))
         if run.get("workspace_checkpoint") and not worktree.exists():
@@ -438,6 +440,9 @@ class Runner:
                         from dev_orchestra.application.reviews import Reviews
 
                         context["open_issues"] = Reviews(self.store).open(run_id)
+                image_paths = verified_run_images(run) if role != "tester" else ()
+                if image_paths:
+                    context["design_images"] = [image["name"] for image in run["design_images"]]
                 request = AgentRequest(
                     run_id=run_id,
                     role=role,
@@ -445,6 +450,7 @@ class Runner:
                     iteration=iteration,
                     input_sha=sha,
                     context=context,
+                    design_image_paths=image_paths,
                 )
                 from dev_orchestra.application.test_selection import select_tests
 
@@ -667,7 +673,11 @@ class Runner:
                         )
                 else:
                     self.store.update(run_id, current_sha=out_sha)
-                payload = result.model_dump() | {"sha": out_sha, "revision": run.get("revision", 0)}
+                payload = (
+                    result.model_dump()
+                    | {"sha": out_sha, "revision": run.get("revision", 0)}
+                    | design_image_binding(run)
+                )
                 if workspace:
                     payload["workspace_commits"] = workspace_commits
                 if approval:

@@ -7,6 +7,7 @@ from dev_orchestra.application.test_changes import checksum
 from dev_orchestra.domain.execution import WORKSPACE_V2, execution_contract
 from dev_orchestra.domain.models import PipelineError
 from dev_orchestra.infrastructure.commit_messages import format_branch_commit
+from dev_orchestra.infrastructure.design_images import design_image_binding, verified_run_images
 from dev_orchestra.infrastructure.files import contained, digest, write
 from dev_orchestra.infrastructure.filesystem_identity import directory_identity, same_directory
 from dev_orchestra.infrastructure.git import Git
@@ -74,9 +75,11 @@ def _inspect_workspace(store, run):
             key: run.get(key)
             for key in ["spec", "plan", "criteria", "answers", "directives", "clarifications"]
         }
+        | design_image_binding(run)
     )
     if policy != data["policy_hash"] or task != data["task_hash"]:
         raise PipelineError("workspace recovery policy or requirements changed; files preserved")
+    verified_run_images(run)
     git = Git(Path(run["worktree"]))
     worktree = directory_identity(run["worktree"])
     common = directory_identity(git.common())

@@ -24,6 +24,7 @@ from dev_orchestra.domain.models import (
 )
 from dev_orchestra.infrastructure.commit_messages import describe_commit, format_branch_commit
 from dev_orchestra.infrastructure.containers import MANIFEST
+from dev_orchestra.infrastructure.design_images import design_image_binding
 from dev_orchestra.infrastructure.files import contained, digest, write
 from dev_orchestra.infrastructure.filesystem_identity import directory_identity
 from dev_orchestra.infrastructure.git import Git
@@ -130,6 +131,7 @@ class WorkspaceSession:
                     k: run.get(k)
                     for k in ["spec", "plan", "criteria", "answers", "directives", "clarifications"]
                 }
+                | design_image_binding(run)
             ),
             "outputs": outputs,
             "files": {},
@@ -295,6 +297,7 @@ class WorkspaceSession:
                     k: run.get(k)
                     for k in ["spec", "plan", "criteria", "answers", "directives", "clarifications"]
                 }
+                | design_image_binding(run)
             )
             != self.data["task_hash"]
             or (

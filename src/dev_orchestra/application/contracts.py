@@ -6,7 +6,7 @@ from typing import Annotated, Literal
 from pydantic import BaseModel, ConfigDict, Field, StringConstraints, model_validator
 
 from dev_orchestra.config import AgentSettings
-from dev_orchestra.domain.models import State
+from dev_orchestra.domain.models import MAX_DESIGN_IMAGES, State
 
 
 class Contract(BaseModel):
@@ -20,6 +20,7 @@ class CreateRun(Contract):
     agent_settings: AgentSettings | None = None
     repo: Path
     spec: Path
+    design_image_paths: tuple[Path, ...] = Field(default=(), max_length=MAX_DESIGN_IMAGES)
     name: RunName | None = None
     base: str | None = None
     max_fixes: int | None = Field(default=None, ge=0, strict=True)

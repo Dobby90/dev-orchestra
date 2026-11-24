@@ -15,6 +15,7 @@ from dev_orchestra.config import Config
 from dev_orchestra.domain.execution import WORKSPACE_V2
 from dev_orchestra.domain.models import PipelineError
 from dev_orchestra.infrastructure.coordination import metadata
+from dev_orchestra.infrastructure.design_images import DesignImageInput, snapshot_images
 from dev_orchestra.infrastructure.evidence import checkpoints
 from dev_orchestra.infrastructure.files import digest, write
 from dev_orchestra.infrastructure.git import Git
@@ -52,6 +53,7 @@ class RunService:
         test_scope="full",
         *,
         auto_approve_plan=False,
+        design_image_paths=(),
     ):
         command = CreateRun(
             repo=repo,
@@ -60,6 +62,7 @@ class RunService:
             max_fixes=max_fixes,
             test_scope=test_scope,
             auto_approve_plan=auto_approve_plan,
+            design_image_paths=design_image_paths,
         )
         return self.create_run(command)
 
@@ -68,7 +71,15 @@ class RunService:
         self.store.create(data)
         return data["id"]
 
-    def prepare_run(self, command: CreateRun, *, run_id=None, branch=None, resolve_settings=True):
+    def prepare_run(
+        self,
+        command: CreateRun,
+        *,
+        run_id=None,
+        branch=None,
+        resolve_settings=True,
+        design_images: tuple[DesignImageInput, ...] = (),
+    ):
         repo, spec, base, max_fixes = command.repo, command.spec, command.base, command.max_fixes
         from dev_orchestra.application.agent_settings import AgentSettingsService
 
@@ -136,6 +147,10 @@ class RunService:
             data["review_contract"] = (
                 2 if db.execute("SELECT version FROM schema_version").fetchone()[0] >= 5 else 1
             )
+        if command.design_image_paths:
+            design_images = tuple(DesignImageInput.from_path(p) for p in command.design_image_paths)
+        if design_images:
+            data["design_images"] = snapshot_images(directory, design_images)
         write(directory / "spec.md", spec_text)
         write(directory / "config.json", data["config"])
         return data

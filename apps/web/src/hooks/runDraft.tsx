@@ -21,6 +21,7 @@ type Draft = {
   testScope: "full" | "affected";
   autoApprovePlan: boolean;
   agentSettings: Schema["AgentSettings"] | null;
+  designImages: Schema["DesignImageUpload"][];
 };
 const empty: Draft = {
   project: "",
@@ -35,6 +36,7 @@ const empty: Draft = {
   testScope: "affected",
   autoApprovePlan: false,
   agentSettings: null,
+  designImages: [],
 };
 const Context = createContext<{
   draft: Draft;
@@ -48,7 +50,8 @@ export function RunDraftProvider({ children }: { children: ReactNode }) {
       !draft.name &&
       !draft.text &&
       !draft.instructions &&
-      !draft.commitPrefix
+      !draft.commitPrefix &&
+      !draft.designImages.length
     )
       return;
     const warn = (event: BeforeUnloadEvent) => {

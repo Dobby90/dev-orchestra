@@ -8,8 +8,10 @@ import sqlite3
 import uuid
 from contextlib import asynccontextmanager
 from pathlib import Path
+from typing import Annotated
 
 from fastapi import FastAPI, File, Header, HTTPException, Query, Request, Response, UploadFile
+from fastapi import Path as PathParam
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from starlette.concurrency import run_in_threadpool
@@ -37,6 +39,7 @@ from dev_orchestra.application.web_contracts import (
     CodexModelPage,
     DashboardView,
     DeferInput,
+    DesignImageUpload,
     DiffView,
     DirectoryInput,
     DirectoryView,
@@ -45,6 +48,7 @@ from dev_orchestra.application.web_contracts import (
     GitSettingsInput,
     GitSettingsView,
     GitTestInput,
+    ImageUploadId,
     LogPage,
     LogWindow,
     NotificationPage,
@@ -85,7 +89,8 @@ from dev_orchestra.application.web_contracts import (
 )
 from dev_orchestra.application.webhooks import WebhookService
 from dev_orchestra.config import load_config
-from dev_orchestra.domain.models import PipelineError
+from dev_orchestra.domain.models import MAX_DESIGN_IMAGE_BYTES, DesignImage, PipelineError
+from dev_orchestra.infrastructure.design_images import read_verified_image, run_image_path
 from dev_orchestra.infrastructure.locking import lock
 from dev_orchestra.infrastructure.migrations import upgrade
 
@@ -141,7 +146,7 @@ def create_app(config=None, allowed_roots=None, port=8000, static_directory=None
     async def application_error(request, exc):
         if exc.code == "LOCAL_RATE_LIMIT":
             return error(exc.code, str(exc), 429)
-        if exc.code == "VALIDATION_ERROR":
+        if exc.code in {"VALIDATION_ERROR", "DESIGN_IMAGE_INVALID", "DESIGN_IMAGE_DUPLICATE"}:
             return error(exc.code, str(exc), 422)
         status = (
             404
@@ -229,17 +234,26 @@ def create_app(config=None, allowed_roots=None, port=8000, static_directory=None
                 if not origin:
                     return error("ORIGIN_DENIED", "origin required", 403)
                 kind = request.headers.get("content-type", "").split(";")[0]
+                multipart = kind == "multipart/form-data" and path in {
+                    "/api/specs",
+                    "/api/design-images",
+                }
                 if (
                     not (request.method == "DELETE" and not request.headers.get("content-type"))
                     and kind != "application/json"
-                    and not (path == "/api/specs" and kind == "multipart/form-data")
+                    and not multipart
                 ):
                     return error("CONTENT_TYPE_DENIED", "JSON required", 415)
+                limit = (
+                    MAX_DESIGN_IMAGE_BYTES + 65536
+                    if multipart and path == "/api/design-images"
+                    else 2 * 1048576
+                )
                 count = 0
                 parts = []
                 async for chunk in request.stream():
                     count += len(chunk)
-                    if count > 2 * 1048576:
+                    if count > limit:
                         return error("PAYLOAD_TOO_LARGE", "request exceeds limit", 413)
                     parts.append(chunk)
                 request._body = b"".join(parts)
@@ -440,6 +454,21 @@ def create_app(config=None, allowed_roots=None, port=8000, static_directory=None
             raise HTTPException(422, "UTF-8 required") from None
         return backend.save_spec(text, Path(file.filename).name)
 
+    @app.post("/api/design-images", status_code=201, response_model=DesignImageUpload)
+    def design_image_upload(file: UploadFile = File(...)):
+        content = file.file.read(MAX_DESIGN_IMAGE_BYTES + 1)
+        if len(content) > MAX_DESIGN_IMAGE_BYTES:
+            return error("DESIGN_IMAGE_TOO_LARGE", "PNG exceeds 5 MiB", 413)
+        return backend.save_design_image(file.filename or "", content)
+
+    @app.get(
+        "/api/design-images/{image_id}",
+        response_class=Response,
+        responses={200: {"content": {"image/png": {}}}},
+    )
+    def design_image_preview(image_id: ImageUploadId):
+        return Response(backend.staged_design_image(image_id), media_type="image/png")
+
     @app.post("/api/projects/{pid}/run-previews", response_model=PreviewView)
     def preview(pid: str, body: Proposal):
         if pid != body.project_id:
@@ -610,7 +639,30 @@ def create_app(config=None, allowed_roots=None, port=8000, static_directory=None
     @app.get("/api/runs/{rid}/spec", response_model=SpecContent)
     def run_spec(rid: str):
         value = runs.queries.get(rid)
-        return {"text": value["spec"], "additional_instructions": value.get("answers", "")}
+        return {
+            "text": value["spec"],
+            "additional_instructions": value.get("answers", ""),
+            "design_images": value.get("design_images", []),
+        }
+
+    @app.get(
+        "/api/runs/{rid}/design-images/{sha256}",
+        response_class=Response,
+        responses={200: {"content": {"image/png": {}}}},
+    )
+    def run_design_image(rid: str, sha256: Annotated[str, PathParam(pattern=r"^[0-9a-f]{64}$")]):
+        run = runs.queries.get(rid)
+        for value in run.get("design_images", []):
+            if value["sha256"] == sha256:
+                image = DesignImage.model_validate(value)
+                try:
+                    content = read_verified_image(run_image_path(run, image), image)
+                except (OSError, PipelineError) as error:
+                    raise ApplicationError(
+                        "DESIGN_IMAGE_INVALID", "stored PNG unavailable"
+                    ) from error
+                return Response(content, media_type="image/png")
+        raise ApplicationError("DESIGN_IMAGE_NOT_FOUND", "design image not in this Run")
 
     @app.get("/api/runs/{rid}/logs/window", response_model=LogWindow)
     def log_window(

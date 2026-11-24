@@ -18,15 +18,28 @@ import { RunAgentSettings } from "../components/RunAgentSettings";
 import { agentSpeedLabel } from "../components/AgentSpeedSelect";
 import { useDraftField, useClearDraft } from "../hooks/runDraft";
 import { PrdGuide } from "../components/PrdGuide";
+import { DesignImageList } from "../components/DesignImageList";
 import {
   ProjectGitConnection,
   useProjectGitConnection,
 } from "../components/ProjectGitConnection";
+
+const maxDesignImages = 8;
+const maxDesignImageBytes = 5 * 1024 * 1024;
+
+function stagedImages(images: Schema["DesignImageUpload"][]) {
+  return images.map(({ id, name }) => ({
+    name,
+    src: api.stagedDesignImageUrl(id),
+  }));
+}
+
 export function NewRunPage() {
   const [params] = useSearchParams(),
     navigate = useNavigate();
   const clearDraft = useClearDraft();
   const [agentSettings, setAgentSettings] = useDraftField("agentSettings");
+  const [designImages, setDesignImages] = useDraftField("designImages");
   const [project, setProject] = useDraftField(
       "project",
       params.get("project") ?? "",
@@ -69,6 +82,32 @@ export function NewRunPage() {
   });
   const gitConnection = useProjectGitConnection(project);
   const upload = useMutation({ mutationFn: api.upload });
+  const imageUpload = useMutation({
+    mutationFn: async (files: File[]) => {
+      const images = [...designImages];
+      const issues: string[] = [];
+      for (const file of files) {
+        try {
+          const image = await api.uploadDesignImage(file);
+          if (images.some((item) => item.sha256 === image.sha256)) continue;
+          if (images.some((item) => item.name === image.name)) {
+            issues.push(`${file.name} 파일명이 이미 사용 중입니다.`);
+            continue;
+          }
+          images.push(image);
+        } catch (error) {
+          issues.push(
+            `${file.name} · ${error instanceof ApiError ? error.message : "첨부하지 못했습니다."}`,
+          );
+        }
+      }
+      return { images, issues };
+    },
+    onSuccess: ({ images, issues }) => {
+      setDesignImages(images);
+      if (issues.length) setLocalError(issues.join(" "));
+    },
+  });
   const preview = useMutation({
     mutationFn: async (proposal: Schema["Proposal"]) => ({
       proposal,
@@ -104,7 +143,7 @@ export function NewRunPage() {
   }
   function check(event: FormEvent) {
     event.preventDefault();
-    if (!project) return;
+    if (!project || imageUpload.isPending) return;
     setLocalError("");
     if (!name.trim()) {
       setLocalError("작업명을 입력해 주세요.");
@@ -135,6 +174,7 @@ export function NewRunPage() {
           ? { kind: "text", text }
           : { kind: "stored", spec_id: upload.data!.id },
       additional_instructions: instructions,
+      ...(designImages.length ? { design_images: designImages } : {}),
       test_scope: testScope,
       auto_approve_plan: autoApprovePlan,
       run_tests: true,
@@ -305,6 +345,66 @@ export function NewRunPage() {
                   )}
                 </label>
               )}
+              <div className="design-image-field">
+                <label>
+                  디자인 참고 이미지 (선택)
+                  <input
+                    type="file"
+                    accept=".png,image/png"
+                    multiple
+                    disabled={imageUpload.isPending || preview.isPending}
+                    aria-describedby="design-images-guide"
+                    onChange={(event) => {
+                      const files = Array.from(event.currentTarget.files ?? []);
+                      event.currentTarget.value = "";
+                      if (!files.length) return;
+                      edit(() => {
+                        if (
+                          designImages.length + files.length >
+                          maxDesignImages
+                        ) {
+                          setLocalError(
+                            "디자인 참고 이미지는 최대 8장까지 첨부할 수 있습니다.",
+                          );
+                        } else if (
+                          files.some(
+                            (file) =>
+                              !/\.png$/i.test(file.name) ||
+                              !file.size ||
+                              file.size > maxDesignImageBytes,
+                          )
+                        ) {
+                          setLocalError(
+                            "5 MiB 이하의 PNG 파일을 선택해 주세요.",
+                          );
+                        } else {
+                          imageUpload.mutate(files);
+                        }
+                      });
+                    }}
+                  />
+                </label>
+                <p id="design-images-guide" className="help">
+                  PNG 최대 8장, 한 장당 5 MiB. 화면과 이미지 안의 설명을 PRD와
+                  함께 에이전트에 전달합니다.
+                </p>
+                {imageUpload.isPending && (
+                  <p role="status">이미지 업로드 중…</p>
+                )}
+                <DesignImageList
+                  images={stagedImages(designImages)}
+                  disabled={imageUpload.isPending || preview.isPending}
+                  onRemove={(src) =>
+                    edit(() =>
+                      setDesignImages(
+                        designImages.filter(
+                          (image) => api.stagedDesignImageUrl(image.id) !== src,
+                        ),
+                      ),
+                    )
+                  }
+                />
+              </div>
               <details>
                 <summary>브랜치·추가 지시사항 (선택)</summary>
                 <div className="form-columns">
@@ -455,6 +555,7 @@ export function NewRunPage() {
                   preview.isPending ||
                   !project ||
                   upload.isPending ||
+                  imageUpload.isPending ||
                   !!selected.data?.archived_at ||
                   !!selected.error
                 }
@@ -568,6 +669,16 @@ export function NewRunPage() {
             )}
             <dt>기준 커밋</dt>
             <dd className="mono path">{preview.data.receipt.base_sha}</dd>
+            {!!preview.data.receipt.design_images?.length && (
+              <>
+                <dt>디자인 참고 이미지</dt>
+                <dd>
+                  <DesignImageList
+                    images={stagedImages(preview.data.receipt.design_images)}
+                  />
+                </dd>
+              </>
+            )}
             {preview.data.receipt.agent_settings && (
               <>
                 <dt>에이전트 모델·추론 강도·속도</dt>

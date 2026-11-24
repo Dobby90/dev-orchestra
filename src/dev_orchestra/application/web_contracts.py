@@ -3,7 +3,15 @@
 from datetime import datetime
 from typing import Annotated, Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, SecretStr, field_validator, model_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    SecretStr,
+    StringConstraints,
+    field_validator,
+    model_validator,
+)
 
 from dev_orchestra.application.contracts import RunName, RunSummary
 from dev_orchestra.config import (
@@ -13,7 +21,7 @@ from dev_orchestra.config import (
     TestCommand,
     Tests,
 )
-from dev_orchestra.domain.models import State
+from dev_orchestra.domain.models import MAX_DESIGN_IMAGES, DesignImage, State
 from dev_orchestra.infrastructure.agent_usage import AgentTelemetry, TokenUsage
 from dev_orchestra.infrastructure.process import sanitize
 
@@ -134,6 +142,13 @@ class StoredSpec(Input):
     spec_id: str = Field(pattern=r"^spec-[0-9a-f]{32}$")
 
 
+ImageUploadId = Annotated[str, StringConstraints(pattern=r"^img-[0-9a-f]{32}$")]
+
+
+class DesignImageUpload(DesignImage):
+    id: ImageUploadId
+
+
 class Proposal(Input):
     agent_settings: AgentSettings | None = None
     name: RunName
@@ -141,6 +156,9 @@ class Proposal(Input):
     auto_approve_plan: bool = Field(default=False, strict=True)
     project_id: str = Field(pattern=r"^prj-[0-9a-f]{32}$")
     spec: Annotated[TextSpec | StoredSpec, Field(discriminator="kind")]
+    design_images: list[DesignImageUpload] = Field(
+        default_factory=list, max_length=MAX_DESIGN_IMAGES
+    )
     base_branch: str | None = None
     feature_branch: str | None = None
     commit_prefix: str | None = Field(default=None, max_length=80)
@@ -373,6 +391,7 @@ class SpecView(BaseModel):
 class SpecContent(BaseModel):
     text: str
     additional_instructions: str
+    design_images: list[DesignImage] = Field(default_factory=list)
 
 
 class PreviewView(BaseModel):
@@ -390,6 +409,7 @@ class PreviewView(BaseModel):
     expires: int
     preview_token: str
     spec_sha256: str
+    design_images: list[DesignImageUpload] = Field(default_factory=list)
     validation_warnings: list[str] = Field(default_factory=list)
 
 

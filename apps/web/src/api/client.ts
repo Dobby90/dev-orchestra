@@ -52,6 +52,12 @@ const messages: Record<string, string> = {
   REPOSITORY_ROOT_REQUIRED: "Git 저장소의 최상위 폴더를 선택해 주세요.",
   UNSAFE_PATH: "심볼릭 링크가 포함되지 않은 실제 저장소 경로를 선택해 주세요.",
   VALIDATION_ERROR: "입력 형식이나 프로젝트 정책을 확인해 주세요.",
+  DESIGN_IMAGE_INVALID: "PNG의 형식과 크기를 확인해 주세요.",
+  DESIGN_IMAGE_TOO_LARGE: "PNG 한 장은 5 MiB 이하여야 합니다.",
+  DESIGN_IMAGE_DUPLICATE:
+    "이미지마다 다른 파일명을 사용하고 같은 이미지는 한 번만 첨부해 주세요.",
+  DESIGN_IMAGE_NOT_FOUND:
+    "첨부 이미지를 찾을 수 없습니다. 파일을 다시 첨부해 주세요.",
   BRANCH_CONFLICT:
     "같은 이름의 Feature 브랜치가 있습니다. 새 브랜치 이름을 입력해 주세요.",
 };

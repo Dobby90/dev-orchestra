@@ -6,6 +6,7 @@ from pathlib import Path
 from dev_orchestra.application.results import Results
 from dev_orchestra.config import Config
 from dev_orchestra.domain.models import PipelineError, StopRequested
+from dev_orchestra.infrastructure.design_images import design_image_binding, verified_run_images
 from dev_orchestra.infrastructure.files import digest
 from dev_orchestra.infrastructure.git import Git
 from dev_orchestra.infrastructure.locking import lock
@@ -28,6 +29,9 @@ def binding(store, run):
     payload = Results(store).payload(run, step)
     if payload["plan"] != run.get("plan") or payload["criteria"] != run.get("criteria"):
         raise PipelineError("plan differs from checkpoint")
+    design = design_image_binding(run)
+    if payload.get("design_image_hash") != design.get("design_image_hash"):
+        raise PipelineError("plan design references differ from checkpoint")
     return {
         "run_id": run["id"],
         "revision": run.get("revision", 0),
@@ -44,7 +48,8 @@ def binding(store, run):
                 | {
                     k: run.get(k)
                     for k in ["plan", "criteria", "spec", "answers", "clarifications", "directives"]
-                },
+                }
+                | design,
                 sort_keys=True,
             ).encode()
         ),
@@ -60,6 +65,7 @@ def verify_development(store, run):
 
 
 def verify_worktree(run, evidence):
+    verified_run_images(run)
     git = Git(Path(run["worktree"]), Config.model_validate(run["config"]).tests.output_paths)
     if git.dirty() or git.sha() != evidence["input_sha"]:
         raise PipelineError("plan decision requires unchanged HEAD and clean worktree")

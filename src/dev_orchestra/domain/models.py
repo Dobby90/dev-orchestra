@@ -1,9 +1,13 @@
 """Transport-independent workflow contracts."""
 
 from enum import StrEnum
+from pathlib import Path
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
+
+MAX_DESIGN_IMAGES = 8
+MAX_DESIGN_IMAGE_BYTES = 5 * 2**20
 
 
 class Model(BaseModel):
@@ -81,6 +85,25 @@ class AgentRequest(Model):
     iteration: int
     input_sha: str
     context: dict
+    design_image_paths: tuple[Path, ...] = Field(default=(), exclude=True)
+
+
+class DesignImage(Model):
+    name: str = Field(min_length=5, max_length=255)
+    sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    bytes: int = Field(gt=0, le=MAX_DESIGN_IMAGE_BYTES)
+
+    @field_validator("name")
+    @classmethod
+    def png_filename(cls, name):
+        if (
+            not name.isprintable()
+            or "/" in name
+            or "\\" in name
+            or not name.lower().endswith(".png")
+        ):
+            raise ValueError("design reference requires a PNG filename")
+        return name
 
 
 class WorkspaceResult(Model):
