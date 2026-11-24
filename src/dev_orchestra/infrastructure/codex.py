@@ -224,8 +224,6 @@ class CodexClient:
             "--json",
             "--output-schema",
             str(schema),
-            "--output-last-message",
-            str(result),
         ]
         if _workspace is not None:
             argv += ["--ignore-rules"]
@@ -272,6 +270,10 @@ class CodexClient:
             argv += ["-c", f'model_reasoning_effort="{options.reasoning_effort}"']
         if options.service_tier is not None:
             argv += ["-c", f'service_tier="{options.service_tier}"']
+        if not _metadata_only:
+            for path in request.design_image_paths:
+                argv += ["--image", str(path)]
+        argv += ["--output-last-message", str(result)]
         if _session_id:
             argv.append(_session_id)
         argv.append("-")

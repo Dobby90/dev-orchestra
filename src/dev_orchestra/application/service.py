@@ -15,6 +15,7 @@ from dev_orchestra.config import Config
 from dev_orchestra.domain.execution import WORKSPACE_V2
 from dev_orchestra.domain.models import PipelineError
 from dev_orchestra.infrastructure.coordination import metadata
+from dev_orchestra.infrastructure.design_images import DesignImageInput, snapshot_images
 from dev_orchestra.infrastructure.evidence import checkpoints
 from dev_orchestra.infrastructure.files import digest, write
 from dev_orchestra.infrastructure.git import Git
@@ -43,9 +44,25 @@ class RunService:
             )
         return WORKSPACE_V2
 
-    def create(self, repo: Path, spec: Path, base=None, max_fixes=None, test_scope="full"):
+    def create(
+        self,
+        repo: Path,
+        spec: Path,
+        base=None,
+        max_fixes=None,
+        test_scope="full",
+        *,
+        auto_approve_plan=False,
+        design_image_paths=(),
+    ):
         command = CreateRun(
-            repo=repo, spec=spec, base=base, max_fixes=max_fixes, test_scope=test_scope
+            repo=repo,
+            spec=spec,
+            base=base,
+            max_fixes=max_fixes,
+            test_scope=test_scope,
+            auto_approve_plan=auto_approve_plan,
+            design_image_paths=design_image_paths,
         )
         return self.create_run(command)
 
@@ -54,7 +71,15 @@ class RunService:
         self.store.create(data)
         return data["id"]
 
-    def prepare_run(self, command: CreateRun, *, run_id=None, branch=None, resolve_settings=True):
+    def prepare_run(
+        self,
+        command: CreateRun,
+        *,
+        run_id=None,
+        branch=None,
+        resolve_settings=True,
+        design_images: tuple[DesignImageInput, ...] = (),
+    ):
         repo, spec, base, max_fixes = command.repo, command.spec, command.base, command.max_fixes
         from dev_orchestra.application.agent_settings import AgentSettingsService
 
@@ -114,6 +139,7 @@ class RunService:
             "iteration": 0,
             "revision": 0,
             "plan_approval_required": True,
+            "auto_approve_plan": command.auto_approve_plan,
             "next_role": "planner",
             "created_at": now(),
         }
@@ -121,6 +147,10 @@ class RunService:
             data["review_contract"] = (
                 2 if db.execute("SELECT version FROM schema_version").fetchone()[0] >= 5 else 1
             )
+        if command.design_image_paths:
+            design_images = tuple(DesignImageInput.from_path(p) for p in command.design_image_paths)
+        if design_images:
+            data["design_images"] = snapshot_images(directory, design_images)
         write(directory / "spec.md", spec_text)
         write(directory / "config.json", data["config"])
         return data
@@ -142,7 +172,7 @@ class RunService:
         if run.get("test_change_proposal") and answers and answers.strip():
             raise PipelineError("discard the saved test change proposal before adding instructions")
         ensure_stopped(Path(run["directory"]))
-        checkpoints(self.store, run)
+        saved_plan = checkpoints(self.store, run).get("planner")
         release_checkpoint = False
         if run.get("workspace_checkpoint"):
             from dev_orchestra.application.workspace_recovery import inspect_workspace
@@ -174,7 +204,11 @@ class RunService:
                 },
             ]
             changes["questions"] = []
-            if run.get("next_role") == "done":
+            if run.get("next_role") == "done" or (
+                run.get("next_role") == "planner"
+                and saved_plan is not None
+                and saved_plan.get("revision", 0) == run.get("revision", 0)
+            ):
                 changes.update(
                     next_role="planner",
                     revision=run.get("revision", 0) + 1,

@@ -18,15 +18,28 @@ import { RunAgentSettings } from "../components/RunAgentSettings";
 import { agentSpeedLabel } from "../components/AgentSpeedSelect";
 import { useDraftField, useClearDraft } from "../hooks/runDraft";
 import { PrdGuide } from "../components/PrdGuide";
+import { DesignImageList } from "../components/DesignImageList";
 import {
   ProjectGitConnection,
   useProjectGitConnection,
 } from "../components/ProjectGitConnection";
+
+const maxDesignImages = 8;
+const maxDesignImageBytes = 5 * 1024 * 1024;
+
+function stagedImages(images: Schema["DesignImageUpload"][]) {
+  return images.map(({ id, name }) => ({
+    name,
+    src: api.stagedDesignImageUrl(id),
+  }));
+}
+
 export function NewRunPage() {
   const [params] = useSearchParams(),
     navigate = useNavigate();
   const clearDraft = useClearDraft();
   const [agentSettings, setAgentSettings] = useDraftField("agentSettings");
+  const [designImages, setDesignImages] = useDraftField("designImages");
   const [project, setProject] = useDraftField(
       "project",
       params.get("project") ?? "",
@@ -36,9 +49,11 @@ export function NewRunPage() {
     [mode, setMode] = useDraftField("mode"),
     [base, setBase] = useDraftField("base"),
     [branch, setBranch] = useDraftField("branch"),
+    [commitPrefix, setCommitPrefix] = useDraftField("commitPrefix"),
     [instructions, setInstructions] = useDraftField("instructions"),
     [budget, setBudget] = useDraftField("budget"),
     [testScope, setTestScope] = useDraftField("testScope"),
+    [autoApprovePlan, setAutoApprovePlan] = useDraftField("autoApprovePlan"),
     [previewOpen, setPreviewOpen] = useState(false),
     [localError, setLocalError] = useState("");
   useEffect(() => {
@@ -67,6 +82,32 @@ export function NewRunPage() {
   });
   const gitConnection = useProjectGitConnection(project);
   const upload = useMutation({ mutationFn: api.upload });
+  const imageUpload = useMutation({
+    mutationFn: async (files: File[]) => {
+      const images = [...designImages];
+      const issues: string[] = [];
+      for (const file of files) {
+        try {
+          const image = await api.uploadDesignImage(file);
+          if (images.some((item) => item.sha256 === image.sha256)) continue;
+          if (images.some((item) => item.name === image.name)) {
+            issues.push(`${file.name} 파일명이 이미 사용 중입니다.`);
+            continue;
+          }
+          images.push(image);
+        } catch (error) {
+          issues.push(
+            `${file.name} · ${error instanceof ApiError ? error.message : "첨부하지 못했습니다."}`,
+          );
+        }
+      }
+      return { images, issues };
+    },
+    onSuccess: ({ images, issues }) => {
+      setDesignImages(images);
+      if (issues.length) setLocalError(issues.join(" "));
+    },
+  });
   const preview = useMutation({
     mutationFn: async (proposal: Schema["Proposal"]) => ({
       proposal,
@@ -102,10 +143,15 @@ export function NewRunPage() {
   }
   function check(event: FormEvent) {
     event.preventDefault();
-    if (!project) return;
+    if (!project || imageUpload.isPending) return;
     setLocalError("");
     if (!name.trim()) {
       setLocalError("작업명을 입력해 주세요.");
+      return;
+    }
+    const prefix = commitPrefix.trim();
+    if (prefix.includes("[") || prefix.includes("]")) {
+      setLocalError("커밋 메시지 접두사에는 대괄호 안의 값만 입력해 주세요.");
       return;
     }
     if (
@@ -128,11 +174,14 @@ export function NewRunPage() {
           ? { kind: "text", text }
           : { kind: "stored", spec_id: upload.data!.id },
       additional_instructions: instructions,
+      ...(designImages.length ? { design_images: designImages } : {}),
       test_scope: testScope,
+      auto_approve_plan: autoApprovePlan,
       run_tests: true,
       run_review: true,
       ...(base ? { base_branch: base } : {}),
       ...(branch ? { feature_branch: branch } : {}),
+      ...(prefix ? { commit_prefix: prefix } : {}),
       ...(budget !== "" ? { max_fix_attempts: Number(budget) } : {}),
     };
     preview.mutate(proposal);
@@ -296,6 +345,66 @@ export function NewRunPage() {
                   )}
                 </label>
               )}
+              <div className="design-image-field">
+                <label>
+                  디자인 참고 이미지 (선택)
+                  <input
+                    type="file"
+                    accept=".png,image/png"
+                    multiple
+                    disabled={imageUpload.isPending || preview.isPending}
+                    aria-describedby="design-images-guide"
+                    onChange={(event) => {
+                      const files = Array.from(event.currentTarget.files ?? []);
+                      event.currentTarget.value = "";
+                      if (!files.length) return;
+                      edit(() => {
+                        if (
+                          designImages.length + files.length >
+                          maxDesignImages
+                        ) {
+                          setLocalError(
+                            "디자인 참고 이미지는 최대 8장까지 첨부할 수 있습니다.",
+                          );
+                        } else if (
+                          files.some(
+                            (file) =>
+                              !/\.png$/i.test(file.name) ||
+                              !file.size ||
+                              file.size > maxDesignImageBytes,
+                          )
+                        ) {
+                          setLocalError(
+                            "5 MiB 이하의 PNG 파일을 선택해 주세요.",
+                          );
+                        } else {
+                          imageUpload.mutate(files);
+                        }
+                      });
+                    }}
+                  />
+                </label>
+                <p id="design-images-guide" className="help">
+                  PNG 최대 8장, 한 장당 5 MiB. 화면과 이미지 안의 설명을 PRD와
+                  함께 에이전트에 전달합니다.
+                </p>
+                {imageUpload.isPending && (
+                  <p role="status">이미지 업로드 중…</p>
+                )}
+                <DesignImageList
+                  images={stagedImages(designImages)}
+                  disabled={imageUpload.isPending || preview.isPending}
+                  onRemove={(src) =>
+                    edit(() =>
+                      setDesignImages(
+                        designImages.filter(
+                          (image) => api.stagedDesignImageUrl(image.id) !== src,
+                        ),
+                      ),
+                    )
+                  }
+                />
+              </div>
               <details>
                 <summary>브랜치·추가 지시사항 (선택)</summary>
                 <div className="form-columns">
@@ -337,6 +446,22 @@ export function NewRunPage() {
                   )}
                 </p>
                 <label>
+                  커밋 메시지 접두사 (선택)
+                  <input
+                    value={commitPrefix}
+                    maxLength={80}
+                    aria-describedby="commit-prefix-guide"
+                    placeholder="PROJ-123"
+                    onChange={(e) =>
+                      edit(() => setCommitPrefix(e.target.value))
+                    }
+                  />
+                </label>
+                <p id="commit-prefix-guide" className="help">
+                  대괄호 안에 들어갈 값만 입력하세요. 비워 두면 기존 브랜치 이름
+                  규칙을 사용합니다.
+                </p>
+                <label>
                   추가 지시사항 (선택)
                   <textarea
                     rows={3}
@@ -366,6 +491,21 @@ export function NewRunPage() {
                 생성 후에는 범위를 변경할 수 없습니다. 모델이 변경 코드와 관련
                 테스트를 분석해 자동 선택합니다. 필요한 경우 관련 모듈로 범위를
                 확대하고 이유를 기록합니다.
+              </p>
+              <label className="check-row">
+                <input
+                  type="checkbox"
+                  checked={autoApprovePlan}
+                  aria-describedby="auto-approve-plan-guide"
+                  onChange={(e) =>
+                    edit(() => setAutoApprovePlan(e.target.checked))
+                  }
+                />
+                기획 자동 승인
+              </label>
+              <p id="auto-approve-plan-guide" className="help">
+                기획안이 확정되면 바로 개발을 시작합니다. 최종 승인은 직접
+                진행합니다.
               </p>
               <details>
                 <summary>모델·자동 수정 설정 (선택)</summary>
@@ -406,7 +546,7 @@ export function NewRunPage() {
             )}
             <div className="form-action-bar">
               <span className="help">
-                실행 전에 브랜치와 테스트 범위를 확인합니다.
+                실행 전에 브랜치와 테스트 범위, 기획 승인 방식을 확인합니다.
               </span>
               <Button
                 type="submit"
@@ -415,6 +555,7 @@ export function NewRunPage() {
                   preview.isPending ||
                   !project ||
                   upload.isPending ||
+                  imageUpload.isPending ||
                   !!selected.data?.archived_at ||
                   !!selected.error
                 }
@@ -509,7 +650,7 @@ export function NewRunPage() {
             if (!locked) setPreviewOpen(open);
           }}
           title="실행 미리보기"
-          description="실행할 브랜치와 테스트 범위를 확인한 뒤 작업을 시작하세요."
+          description="브랜치와 테스트 범위, 기획 승인 방식을 확인한 뒤 작업을 시작하세요."
         >
           <dl>
             <dt>작업명</dt>
@@ -518,8 +659,26 @@ export function NewRunPage() {
             <dd>{selected.data?.name}</dd>
             <dt>Feature 브랜치</dt>
             <dd className="mono path">{preview.data.receipt.branch}</dd>
+            {preview.data.proposal.commit_prefix && (
+              <>
+                <dt>커밋 메시지 접두사</dt>
+                <dd className="mono path">
+                  [{preview.data.proposal.commit_prefix}]
+                </dd>
+              </>
+            )}
             <dt>기준 커밋</dt>
             <dd className="mono path">{preview.data.receipt.base_sha}</dd>
+            {!!preview.data.receipt.design_images?.length && (
+              <>
+                <dt>디자인 참고 이미지</dt>
+                <dd>
+                  <DesignImageList
+                    images={stagedImages(preview.data.receipt.design_images)}
+                  />
+                </dd>
+              </>
+            )}
             {preview.data.receipt.agent_settings && (
               <>
                 <dt>에이전트 모델·추론 강도·속도</dt>
@@ -542,6 +701,8 @@ export function NewRunPage() {
                 ? "변경 영향 범위 테스트"
                 : "전체 테스트"}
             </dd>
+            <dt>기획 승인</dt>
+            <dd>{preview.data.receipt.auto_approve_plan ? "자동" : "수동"}</dd>
             {deferredValidation && (
               <>
                 <dt>검증 명령</dt>

@@ -11,6 +11,7 @@ from pathlib import Path
 
 from dev_orchestra.domain.models import PipelineError, StopRequested
 from dev_orchestra.infrastructure.files import contained, digest, write
+from dev_orchestra.infrastructure.jest_outputs import cache_files, cache_path, generated_outputs
 from dev_orchestra.infrastructure.process import (
     environment,
     execute,
@@ -220,9 +221,14 @@ class TestRunner:
     def run(self, worktree, config, directory, stop=lambda: None):
         if not config.commands:
             raise PipelineError("configure at least one allowlisted test command")
+        from dev_orchestra.infrastructure.gradle_worktree_caches import (
+            GradleWorktreeCaches,
+            gradle_cache_roots,
+        )
         from dev_orchestra.infrastructure.java_cache import GradleCacheBindings
 
         bindings = GradleCacheBindings(self.preflight, worktree) if self.preflight else None
+        gradle_caches = GradleWorktreeCaches(self.preflight, worktree) if self.preflight else None
         results = []
         directory.mkdir(parents=True, exist_ok=True)
         observation = {"started_at": time.time(), "status": "incomplete", "commands": []}
@@ -247,13 +253,15 @@ class TestRunner:
             # Never grant write access to any tracked production/test file via output paths.
             from dev_orchestra.infrastructure.git import Git
 
-            tracked = [name for name in Git(worktree).call("ls-files", "-z").split("\0") if name]
+            git = Git(worktree)
+            tracked = [name for name in git.call("ls-files", "-z").split("\0") if name]
             if any((worktree / name).is_relative_to(p) for name in tracked for p in outputs):
                 raise PipelineError("output path contains tracked source files")
             for p in outputs:
                 p.mkdir(parents=True, exist_ok=True)
             from dev_orchestra.infrastructure.runtime_adapters import (
                 convert_jest_report,
+                gradle_directory_command,
                 jest_json_path,
                 runtime_command,
             )
@@ -322,20 +330,24 @@ class TestRunner:
 
                     prepared = toolchain(worktree, directory, stop)
                     if prepared:
+                        runtime_argv, adapters, files = gradle_directory_command(
+                            command, command.argv, directory
+                        )
                         argv, owner_env = run_arguments(
                             worktree,
                             worktree,
                             outputs,
                             scratch,
-                            command.argv,
+                            runtime_argv,
                             prepared,
                             directory,
                             cwd=cwd,
                             extra_env=command.env,
+                            adapters=files,
                         )
                         env.update(owner_env)
-                        result["runtime_argv"] = command.argv
-                        result["runtime_adapters"] = ["docker"]
+                        result["runtime_argv"] = runtime_argv
+                        result["runtime_adapters"] = ["docker", *adapters]
                         result["container_environment"] = {
                             k: v for k, v in prepared.items() if k != "docker"
                         }
@@ -361,14 +373,27 @@ class TestRunner:
                         argv = sandbox_command(
                             worktree, outputs, scratch, runtime_argv, command.network, **options
                         )
-                    rc, output = execute(
-                        argv,
-                        cwd,
-                        command.timeout_seconds,
-                        directory / f"{command_id}.log",
-                        stop=stop,
-                        env=env,
+                    jest_cache = cache_path(worktree, command, outputs) if jest_json else None
+                    try:
+                        cache_before = cache_files(git, jest_cache)
+                    except (OSError, PipelineError):
+                        cache_before = None
+                    gradle_roots = (
+                        gradle_cache_roots(worktree, [command], config.output_paths)
+                        if gradle_caches
+                        else set()
                     )
+                    with (
+                        gradle_caches.record(gradle_roots, stop) if gradle_roots else nullcontext()
+                    ):
+                        rc, output = execute(
+                            argv,
+                            cwd,
+                            command.timeout_seconds,
+                            directory / f"{command_id}.log",
+                            stop=stop,
+                            env=env,
+                        )
                 result["exit_code"] = rc
                 if rc:
                     diagnostic = f"exit code {rc}: {sanitize(output[-1200:].strip())}"
@@ -409,6 +434,13 @@ class TestRunner:
                     copy = directory / f"{command_id}.junit.xml"
                     write(copy, junit_bundle(reports))
                     result.update(junit_path=str(copy), junit_hash=digest(copy.read_bytes()))
+                    if jest_json:
+                        try:
+                            result["jest_outputs"] = generated_outputs(
+                                git, jest_json, jest_cache, cache_before
+                            )
+                        except (OSError, PipelineError):
+                            pass  # Unidentified files remain protected during cleanup.
             except StopRequested:
                 raise
             except (PipelineError, OSError) as error:

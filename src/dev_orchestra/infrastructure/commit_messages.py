@@ -17,7 +17,7 @@ def validate_commit_message(message):
         raise PipelineError("commit requires a concrete Korean subject without sensitive content")
 
 
-def format_branch_commit(message, branch, *, version):
+def format_branch_commit(message, branch, *, version, commit_prefix=None):
     message = message.strip()
     prefix = ""
     # Match the historical prefixes first to preserve their commit subjects.
@@ -31,6 +31,9 @@ def format_branch_commit(message, branch, *, version):
             prefix = f"[{suffix}] "
             break
     if prefix and message.startswith(prefix):
+        message = message.removeprefix(prefix)
+    if commit_prefix:
+        prefix = f"[{commit_prefix}] "
         message = message.removeprefix(prefix)
     # Validate the description itself so a prefix cannot hide a generic subject.
     validate_commit_message(message)

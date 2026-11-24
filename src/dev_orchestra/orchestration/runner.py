@@ -14,6 +14,7 @@ from dev_orchestra.application.automatic_tests import (
     automatic,
     command_dependencies,
     deferred_builds,
+    prepare_selected_only,
 )
 from dev_orchestra.application.errors import ApplicationError
 from dev_orchestra.application.handoff import repository_identity, same_repository
@@ -29,10 +30,11 @@ from dev_orchestra.application.workspace_recovery import WorkspaceBlocked
 from dev_orchestra.config import Config
 from dev_orchestra.domain.execution import execution_contract, writes_workspace
 from dev_orchestra.domain.models import AgentRequest, PipelineError, StopRequested
+from dev_orchestra.infrastructure.design_images import design_image_binding, verified_run_images
 from dev_orchestra.infrastructure.evidence import checkpoints, verified_candidate
 from dev_orchestra.infrastructure.files import contained, digest, write
 from dev_orchestra.infrastructure.git import Git
-from dev_orchestra.infrastructure.gradle_preparation import observe_preparation
+from dev_orchestra.infrastructure.gradle_preparation import observe_preparation, preparation_control
 from dev_orchestra.infrastructure.locking import lock
 from dev_orchestra.infrastructure.process import execution_scope, redact, sanitize
 from dev_orchestra.infrastructure.process_owner import ensure_stopped, identity
@@ -80,17 +82,7 @@ class Runner:
         self.store, self.agent, self.tests = store, agent, tests
 
     def _prepare(self, run_id, worktree, config, directory):
-        next_poll = 0.0
-        action = None
-
-        def stop():
-            nonlocal next_poll, action
-            now = monotonic()
-            if now >= next_poll:
-                action = self.store.read_control(run_id)
-                next_poll = now + 0.2
-            return action
-
+        stop = preparation_control(lambda: self.store.read_control(run_id), monotonic)
         with observe_preparation(lambda progress: self.store.gradle_progress(run_id, progress)):
             self.tests.prepare(worktree, config, directory, stop)
         if action := self.store.read_control(run_id):
@@ -199,6 +191,7 @@ class Runner:
             raise StopRequested(run["control"])
         configured = Config.model_validate(run["config"])
         checkpoints(self.store, run)
+        verified_run_images(run)
         directory, worktree = Path(run["directory"]), Path(run["worktree"])
         original = Git(Path(run["repo"]))
         if run.get("workspace_checkpoint") and not worktree.exists():
@@ -282,7 +275,13 @@ class Runner:
                 except (ApplicationError, PipelineError, ValueError) as error:
                     self.store.update(run_id, "needs_input", error=redact(str(error)))
                     return
-            if config.tests.commands and hasattr(self.tests, "prepare"):
+            if (
+                config.tests.commands
+                and hasattr(self.tests, "prepare")
+                and not prepare_selected_only(run)
+                # A pending stage repaired only from evidence must remain read-only.
+                and not (resumed_workspace and resumed_workspace.data.get("metadata_only"))
+            ):
                 try:
                     tests = config.tests
                     if automatic(run) and (deferred := deferred_builds(run, git.sha(), tests)):
@@ -332,6 +331,13 @@ class Runner:
                     raise PipelineError("checkpoint artifact checksum mismatch")
                 payload = json.loads(artifact.read_text())
             else:
+                if (
+                    role == "developer"
+                    and run.get("auto_approve_plan") is True
+                    and not resumed_workspace
+                    and sha != run["plan_approval"]["input_sha"]
+                ):
+                    raise PipelineError("developer HEAD differs from the approved plan")
                 instruction_hash = digest(
                     json.dumps(
                         {k: run.get(k) for k in ("answers", "clarifications", "directives")},
@@ -434,6 +440,9 @@ class Runner:
                         from dev_orchestra.application.reviews import Reviews
 
                         context["open_issues"] = Reviews(self.store).open(run_id)
+                image_paths = verified_run_images(run) if role != "tester" else ()
+                if image_paths:
+                    context["design_images"] = [image["name"] for image in run["design_images"]]
                 request = AgentRequest(
                     run_id=run_id,
                     role=role,
@@ -441,6 +450,7 @@ class Runner:
                     iteration=iteration,
                     input_sha=sha,
                     context=context,
+                    design_image_paths=image_paths,
                 )
                 from dev_orchestra.application.test_selection import select_tests
 
@@ -663,7 +673,11 @@ class Runner:
                         )
                 else:
                     self.store.update(run_id, current_sha=out_sha)
-                payload = result.model_dump() | {"sha": out_sha, "revision": run.get("revision", 0)}
+                payload = (
+                    result.model_dump()
+                    | {"sha": out_sha, "revision": run.get("revision", 0)}
+                    | design_image_binding(run)
+                )
                 if workspace:
                     payload["workspace_commits"] = workspace_commits
                 if approval:
@@ -914,15 +928,23 @@ class Runner:
         if role == "planner":
             write(directory / "implementation-plan.md", payload["plan"])
             write(directory / "acceptance-criteria.json", payload["criteria"])
-            self.store.update(
-                run_id,
-                state="waiting_plan_approval" if run.get("plan_approval_required") else None,
-                next_role="developer",
-                plan=payload["plan"],
-                criteria=payload["criteria"],
-                planning_draft=None,
-                questions=[],
-            )
+            plan = {
+                "plan": payload["plan"],
+                "criteria": payload["criteria"],
+                "planning_draft": None,
+                "questions": [],
+            }
+            if run.get("auto_approve_plan") is True:
+                from dev_orchestra.application.plan_approval import approve_automatically
+
+                approve_automatically(self.store, run, plan)
+            else:
+                self.store.update(
+                    run_id,
+                    state="waiting_plan_approval" if run.get("plan_approval_required") else None,
+                    next_role="developer",
+                    **plan,
+                )
         elif role in {"developer", "fixer"}:
             self.store.update(run_id, next_role="tester")
         elif role == "tester":

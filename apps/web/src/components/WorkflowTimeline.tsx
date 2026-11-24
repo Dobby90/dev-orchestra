@@ -155,13 +155,16 @@ export function WorkflowTimeline({
 }) {
   const [now, setNow] = useState(Date.now);
   const [reveal, setReveal] = useState(0);
-  const currentStep = [...items]
-    .reverse()
-    .find(
-      (step) =>
-        step.status === "running" &&
-        (step.revision ?? 0) === (run.revision ?? 0),
-    );
+  const latestFirst = [...items].sort(
+    (a, b) =>
+      (b.revision ?? 0) - (a.revision ?? 0) ||
+      b.iteration - a.iteration ||
+      b.id - a.id,
+  );
+  const currentStep = latestFirst.find(
+    (step) =>
+      step.status === "running" && (step.revision ?? 0) === (run.revision ?? 0),
+  );
   const running = items.some((s) => s.status === "running");
   useEffect(() => {
     if (!running) return;
@@ -169,7 +172,7 @@ export function WorkflowTimeline({
     return () => clearInterval(timer);
   }, [running]);
   const groups = new Map<string, Step[]>();
-  for (const step of items) {
+  for (const step of latestFirst) {
     const key = `${step.revision ?? 0}:${step.iteration}`;
     groups.set(key, [...(groups.get(key) ?? []), step]);
   }
@@ -188,8 +191,8 @@ export function WorkflowTimeline({
         {run.iteration === 0 ? "최초 실행" : `수정 ${run.iteration}회차`}
       </p>
       <p className="help">
-        기획 → 기획 승인 → 개발 → 테스트 → 리뷰 → 보고서 → 최종 승인 · 수정 시
-        수정 → 테스트 → 리뷰 반복
+        기획 → {run.auto_approve_plan ? "기획 자동 승인" : "기획 승인"} → 개발 →
+        테스트 → 리뷰 → 보고서 → 최종 승인 · 수정 시 수정 → 테스트 → 리뷰 반복
       </p>
       {currentStep && (
         <button

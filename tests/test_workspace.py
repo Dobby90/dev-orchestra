@@ -108,6 +108,83 @@ def checkpoint(session, request_id, files):
     )
 
 
+@pytest.fixture
+def yarn_jest_project(setup):
+    svc, run_id, repo = setup
+    package = {
+        "scripts": {"test": "jest"},
+        "devDependencies": {"jest": "26.6.3"},
+    }
+    (repo / "package.json").write_text(json.dumps(package))
+    (repo / "yarn.lock").write_text("# yarn lockfile v1\n")
+    (repo / "jest.config.js").write_text("module.exports = {};\n")
+    git = Git(repo)
+    git.call("add", "--", "package.json", "yarn.lock", "jest.config.js")
+    git.call("commit", "-m", "기존 Yarn과 Jest 설정")
+    svc.store.update(run_id, base_sha=git.sha())
+    return setup
+
+
+@pytest.mark.parametrize("detect_commands", [False, True])
+def test_existing_yarn_jest_rejects_redundant_environment_edits(yarn_jest_project, detect_commands):
+    svc, run_id, _ = yarn_jest_project
+    config = svc.store.get(run_id)["config"]
+    config["tests"]["commands"] = (
+        {}
+        if detect_commands
+        else {
+            "unit": {
+                "argv": [
+                    "yarn",
+                    "run",
+                    "test",
+                    "--ci",
+                    "--json",
+                    "--outputFile=build/test-jest.json",
+                ],
+                "junit_report": "build/test.xml",
+            }
+        }
+    )
+    svc.store.update(run_id, config=config)
+    session, _ = start_session(yarn_jest_project)
+    manifest = session.root / "package.json"
+    package = json.loads(manifest.read_text())
+    package["devDependencies"]["jest-junit"] = "13.0.0"
+
+    with pytest.raises(PipelineError, match="does not support Yarn"):
+        edit(session, "devorchestra.environment.json", '{"image":"node:24-bookworm"}')
+    with pytest.raises(PipelineError, match="already converts the Jest JSON report"):
+        edit(session, "package.json", json.dumps(package))
+    with pytest.raises(PipelineError, match="already converts the Jest JSON report"):
+        edit(session, "jest.config.js", "module.exports = { reporters: ['jest-junit'] };\n")
+    assert not session.changed_files()
+
+    del package["devDependencies"]["jest-junit"]
+    package["scripts"]["test:unit"] = "jest tests/unit"
+    edit(session, "package.json", json.dumps(package))
+    checkpoint(session, "existing-jest", ["package.json"])
+    assert session.git.call("show", "HEAD:yarn.lock") == "# yarn lockfile v1"
+
+
+@pytest.mark.parametrize("mixed_reports", [False, True])
+def test_explicit_junit_report_can_use_jest_junit(yarn_jest_project, mixed_reports):
+    svc, run_id, _ = yarn_jest_project
+    config = svc.store.get(run_id)["config"]
+    config["tests"]["commands"] = {
+        "unit": {"argv": ["yarn", "run", "test"], "junit_report": "build/test.xml"}
+    }
+    if mixed_reports:
+        config["tests"]["commands"]["json_unit"] = {
+            "argv": ["jest", "--ci", "--json", "--outputFile=build/test-jest.json"],
+            "junit_report": "build/converted.xml",
+        }
+    svc.store.update(run_id, config=config)
+    session, _ = start_session(yarn_jest_project)
+    edit(session, "jest.config.js", "module.exports = { reporters: ['jest-junit'] };\n")
+    checkpoint(session, "native-junit", ["jest.config.js"])
+
+
 @pytest.mark.parametrize("role", ["developer", "fixer"])
 def test_multiple_checkpoints_selected_files_and_cumulative_result(setup, role):
     session, request = start_session(setup, role)

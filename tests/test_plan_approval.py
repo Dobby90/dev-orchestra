@@ -1,3 +1,4 @@
+import json
 from pathlib import Path
 
 import pytest
@@ -7,7 +8,7 @@ from test_workflow import service as service
 
 from dev_orchestra.application.commands import Commands
 from dev_orchestra.application.plan_approval import binding, decide
-from dev_orchestra.domain.models import PipelineError, ReviewResultV2
+from dev_orchestra.domain.models import AgentResult, PipelineError, ReviewResultV2
 from dev_orchestra.infrastructure.migrations import upgrade
 
 
@@ -40,6 +41,73 @@ def test_approve_then_develop_and_final_approval(planned):
     assert svc.store.get(rid)["state"] == "waiting_approval"
     svc.approve(rid)
     assert svc.store.get(rid)["state"] == "completed"
+
+
+@pytest.mark.parametrize("resume", [None, "unchanged", "new_instructions"])
+def test_automatic_approval_uses_current_plan(service, monkeypatch, tmp_path, resume):
+    svc, old, repo = service
+    monkeypatch.undo()
+    spec = Path(svc.store.get(old)["directory"]) / "spec.md"
+    rid = svc.create(repo, spec, auto_approve_plan=True)
+    agent = FakeAgent()
+    runner = Runner(svc.store, agent, FakeTests())
+    if resume:
+        # Interrupt after the planner result is saved but before its approval is persisted.
+        with monkeypatch.context() as patch:
+
+            def interrupt(*args):
+                raise InterruptedError("planner completed")
+
+            patch.setattr(runner, "advance", interrupt)
+            with pytest.raises(InterruptedError, match="planner completed"):
+                runner._execute(rid)
+        svc.store.update(rid, "failed")
+        answers = None
+        if resume == "new_instructions":
+            answers = tmp_path / "answers.md"
+            answers.write_text("추가 인수 조건을 기획에 반영")
+        svc.resume(rid, answers)
+
+    runner._execute(rid)
+
+    run = svc.store.get(rid)
+    assert run["state"] == "waiting_approval"
+    assert run["revision"] == int(resume == "new_instructions")
+    assert agent.calls == ["planner"] * (run["revision"] + 1) + ["developer", "tester", "reviewer"]
+    assert run["plan_approval"]["source"] == "automatic"
+    assert all(run["plan_approval"][k] == v for k, v in binding(svc.store, run).items())
+    detail = svc.queries.snapshot(rid)
+    assert detail["automatic_plan_approved_at"] == run["plan_approval"]["approved_at"]
+    events = svc.store.events(rid)
+    assert [json.loads(event["data"]) for event in events if event["kind"] == "plan.decided"] == [
+        {
+            "schema_version": 1,
+            "approved": True,
+            "plan_hash": run["plan_approval"]["plan_hash"],
+            "source": "automatic",
+        }
+    ]
+    assert not any(
+        json.loads(event["data"]).get("state") == "waiting_plan_approval" for event in events
+    )
+
+
+def test_automatic_approval_waits_for_answers(service, monkeypatch):
+    svc, old, repo = service
+    monkeypatch.undo()
+    spec = Path(svc.store.get(old)["directory"]) / "spec.md"
+    rid = svc.create(repo, spec, auto_approve_plan=True)
+
+    class QuestioningAgent(FakeAgent):
+        def run(self, req, directory, stop):
+            assert req.role == "planner"
+            return AgentResult(summary="기획 질문", questions=["어떤 동작이 필요한가요?"])
+
+    Runner(svc.store, QuestioningAgent(), FakeTests())._execute(rid)
+
+    run = svc.store.get(rid)
+    assert run["state"] == "needs_input"
+    assert run.get("plan_approval") is None
 
 
 @pytest.mark.parametrize("upgrade_database", [False, True])
@@ -116,8 +184,6 @@ def test_new_instructions_before_development_require_replanning(planned, tmp_pat
 
 
 def test_cli_displays_hash_and_approves_without_model_call(planned, monkeypatch):
-    import json
-
     from typer.testing import CliRunner
 
     from dev_orchestra.application.service import RunService

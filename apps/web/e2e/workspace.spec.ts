@@ -46,6 +46,98 @@ async function waitForIdleWorker(f: ReturnType<typeof fixture>, rid: string) {
     .toBe("0");
 }
 
+test("PRD와 PNG 네 장을 제출하고 작업에서 원본을 다시 연다", async ({
+  page,
+}) => {
+  const f = fixture();
+  await page.goto("/");
+  await page.getByLabel("일회용 로그인 코드").fill(bootstrap());
+  const session = page.waitForResponse(
+    (response) =>
+      response.url().endsWith("/api/session") &&
+      response.request().method() === "POST",
+  );
+  await page.getByRole("button", { name: "작업 공간 열기" }).click();
+  const { csrf_token } = await (await session).json();
+  const registered = await page.request.post("/api/projects", {
+    headers: {
+      Origin: new URL(page.url()).origin,
+      "X-CSRF-Token": csrf_token,
+    },
+    data: {
+      name: "GUI 디자인 검증",
+      repository_path: f.repo,
+      policy: f.policy,
+    },
+  });
+  expect(registered.status()).toBe(201);
+  await page.goto(`/runs/new?project=${(await registered.json()).id}`);
+  await page.getByLabel("작업명", { exact: true }).fill("시뮬레이션 화면");
+  await page.getByRole("button", { name: "파일 업로드", exact: true }).click();
+  await page.getByLabel("PRD 파일 (.md / .txt, UTF-8)").setInputFiles({
+    name: "simulation.md",
+    mimeType: "text/markdown",
+    buffer: Buffer.from("See [initial state](assets/before-1.png)."),
+  });
+  await expect(page.getByText(/PRD 저장됨/)).toBeVisible();
+  const imageNames = [
+    "before-1.png",
+    "before-2.png",
+    "after-1.png",
+    "after-2.png",
+  ];
+  const imageData = await page.evaluate(() => {
+    const canvas = document.createElement("canvas");
+    canvas.width = canvas.height = 2;
+    const context = canvas.getContext("2d")!;
+    return ["red", "green", "blue", "orange"].map((color) => {
+      context.fillStyle = color;
+      context.fillRect(0, 0, 2, 2);
+      return canvas.toDataURL().split(",")[1];
+    });
+  });
+  const files = imageNames.map((name, i) => ({
+    name,
+    mimeType: "image/png",
+    buffer: Buffer.from(imageData[i], "base64"),
+  }));
+  const picker = page.getByLabel("디자인 참고 이미지 (선택)");
+  await picker.setInputFiles(files);
+  await expect(page.locator(".design-image-list img")).toHaveCount(4);
+  await page.getByRole("button", { name: "before-1.png 첨부 제거" }).click();
+  await expect(page.locator(".design-image-list img")).toHaveCount(3);
+  await picker.setInputFiles(files[0]);
+  await expect(page.locator(".design-image-list img")).toHaveCount(4);
+  await page.getByRole("button", { name: "실행 전 확인" }).click();
+  const thumbnails = page.getByRole("dialog").locator(".design-image-list img");
+  await expect(thumbnails).toHaveCount(4);
+  await expect
+    .poll(() =>
+      thumbnails.evaluateAll((images) =>
+        images.every((image) => (image as HTMLImageElement).naturalWidth === 2),
+      ),
+    )
+    .toBe(true);
+  await page.getByRole("button", { name: "확인하고 작업 시작" }).click();
+  await expect(page).toHaveURL(/\/runs\/run-/);
+  await page.getByRole("tab", { name: "요구사항", exact: true }).click();
+  await expect(page.locator(".design-image-list img")).toHaveCount(4);
+  await expect(
+    page.getByRole("link", { name: "after-2.png 원본 열기" }),
+  ).toBeVisible();
+  await expect
+    .poll(() =>
+      page
+        .locator(".design-image-list img")
+        .evaluateAll((images) =>
+          images.every(
+            (image) => (image as HTMLImageElement).naturalWidth === 2,
+          ),
+        ),
+    )
+    .toBe(true);
+});
+
 test("실제 로컬 API: 로그인 → 프로젝트 → 실행 → 재연결 → 승인", async ({
   page,
 }) => {
@@ -303,6 +395,7 @@ test("실제 로컬 API: 로그인 → 프로젝트 → 실행 → 재연결 →
   await expect(
     page.getByRole("heading", { name: "테스트 통과", exact: true }),
   ).toBeVisible();
+  await page.getByText("실행 세부 정보", { exact: true }).click();
   const junitDownload = page.waitForEvent("download");
   await page.getByRole("link", { name: "보존된 JUnit" }).click();
   const junit = await junitDownload;
@@ -332,9 +425,15 @@ test("실제 로컬 API: 로그인 → 프로젝트 → 실행 → 재연결 →
     page.getByRole("heading", { name: "테스트 통과", exact: true }),
   ).toBeVisible();
   const history = page.getByLabel("결과 회차 선택");
-  await expect(history.locator("option")).toHaveCount(3);
+  await expect(history.getByRole("option")).toHaveText([
+    "현재 revision의 최신 결과",
+    /^revision 1 ·/,
+    /^revision 0 ·/,
+  ]);
   await history.selectOption(
-    (await history.locator("option").nth(1).getAttribute("value")) ?? "",
+    (await history
+      .getByRole("option", { name: /^revision 0 ·/ })
+      .getAttribute("value")) ?? "",
   );
   await expect(page.getByText(/이전 revision 0의 결과입니다/)).toBeVisible();
   await history.selectOption("");

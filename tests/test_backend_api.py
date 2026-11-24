@@ -189,8 +189,15 @@ def test_project_duplicate_path_denied(web):
     assert r.status_code == 409
 
 
-def test_submission_atomic_idempotent_and_not_started(web):
+@pytest.mark.parametrize(
+    ("commit_prefix", "auto_approve_plan"),
+    [(None, None), ("   ", False), ("  PROJ-123  ", True)],
+)
+def test_submission_atomic_idempotent_and_not_started(
+    web, commit_prefix, auto_approve_plan, monkeypatch
+):
     c, svc, _, repo, _ = web
+    monkeypatch.undo()
     before = (repo / "main.py").read_bytes()
     p = project(c, svc, repo)
     proposal = {
@@ -198,9 +205,22 @@ def test_submission_atomic_idempotent_and_not_started(web):
         "project_id": p["id"],
         "spec": {"kind": "text", "text": "인사말 구현"},
     }
+    if commit_prefix is not None:
+        proposal["commit_prefix"] = commit_prefix
+    if auto_approve_plan is not None:
+        proposal["auto_approve_plan"] = auto_approve_plan
     preview = c.post(f"/api/projects/{p['id']}/run-previews", json=proposal)
     assert preview.status_code == 200, preview.text
+    assert preview.json()["auto_approve_plan"] is bool(auto_approve_plan)
     body = {**proposal, "preview_token": preview.json()["preview_token"]}
+    assert (
+        c.post(
+            "/api/runs",
+            json={**body, "auto_approve_plan": not auto_approve_plan},
+            headers={"Idempotency-Key": "changed-approval-mode"},
+        ).status_code
+        == 409
+    )
     assert (
         c.post(
             "/api/runs",
@@ -210,6 +230,14 @@ def test_submission_atomic_idempotent_and_not_started(web):
         == 409
     )
     headers = {"Idempotency-Key": "request-one"}
+    assert (
+        c.post(
+            "/api/runs",
+            json={**body, "commit_prefix": "PROJ-456"},
+            headers=headers,
+        ).status_code
+        == 409
+    )
     response = c.post("/api/runs", json=body, headers=headers)
     assert response.status_code == 202, response.text
     result = response.json()
@@ -229,7 +257,13 @@ def test_submission_atomic_idempotent_and_not_started(web):
         assert db.execute("SELECT count(*) FROM operations").fetchone()[0] == 1
     detail = c.get("/api/runs/" + rid)
     assert detail.json()["name"] == "인사말 구현"
-    assert svc.store.get(rid)["name"] == "인사말 구현"
+    assert detail.json()["auto_approve_plan"] is bool(auto_approve_plan)
+    run = svc.store.get(rid)
+    assert run["name"] == "인사말 구현"
+    assert run["plan_approval_required"] is True
+    assert run["auto_approve_plan"] is bool(auto_approve_plan)
+    assert run["branch"] == preview.json()["branch"] == f"features/{rid}"
+    assert run.get("commit_prefix") == ((commit_prefix or "").strip() or None)
     assert (
         next(r for r in c.get("/api/runs").json()["items"] if r["id"] == rid)["name"]
         == "인사말 구현"
@@ -244,6 +278,22 @@ def test_submission_atomic_idempotent_and_not_started(web):
         == 202
     )
     assert svc.status(rid)["state"] == "cancelled"
+
+
+@pytest.mark.parametrize("commit_prefix", ["[PROJ-123]", "PROJ\n123", "PROJ\x00", "x" * 81])
+def test_preview_rejects_invalid_commit_prefix(web, commit_prefix):
+    c, svc, _, repo, _ = web
+    p = project(c, svc, repo)
+    response = c.post(
+        f"/api/projects/{p['id']}/run-previews",
+        json={
+            "name": "테스트 작업",
+            "project_id": p["id"],
+            "spec": {"kind": "text", "text": "PRD"},
+            "commit_prefix": commit_prefix,
+        },
+    )
+    assert response.status_code == 422
 
 
 def test_stale_preview_rejected(web):

@@ -51,20 +51,33 @@ it("실행 완료와 실패한 검증을 구분하고 정확한 시도로 연결
   fireEvent.click(screen.getByText("시간·SHA 상세"));
   expect(screen.getByText("출력 SHA: def")).toBeVisible();
 });
-it("이전 revision은 접고 현재 회차를 펼치며 누락 시간은 미상으로 표시한다", () => {
+it("최신 revision·회차·시도부터 표시하고 현재 회차를 펼친다", () => {
   wrap(
     <WorkflowTimeline
       run={run}
       items={[
         { ...step, id: 1, revision: 0 },
-        { ...step, role: "developer", started_at: null },
+        { ...step, id: 41, iteration: 0 },
+        { ...step, role: "developer", attempt: 1 },
+        { ...step, id: 43, role: "developer", started_at: null },
       ]}
       onSelect={vi.fn()}
     />,
   );
   const groups = document.querySelectorAll(".timeline-group");
-  expect(groups[0]).not.toHaveAttribute("open");
-  expect(groups[1]).toHaveAttribute("open");
+  expect(
+    [...groups].map((group) => group.querySelector("summary")?.textContent),
+  ).toEqual([
+    "revision 1 · 수정 1회차 · 2개 시도",
+    "revision 1 · 최초 실행 · 1개 시도",
+    "revision 0 · 수정 1회차 · 1개 시도",
+  ]);
+  expect(groups[0]).toHaveAttribute("open");
+  expect(groups[1]).not.toHaveAttribute("open");
+  expect(groups[2]).not.toHaveAttribute("open");
+  const attempts = screen.getAllByRole("listitem");
+  expect(attempts[0]).toHaveTextContent("시도 2 · 시간 미상");
+  expect(attempts[1]).toHaveTextContent("시도 1 · 1분 5초 소요");
   expect(screen.getByText(/시간 미상/)).toBeVisible();
 });
 it.each([
@@ -95,17 +108,27 @@ it("진행 중인 단계에 현재 위치를 표시하고 알 수 없는 상태�
   );
   expect(screen.getByText("상태 미상")).toBeVisible();
 });
-it("결과 패널이 연결받은 시도의 근거를 조회한다", async () => {
+it("결과 목록을 최신순으로 표시하고 연결받은 시도의 근거를 조회한다", async () => {
+  const older = {
+    ...step,
+    revision: 0,
+    started_at: null,
+    finished_at: null,
+  };
+  const latest = { ...older, revision: 1 };
   const tests = vi.spyOn(api, "tests").mockResolvedValue({
     status: "failed",
-    history: [],
+    history: [older, { ...latest, id: 44 }],
     commands: [],
     failures: [],
     revision: 0,
   } as unknown as Schema["TestResultView"]);
   const reviews = vi.spyOn(api, "reviews").mockResolvedValue({
     status: "not_run",
-    history: [],
+    history: [
+      { ...older, id: 43 },
+      { ...latest, id: 45 },
+    ],
     issues: [],
   } as unknown as Schema["ReviewResultView"]);
   wrap(
@@ -121,6 +144,23 @@ it("결과 패널이 연결받은 시도의 근거를 조회한다", async () =>
     </>,
   );
   await screen.findByRole("heading", { name: "테스트 실패" });
+  await screen.findByRole("heading", { name: "독립 코드 리뷰" });
+  const [testAttempts, reviewAttempts] = screen.getAllByRole<HTMLSelectElement>(
+    "combobox",
+    { name: "결과 회차 선택" },
+  );
+  expect(Array.from(testAttempts.options, (option) => option.value)).toEqual([
+    "",
+    "44",
+    "42",
+  ]);
+  expect(Array.from(reviewAttempts.options, (option) => option.value)).toEqual([
+    "",
+    "45",
+    "43",
+  ]);
+  expect(testAttempts).toHaveValue("42");
+  expect(reviewAttempts).toHaveValue("43");
   expect(tests).toHaveBeenCalledWith("r", 42);
   expect(reviews).toHaveBeenCalledWith("r", 43);
 });

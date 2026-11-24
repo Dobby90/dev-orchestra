@@ -103,12 +103,14 @@ print(json.dumps({'id':rid,'worktree':run['worktree']}))
   await expect(
     page.getByRole("heading", { name: "기존 테스트 변경 내역" }),
   ).toBeVisible();
-  await expect(
-    page.getByText(
-      "기존 덧셈 검사를 보존하고 0 입력 경계값 검사를 추가합니다.",
-      { exact: true },
-    ),
-  ).toBeVisible();
+  await expect(page.getByText(/최종 승인 전에 변경 사유/)).toBeVisible();
+  const reason = page.getByText(
+    "기존 덧셈 검사를 보존하고 0 입력 경계값 검사를 추가합니다.",
+    { exact: true },
+  );
+  await expect(reason).toBeHidden();
+  await page.getByText("변경 사유·Diff 보기", { exact: true }).click();
+  await expect(reason).toBeVisible();
   await expect(
     page.getByRole("button", { name: "테스트 변경 승인", exact: true }),
   ).toHaveCount(0);
@@ -116,6 +118,17 @@ print(json.dumps({'id':rid,'worktree':run['worktree']}))
   await expect(page.locator(".test-change-patch")).toContainText(
     "+    assert add(0, 0) == 0",
   );
+  await expect(
+    page.getByRole("heading", { name: "테스트 통과", exact: true }),
+  ).toBeVisible();
+  const junit = page.getByRole("link", { name: "보존된 JUnit" });
+  await expect(junit).toBeHidden();
+  await page.getByText("실행 세부 정보", { exact: true }).click();
+  await expect(junit).toBeVisible();
+  const downloading = page.waitForEvent("download");
+  await junit.click();
+  const junitFile = await downloading;
+  expect(readFileSync((await junitFile.path())!, "utf8")).toContain("test_add");
   expect((await new AxeBuilder({ page }).analyze()).violations).toEqual([]);
   await page.screenshot({
     path: "test-results/test-change-automatic.png",

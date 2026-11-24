@@ -98,8 +98,13 @@ class RunQueryService:
             value["project_id"] = row["project_id"] if "project_id" in row.keys() else None
             from dev_orchestra.infrastructure.process import sanitize
 
+            approval = data.get("plan_approval") or {}
             value.update(
                 test_scope=data.get("test_scope", "full"),
+                auto_approve_plan=data.get("auto_approve_plan", False),
+                automatic_plan_approved_at=(
+                    approval.get("approved_at") if approval.get("source") == "automatic" else None
+                ),
                 base_branch=data.get("base"),
                 created_at=data.get("created_at"),
                 completed_at=self._completed_at(db, run_id, row["state"]),

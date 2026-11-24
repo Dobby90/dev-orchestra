@@ -151,6 +151,18 @@ export const api = {
       body: data,
     });
   },
+  uploadDesignImage: (file: File) => {
+    const data = new FormData();
+    data.append("file", file);
+    return request<Schema["DesignImageUpload"]>("/design-images", {
+      method: "POST",
+      body: data,
+    });
+  },
+  stagedDesignImageUrl: (imageId: string) =>
+    `/api/design-images/${id(imageId)}`,
+  runDesignImageUrl: (rid: string, sha: string) =>
+    `/api/runs/${id(rid)}/design-images/${id(sha)}`,
   tests: (rid: string, step?: number) =>
     request<Schema["TestResultView"]>(
       `/runs/${id(rid)}/tests${step ? `?step_id=${step}` : ""}`,

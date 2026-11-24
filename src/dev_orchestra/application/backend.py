@@ -4,12 +4,15 @@ import base64
 import hashlib
 import hmac
 import json
+import re
 import sys
 import tempfile
 import time
 import uuid
 from contextlib import ExitStack
 from pathlib import Path
+
+from pydantic import ValidationError
 
 from dev_orchestra.application.agent_settings import AgentSettingsService, settings_fingerprint
 from dev_orchestra.application.errors import ApplicationError
@@ -22,11 +25,21 @@ from dev_orchestra.application.projects import (
 from dev_orchestra.application.web_contracts import ProjectCreate, Proposal
 from dev_orchestra.application.workspace_recovery import confirm_workspace_identity
 from dev_orchestra.config import ROLES
+from dev_orchestra.domain.models import DesignImage, PipelineError
+from dev_orchestra.infrastructure.design_images import (
+    DesignImageInput,
+    read_png_bytes,
+    read_verified_image,
+    validate_image_set,
+)
+from dev_orchestra.infrastructure.files import contained, write
 from dev_orchestra.infrastructure.filesystem_identity import directory_identity
 from dev_orchestra.infrastructure.git import Git
 from dev_orchestra.infrastructure.locking import OwnershipError, lock
 from dev_orchestra.infrastructure.process_owner import markers
 from dev_orchestra.infrastructure.store import now
+
+IMAGE_UPLOAD_TTL_SECONDS = 24 * 60 * 60
 
 
 def identifier(prefix):
@@ -35,6 +48,18 @@ def identifier(prefix):
 
 def canonical(value):
     return json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
+
+
+def submission_hash(request: Proposal):
+    # Keep pre-existing preview tokens and idempotent submissions replayable.
+    omit = {"commit_prefix"} if request.commit_prefix is None else set()
+    if not request.auto_approve_plan:
+        omit.add("auto_approve_plan")
+    if not request.design_images:
+        omit.add("design_images")
+    return hashlib.sha256(
+        canonical(request.model_dump(mode="json", exclude=omit)).encode()
+    ).hexdigest()
 
 
 class BackendService:
@@ -261,7 +286,62 @@ class BackendService:
             )
         return {"id": sid, "sha256": digest, "bytes": len(text.encode())}
 
+    def design_image_upload_path(self, image_id):
+        return contained(self.runs.config.storage.runs_directory, f".image-uploads/{image_id}.png")
+
+    def save_design_image(self, name, content):
+        try:
+            item = DesignImageInput.create(name, content)
+        except (PipelineError, ValidationError) as error:
+            raise ApplicationError(
+                "DESIGN_IMAGE_INVALID", "invalid PNG design reference"
+            ) from error
+        image_id = identifier("img")
+        path = self.design_image_upload_path(image_id)
+        path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+        oldest = time.time() - IMAGE_UPLOAD_TTL_SECONDS
+        for staged in path.parent.glob("img-*.png"):
+            if re.fullmatch(r"img-[0-9a-f]{32}\.png", staged.name):
+                try:
+                    if staged.lstat().st_mtime < oldest:
+                        staged.unlink()
+                except FileNotFoundError:
+                    pass
+        write(path, item.data)
+        return {"id": image_id, **item.image.model_dump()}
+
+    def staged_design_image(self, image_id, image=None):
+        try:
+            path = self.design_image_upload_path(image_id)
+            if path.stat().st_mtime < time.time() - IMAGE_UPLOAD_TTL_SECONDS:
+                raise FileNotFoundError
+            return read_verified_image(path, image) if image else read_png_bytes(path)
+        except FileNotFoundError:
+            raise ApplicationError("DESIGN_IMAGE_NOT_FOUND", "upload missing or expired") from None
+        except (OSError, PipelineError) as error:
+            raise ApplicationError(
+                "DESIGN_IMAGE_INVALID", "invalid PNG design reference"
+            ) from error
+
+    def design_image_inputs(self, proposal):
+        images = [
+            DesignImage.model_validate(upload.model_dump(exclude={"id"}))
+            for upload in proposal.design_images
+        ]
+        try:
+            validate_image_set(images)
+        except PipelineError as error:
+            raise ApplicationError("DESIGN_IMAGE_DUPLICATE", str(error)) from error
+        return tuple(
+            DesignImageInput(image, self.staged_design_image(upload.id, image))
+            for upload, image in zip(proposal.design_images, images, strict=True)
+        )
+
     def preview(self, proposal):
+        self.design_image_inputs(proposal)
+        return self._preview(proposal)
+
+    def _preview(self, proposal):
         p = self.project(proposal.project_id)
         self.verify_identity(p)
         if p["archived_at"]:
@@ -295,9 +375,7 @@ class BackendService:
             "base_sha": info.base_sha,
             "project_version": p["version"],
             "agent_settings_hash": settings_fingerprint(config),
-            "proposal_hash": hashlib.sha256(
-                canonical(proposal.model_dump(mode="json")).encode()
-            ).hexdigest(),
+            "proposal_hash": submission_hash(proposal),
             "expires": int(time.time()) + 300,
         }
         raw = base64.urlsafe_b64encode(canonical(value).encode()).decode()
@@ -306,6 +384,7 @@ class BackendService:
             **value,
             "resolved_validation": config.tests.model_dump(mode="json"),
             "test_scope": proposal.test_scope,
+            "auto_approve_plan": proposal.auto_approve_plan,
             "test_scope_notice": (
                 "모델이 변경 코드와 관련 테스트를 분석해 자동 선택합니다. 필요한 경우 관련 모듈로 범위를 확대하고 이유를 기록합니다."
                 if proposal.test_scope == "affected"
@@ -316,6 +395,7 @@ class BackendService:
                 "roles": {role: config.codex.for_role(role).model_dump() for role in ROLES}
             },
             "spec_sha256": hashlib.sha256(text.encode()).hexdigest(),
+            "design_images": proposal.design_images,
             "validation_warnings": policy_warnings(config, info) if config.tests.commands else [],
         }
 
@@ -323,9 +403,7 @@ class BackendService:
         proposal = Proposal.model_validate(command.model_dump(exclude={"preview_token"}))
         scope = "submit"
         key_hash = hashlib.sha256(idem_key.encode()).hexdigest()
-        request_hash = hashlib.sha256(
-            canonical(command.model_dump(mode="json")).encode()
-        ).hexdigest()
+        request_hash = submission_hash(command)
 
         def replay(db):
             row = db.execute(
@@ -351,7 +429,8 @@ class BackendService:
             receipt = json.loads(base64.urlsafe_b64decode(raw))
         except (ValueError, TypeError, KeyError):
             raise ApplicationError("PREVIEW_STALE", "invalid preview") from None
-        fresh = self.preview(proposal)
+        images = self.design_image_inputs(proposal)
+        fresh = self._preview(proposal)
         if receipt["expires"] < time.time() or any(
             receipt.get(k) != fresh[k]
             for k in ["base_sha", "project_version", "proposal_hash", "agent_settings_hash"]
@@ -387,14 +466,18 @@ class BackendService:
                     base=proposal.base_branch,
                     max_fixes=proposal.max_fix_attempts,
                     test_scope=proposal.test_scope,
+                    auto_approve_plan=proposal.auto_approve_plan,
                 ),
                 run_id=receipt["run_id"],
                 branch=receipt["branch"],
                 resolve_settings=False,
+                design_images=images,
             )
         if data["base_sha"] != receipt["base_sha"]:
             raise ApplicationError("PREVIEW_STALE", "base branch changed during submission")
         data["answers"] = proposal.additional_instructions
+        if proposal.commit_prefix:
+            data["commit_prefix"] = proposal.commit_prefix
         op = identifier("op")
         job = identifier("job")
         sid = identifier("spec")

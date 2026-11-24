@@ -319,6 +319,40 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/design-images": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Design Image Upload */
+        post: operations["design_image_upload_api_design_images_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/design-images/{image_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Design Image Preview */
+        get: operations["design_image_preview_api_design_images__image_id__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/projects/{pid}/run-previews": {
         parameters: {
             query?: never;
@@ -831,6 +865,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/runs/{rid}/design-images/{sha256}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Run Design Image */
+        get: operations["run_design_image_api_runs__rid__design_images__sha256__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/runs/{rid}/logs/window": {
         parameters: {
             query?: never;
@@ -1032,6 +1083,11 @@ export interface components {
             /** Expected Sha */
             expected_sha: string;
         };
+        /** Body_design_image_upload_api_design_images_post */
+        Body_design_image_upload_api_design_images_post: {
+            /** File */
+            file: string;
+        };
         /** Body_spec_upload_api_specs_post */
         Body_spec_upload_api_specs_post: {
             /** File */
@@ -1193,6 +1249,26 @@ export interface components {
         DeferInput: {
             /** Reason */
             reason: string;
+        };
+        /** DesignImage */
+        DesignImage: {
+            /** Name */
+            name: string;
+            /** Sha256 */
+            sha256: string;
+            /** Bytes */
+            bytes: number;
+        };
+        /** DesignImageUpload */
+        DesignImageUpload: {
+            /** Name */
+            name: string;
+            /** Sha256 */
+            sha256: string;
+            /** Bytes */
+            bytes: number;
+            /** Id */
+            id: string;
         };
         /** DiffView */
         DiffView: {
@@ -1552,6 +1628,11 @@ export interface components {
              */
             test_scope: "full" | "affected";
             /**
+             * Auto Approve Plan
+             * @default false
+             */
+            auto_approve_plan: boolean;
+            /**
              * Test Scope Notice
              * @default
              */
@@ -1577,6 +1658,8 @@ export interface components {
             preview_token: string;
             /** Spec Sha256 */
             spec_sha256: string;
+            /** Design Images */
+            design_images?: components["schemas"]["DesignImageUpload"][];
             /** Validation Warnings */
             validation_warnings?: string[];
         };
@@ -1657,14 +1740,23 @@ export interface components {
              * @enum {string}
              */
             test_scope: "full" | "affected";
+            /**
+             * Auto Approve Plan
+             * @default false
+             */
+            auto_approve_plan: boolean;
             /** Project Id */
             project_id: string;
             /** Spec */
             spec: components["schemas"]["TextSpec"] | components["schemas"]["StoredSpec"];
+            /** Design Images */
+            design_images?: components["schemas"]["DesignImageUpload"][];
             /** Base Branch */
             base_branch?: string | null;
             /** Feature Branch */
             feature_branch?: string | null;
+            /** Commit Prefix */
+            commit_prefix?: string | null;
             /** Max Fix Attempts */
             max_fix_attempts?: number | null;
             /**
@@ -1839,14 +1931,23 @@ export interface components {
              * @enum {string}
              */
             test_scope: "full" | "affected";
+            /**
+             * Auto Approve Plan
+             * @default false
+             */
+            auto_approve_plan: boolean;
             /** Project Id */
             project_id: string;
             /** Spec */
             spec: components["schemas"]["TextSpec"] | components["schemas"]["StoredSpec"];
+            /** Design Images */
+            design_images?: components["schemas"]["DesignImageUpload"][];
             /** Base Branch */
             base_branch?: string | null;
             /** Feature Branch */
             feature_branch?: string | null;
+            /** Commit Prefix */
+            commit_prefix?: string | null;
             /** Max Fix Attempts */
             max_fix_attempts?: number | null;
             /**
@@ -1931,6 +2032,13 @@ export interface components {
              * @enum {string}
              */
             test_scope: "full" | "affected";
+            /**
+             * Auto Approve Plan
+             * @default false
+             */
+            auto_approve_plan: boolean;
+            /** Automatic Plan Approved At */
+            automatic_plan_approved_at?: string | null;
             /** Plan */
             plan?: string | null;
             /** Criteria */
@@ -2073,6 +2181,8 @@ export interface components {
             text: string;
             /** Additional Instructions */
             additional_instructions: string;
+            /** Design Images */
+            design_images?: components["schemas"]["DesignImage"][];
         };
         /** SpecView */
         SpecView: {
@@ -3345,6 +3455,70 @@ export interface operations {
             };
         };
     };
+    design_image_upload_api_design_images_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "multipart/form-data": components["schemas"]["Body_design_image_upload_api_design_images_post"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DesignImageUpload"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    design_image_preview_api_design_images__image_id__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                image_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "image/png": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     preview_api_projects__pid__run_previews_post: {
         parameters: {
             query?: never;
@@ -4391,6 +4565,38 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["SpecContent"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    run_design_image_api_runs__rid__design_images__sha256__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                rid: string;
+                sha256: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "image/png": unknown;
                 };
             };
             /** @description Validation Error */

@@ -17,6 +17,7 @@ from dev_orchestra.application.test_selection import select_tests, selected_conf
 from dev_orchestra.application.validation import run_test_policy
 from dev_orchestra.domain.models import Coverage, PipelineError, WorkspaceTestResult
 from dev_orchestra.infrastructure.git import Git
+from dev_orchestra.infrastructure.java import GRADLE_DIRECTORY_TASK
 from dev_orchestra.infrastructure.test_runner import TestRunner
 
 
@@ -263,7 +264,11 @@ def test_jest_keeps_frontend_builds_scoped_to_affected_packages(candidate):
         "static",
         "unit",
     ]
-    assert model_selection(run, sha, ["yarn.lock"], check_plan)["excluded"] == ["unrelated"]
+    assert model_selection(run, sha, ["yarn.lock"], check_plan)["included"] == [
+        "app",
+        "static",
+        "unit",
+    ]
     tests["affected"] = {
         "required_commands": ["manual"],
         "dependencies": {"portal": ["unit"]},
@@ -410,6 +415,138 @@ def test_gradle_respects_qualified_tasks_from_build_root(gradle_candidate):
     targets[0]["files"] = targets[1]["files"]
     with pytest.raises(PipelineError, match="belong to the selected module"):
         select_tests(run, repo, sha, plan=targets)
+
+
+def test_gradle_common_changes_retain_transitive_consumers_and_settings_inputs(gradle_candidate):
+    run, repo, _ = gradle_candidate
+    (repo / "settings.gradle").write_text(
+        "include 'api', 'api:remapped', 'core'\n"
+        "project(':api:remapped').projectDir = file('api/child')\n"
+        "file('customers.txt').readLines()\n"
+    )
+    (repo / "api/build.gradle").write_text(
+        "dependencies { implementation project(':api:remapped') }\n"
+    )
+    (repo / "api/child/build.gradle").write_text("dependencies { api(project(path: ':core')) }\n")
+    (repo / "customers.txt").write_text("sample 1\n")
+    git = Git(repo)
+    git.commit("Gradle 논리 경로와 의존 관계 준비")
+    sha = git.sha()
+    run.update(base_sha=sha, test_selection_contract=AUTOMATIC_TEST_CONTRACT)
+
+    expected = ["api_build", "api_child_build", "core_build"]
+    assert (
+        model_selection(run, sha, ["core/src/main/java/example/Core.java"])["mandatory_command_ids"]
+        == expected
+    )
+    assert model_selection(run, sha, ["customers.txt"])["mandatory_command_ids"] == expected
+    assert model_selection(run, sha, ["api/src/main/java/example/Api.java"])[
+        "mandatory_command_ids"
+    ] == ["api_build"]
+
+    tests = run["config"]["tests"]["commands"]
+    tests["api_child_build"]["working_directory"] = "."
+    tests["api_child_build"]["argv"][-1] = ":api:remapped:assemble"
+    selection = model_selection(run, sha, ["core/src/main/java/example/Core.java"], gradle_plan())
+    commands = selected_config(run, selection).commands
+    assert commands["api_child_build"].argv[-1] == ":api:remapped:assemble"
+    assert commands["api"].argv[-4:] == [
+        "test",
+        GRADLE_DIRECTORY_TASK + "test",
+        "--tests",
+        "example.ApiTest",
+    ]
+    run["criteria"] = [{"id": "AC1"}]
+    run["config"]["tests"]["affected"] = {"criterion_commands": {"AC1": ["api_child_build"]}}
+    assert model_selection(run, sha, ["api/src/main/java/example/Api.java"])[
+        "mandatory_command_ids"
+    ] == ["api_build", "api_child_build"]
+
+
+def test_selected_preparation_groups_jest_and_production_build_once(candidate, monkeypatch):
+    from test_validation_policy import commit_files, detect
+
+    from dev_orchestra.infrastructure import dependencies
+
+    svc, rid, repo = candidate
+    commit_files(
+        repo,
+        {
+            "package.json": json.dumps(
+                {
+                    "scripts": {
+                        "build": "vue-cli-service build --mode=demo",
+                        "build:production": "vue-cli-service build --skip-plugins @vue/cli-plugin-eslint",
+                        "test": "jest",
+                    },
+                    "devDependencies": {"@vue/cli-service": "5.0.8", "jest": "26.6.3"},
+                }
+            ),
+            "yarn.lock": "# yarn lockfile v1\n",
+            "manual/package.json": json.dumps(
+                {
+                    "scripts": {"build": "docusaurus build"},
+                    "dependencies": {"@docusaurus/core": "2.4.3"},
+                }
+            ),
+            "manual/yarn.lock": "# yarn lockfile v1\n",
+            "tests/demo.spec.js": "test('behavior', () => {});\n",
+        },
+    )
+    git = Git(repo)
+    run = svc.store.get(rid)
+    config = run["config"]
+    tests = config["tests"]
+    detected = {
+        item.command.working_directory + ":" + item.command.kind: item
+        for item in detect(repo).candidates
+        if item.command.argv[0] == "yarn"
+    }
+    tests["commands"] = {
+        key: detected[name].command.model_dump()
+        for key, name in [("unit", ".:test"), ("app", ".:check"), ("manual", "manual:check")]
+    }
+    tests["output_paths"] += sorted(
+        {p for item in detected.values() for p in item.output_paths} - set(tests["output_paths"])
+    )
+    svc.store.update(
+        rid, config=config, base_sha=git.sha(), test_selection_contract=AUTOMATIC_TEST_CONTRACT
+    )
+    run = svc.store.get(rid)
+    target = plan(["tests/demo.spec.js"])
+    assert model_selection(run, git.sha(), ["tests/demo.spec.js"], target)["included"] == ["unit"]
+    assert model_selection(run, git.sha(), [".env.production"], target)["included"] == [
+        "app",
+        "unit",
+    ]
+    commit_files(repo, {".env.production": "NODE_ENV=production\n"})
+    svc.store.update(rid, base_sha=git.sha())
+    session, _ = start_session(candidate, "tester")
+    svc.store.update(rid, base_sha=run["base_sha"])
+    calls = []
+
+    def prepare_yarn(worktree, root, *args, **kwargs):
+        calls.append(("yarn", root.relative_to(worktree).as_posix()))
+
+    monkeypatch.setattr(dependencies, "prepare_yarn", prepare_yarn)
+
+    class RecordingRunner(TestRunner):
+        def prepare(self, root, config, directory, stop):
+            calls.append(("prepare", tuple(sorted(config.commands))))
+            assert config.commands["app"].argv == ["yarn", "run", "build:production"]
+            super().prepare(root, config, directory, stop)
+
+        def run(self, root, config, directory, stop):
+            calls.append(("run", tuple(sorted(config.commands))))
+            raise PipelineError("synthetic execution failure")
+
+    session._test_runner = RecordingRunner()
+    value = session.run_tests(["app", "unit"], test_plan=target)
+    assert not value["execution"]["passed"]
+    assert (
+        session.run_tests(["app", "unit"], test_plan=target)["evidence_id"] == value["evidence_id"]
+    )
+    assert calls == [("prepare", ("app", "unit")), ("yarn", "."), ("run", ("app", "unit"))]
 
 
 @pytest.mark.parametrize("extra", [["check"], ["--tests", "example.OtherTest"]])

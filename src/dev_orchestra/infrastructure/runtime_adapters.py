@@ -27,6 +27,27 @@ allprojects { project ->
 }
 """
 
+GRADLE_DIRECTORY_INIT = """
+if (gradle.parent == null) {
+    gradle.settingsEvaluated { settings ->
+        def cwd = gradle.startParameter.currentDir.canonicalFile
+        def pending = [settings.rootProject]
+        def matches = []
+        while (pending) {
+            def descriptor = pending.remove(pending.size() - 1)
+            if (descriptor.projectDir.canonicalFile == cwd) matches.add(descriptor)
+            pending.addAll(descriptor.children)
+        }
+        def args = gradle.startParameter.taskNames
+        if (matches.size() != 1 || args.size() == 0 || args[0] != '__TASK__') {
+            throw new GradleException('Cannot resolve one Gradle project and task for the working directory')
+        }
+        def prefix = matches[0].path == ':' ? '' : matches[0].path
+        gradle.startParameter.setTaskNames([prefix + ':__TASK__'] + args.drop(1))
+    }
+}
+"""
+
 VUE_HOOK = r"""
 const Module = require('node:module');
 const load = Module._load;
@@ -49,6 +70,31 @@ def setup_file(directory, name, content):
     return path, sha
 
 
+def gradle_directory_command(command, argv, directory):
+    from dev_orchestra.infrastructure.java import GRADLE_DIRECTORY_TASK, java_tool
+
+    if java_tool(command) != "gradle":
+        return argv, [], []
+    tasks = [
+        arg.removeprefix(GRADLE_DIRECTORY_TASK)
+        for arg in argv
+        if arg.startswith(GRADLE_DIRECTORY_TASK)
+    ]
+    if not tasks:
+        return argv, [], []
+    if tasks not in (["test"], ["assemble"]):
+        raise PipelineError("invalid Gradle directory task")
+    path, sha = setup_file(
+        directory, "gradle-directory.gradle", GRADLE_DIRECTORY_INIT.replace("__TASK__", tasks[0])
+    )
+    runtime = [arg for arg in argv if not arg.startswith(GRADLE_DIRECTORY_TASK)]
+    return (
+        runtime + ["--init-script", str(path)],
+        [{"adapter": "gradle-project-directory", "sha256": sha}],
+        [path],
+    )
+
+
 def runtime_command(worktree, command, directory, env):
     from dev_orchestra.infrastructure.java import java_argv, java_tool
 
@@ -64,6 +110,8 @@ def runtime_command(worktree, command, directory, env):
             )
             argv += ["--init-script", str(path)]
             evidence.append({"adapter": "gradle-test-agent", "sha256": sha})
+            argv, adapters, _ = gradle_directory_command(command, argv, directory)
+            evidence.extend(adapters)
     if Path(argv[0]).name in {"npm", "yarn", "pnpm"} and "run" in argv:
         index = argv.index("run") + 1
         cwd = worktree / command.working_directory

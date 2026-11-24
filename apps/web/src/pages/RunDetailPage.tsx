@@ -40,6 +40,7 @@ import { WorkflowTimeline } from "../components/WorkflowTimeline";
 import { DeleteRunButton } from "../components/DeleteRunButton";
 import { RunPushPanel } from "../components/RunPushPanel";
 import { RunHandoffPanel } from "../components/RunHandoffPanel";
+import { DesignImageList } from "../components/DesignImageList";
 import { TestChangePanel } from "../components/TestChangePanel";
 import { useRunEvents } from "../hooks/events";
 type Action =
@@ -587,6 +588,13 @@ function RunDetailBody({ rid }: { rid: string }) {
             ))}
           </Tabs.List>
           <Tabs.Content value="plan" className="tab-content">
+            {r.auto_approve_plan && (
+              <p className="subtle">
+                {r.automatic_plan_approved_at
+                  ? `기획 자동 승인 완료 · ${new Date(r.automatic_plan_approved_at).toLocaleString("ko-KR")}`
+                  : "기획 자동 승인 설정됨"}
+              </p>
+            )}
             {r.plan ? (
               <>
                 <article className="markdown">
@@ -723,6 +731,19 @@ function RunDetailBody({ rid }: { rid: string }) {
               <div className="spec-view">
                 <h3>저장된 PRD</h3>
                 <pre>{spec.data.text}</pre>
+                {!!spec.data.design_images?.length && (
+                  <>
+                    <h3>디자인 참고 이미지</h3>
+                    <DesignImageList
+                      images={spec.data.design_images.map(
+                        ({ name, sha256 }) => ({
+                          name,
+                          src: api.runDesignImageUrl(rid, sha256),
+                        }),
+                      )}
+                    />
+                  </>
+                )}
                 {spec.data.additional_instructions && (
                   <>
                     <h3>추가 지시사항</h3>

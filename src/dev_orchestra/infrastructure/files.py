@@ -50,16 +50,20 @@ def contained(root: Path, value: str) -> Path:
 
 
 def write(path: Path, value) -> str:
-    data = value if isinstance(value, str) else json.dumps(value, ensure_ascii=False, indent=2)
+    if isinstance(value, bytes):
+        data = value
+    else:
+        text = value if isinstance(value, str) else json.dumps(value, ensure_ascii=False, indent=2)
+        data = text.encode("utf-8")
     path.parent.mkdir(parents=True, exist_ok=True)
     fd, filename = tempfile.mkstemp(prefix="." + path.name + ".", dir=path.parent)
     temp = Path(filename)
     try:
-        with os.fdopen(fd, "w", encoding="utf-8") as f:
+        with os.fdopen(fd, "wb") as f:
             f.write(data)
             f.flush()
             os.fsync(f.fileno())
         temp.replace(path)
     finally:
         temp.unlink(missing_ok=True)
-    return digest(data.encode("utf-8"))
+    return digest(data)

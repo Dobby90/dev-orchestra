@@ -26,6 +26,8 @@ from dev_orchestra.infrastructure.java_cache import (
 from dev_orchestra.infrastructure.process import environment, execute, sanitize
 from dev_orchestra.infrastructure.test_runner import sandbox_command
 
+GRADLE_DIRECTORY_TASK = "-Ddevorchestra.gradle.directory-task="
+
 
 def java_tool(command):
     name = Path(wrapper_argv(command.argv)[0]).name
@@ -383,6 +385,18 @@ def check_artifacts(cache, read, tool, shared=None):
 
 
 def prepare_java(worktree, config, directory, stop=lambda: None):
+    from dev_orchestra.infrastructure.gradle_worktree_caches import (
+        GradleWorktreeCaches,
+        gradle_cache_roots,
+    )
+
+    worktree = worktree.resolve()
+    roots = gradle_cache_roots(worktree, config.commands.values(), config.output_paths)
+    with GradleWorktreeCaches(directory, worktree).record(roots, stop):
+        _prepare_java(worktree, config, directory, stop)
+
+
+def _prepare_java(worktree, config, directory, stop):
     commands = [(key, c) for key, c in config.commands.items() if java_tool(c)]
     if not commands:
         return

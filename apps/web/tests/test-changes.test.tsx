@@ -1,4 +1,4 @@
-import { render, screen } from "@testing-library/react";
+import { fireEvent, render, screen, within } from "@testing-library/react";
 import { QueryClientProvider } from "@tanstack/react-query";
 import { expect, it, vi } from "vitest";
 import { api } from "../src/api/resources";
@@ -11,6 +11,7 @@ const run: RunDetail = {
   worktree_removed: false,
   push_status: "not_pushed",
   test_scope: "full",
+  auto_approve_plan: false,
   schema_version: 1,
   id: "r1",
   state: "waiting_approval",
@@ -63,12 +64,34 @@ it("자동 변경 근거와 전체 diff를 최종 검토용으로 표시하며 �
   vi.spyOn(api, "testChanges").mockResolvedValue({
     proposal: null,
     error: null,
-    history: [record],
+    history: [
+      {
+        ...record,
+        id: "change-0",
+        changes: [{ ...record.changes[0], reason: "이전 회차 변경 사유" }],
+      },
+      { ...record, revision: 1 },
+    ],
   });
   const control = vi.spyOn(api, "control");
-  mount();
-  expect(await screen.findByText("XML 탭 활성화 기대값 갱신")).toBeVisible();
-  expect(document.querySelector("pre")?.textContent).toBe(record.patch);
+  mount({ ...run, test_change_count: 2 });
+  const showDetails = await screen.findByText("변경 사유·Diff 보기");
+  expect(screen.getByText("기록 2건")).toBeVisible();
+  expect(screen.getByText(/최종 승인 전에 변경 사유/)).toBeVisible();
+  const reason = screen.getByText("XML 탭 활성화 기대값 갱신");
+  const earlierReason = screen.getByText("이전 회차 변경 사유");
+  expect(reason).not.toBeVisible();
+  fireEvent.click(showDetails);
+  expect(reason).toBeVisible();
+  expect(earlierReason).not.toBeVisible();
+  const latest = reason.closest("section")!;
+  const patch = within(latest).getByLabelText("전체 패치");
+  expect(patch).not.toBeVisible();
+  fireEvent.click(within(latest).getByText("제품·테스트 전체 패치 보기"));
+  expect(patch).toBeVisible();
+  expect(patch.textContent).toBe(record.patch);
+  fireEvent.click(screen.getByText(/이전 변경 · revision 0/));
+  expect(earlierReason).toBeVisible();
   expect(document.querySelector("script")).toBeNull();
   expect(screen.queryByRole("button")).not.toBeInTheDocument();
   expect(control).not.toHaveBeenCalled();
@@ -89,7 +112,9 @@ it("이전 버전의 보관 패치는 일반 재개로 자동 처리할 수 있�
   mount({ ...run, state: "needs_input", test_change_pending: true });
   expect(
     await screen.findByText(/이전 버전에서 보관한 패치입니다/),
-  ).toHaveTextContent("재개하면");
+  ).toBeVisible();
+  expect(screen.getByText("XML 탭 활성화 기대값 갱신")).not.toBeVisible();
+  fireEvent.click(screen.getByText("변경 사유·Diff 보기"));
   expect(screen.getByText("XML 탭 활성화 기대값 갱신")).toBeVisible();
   expect(
     screen.queryByRole("button", { name: "테스트 변경 승인" }),
@@ -103,7 +128,7 @@ it("무결성을 확인하지 못한 변경 내역은 오류로 표시한다", a
     error: "기존 테스트 변경 근거를 확인할 수 없습니다.",
   });
   mount();
-  expect(await screen.findByRole("alert")).toHaveTextContent(
-    "근거를 확인할 수 없습니다",
-  );
+  const alert = await screen.findByRole("alert");
+  expect(alert).toBeVisible();
+  expect(alert).toHaveTextContent("근거를 확인할 수 없습니다");
 });

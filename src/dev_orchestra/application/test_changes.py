@@ -7,6 +7,7 @@ from pathlib import Path
 from dev_orchestra.agents.contracts import ResponseError
 from dev_orchestra.config import Config
 from dev_orchestra.domain.models import AgentResult, PipelineError
+from dev_orchestra.infrastructure.design_images import design_image_binding
 from dev_orchestra.infrastructure.evidence import checkpoints
 from dev_orchestra.infrastructure.files import contained, digest
 from dev_orchestra.infrastructure.git import Git
@@ -21,6 +22,7 @@ def checksum(value):
 def task_hash(run):
     return checksum(
         {k: run.get(k) for k in ["spec", "plan", "answers", "clarifications", "directives"]}
+        | design_image_binding(run)
     )
 
 

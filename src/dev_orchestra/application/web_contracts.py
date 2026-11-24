@@ -3,7 +3,15 @@
 from datetime import datetime
 from typing import Annotated, Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, SecretStr, model_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    SecretStr,
+    StringConstraints,
+    field_validator,
+    model_validator,
+)
 
 from dev_orchestra.application.contracts import RunName, RunSummary
 from dev_orchestra.config import (
@@ -13,8 +21,9 @@ from dev_orchestra.config import (
     TestCommand,
     Tests,
 )
-from dev_orchestra.domain.models import State
+from dev_orchestra.domain.models import MAX_DESIGN_IMAGES, DesignImage, State
 from dev_orchestra.infrastructure.agent_usage import AgentTelemetry, TokenUsage
+from dev_orchestra.infrastructure.process import sanitize
 
 
 class Input(BaseModel):
@@ -133,18 +142,43 @@ class StoredSpec(Input):
     spec_id: str = Field(pattern=r"^spec-[0-9a-f]{32}$")
 
 
+ImageUploadId = Annotated[str, StringConstraints(pattern=r"^img-[0-9a-f]{32}$")]
+
+
+class DesignImageUpload(DesignImage):
+    id: ImageUploadId
+
+
 class Proposal(Input):
     agent_settings: AgentSettings | None = None
     name: RunName
     test_scope: Literal["full", "affected"] = "full"
+    auto_approve_plan: bool = Field(default=False, strict=True)
     project_id: str = Field(pattern=r"^prj-[0-9a-f]{32}$")
     spec: Annotated[TextSpec | StoredSpec, Field(discriminator="kind")]
+    design_images: list[DesignImageUpload] = Field(
+        default_factory=list, max_length=MAX_DESIGN_IMAGES
+    )
     base_branch: str | None = None
     feature_branch: str | None = None
+    commit_prefix: str | None = Field(default=None, max_length=80)
     max_fix_attempts: int | None = Field(default=None, ge=0, le=20, strict=True)
     additional_instructions: str = Field(default="", max_length=65536)
     run_tests: Literal[True] = True
     run_review: Literal[True] = True
+
+    @field_validator("commit_prefix")
+    @classmethod
+    def validate_commit_prefix(cls, value):
+        if value is None:
+            return None
+        if value and (not value.isprintable() or "[" in value or "]" in value):
+            raise ValueError("commit prefix must be printable text without brackets")
+        value = value.strip()
+        prefix = f"[{value}]"
+        if sanitize(prefix) != prefix:
+            raise ValueError("commit prefix must not contain sensitive content")
+        return value or None
 
 
 class RunCreate(Proposal):
@@ -318,6 +352,8 @@ class RunDetail(RunSummary):
     capacity: CapacityView = Field(default_factory=CapacityView)
     workspace_progress: WorkspaceProgressView | None = None
     test_scope: Literal["full", "affected"] = "full"
+    auto_approve_plan: bool = False
+    automatic_plan_approved_at: str | None = None
     plan: str | None = None
     criteria: list[dict[str, str]] = Field(default_factory=list)
     plan_hash: str | None = None
@@ -355,12 +391,14 @@ class SpecView(BaseModel):
 class SpecContent(BaseModel):
     text: str
     additional_instructions: str
+    design_images: list[DesignImage] = Field(default_factory=list)
 
 
 class PreviewView(BaseModel):
     resolved_validation: Tests | None = None
     agent_settings: AgentSettings | None = None
     test_scope: Literal["full", "affected"] = "full"
+    auto_approve_plan: bool = False
     test_scope_notice: str = ""
     run_id: str
     branch: str
@@ -371,6 +409,7 @@ class PreviewView(BaseModel):
     expires: int
     preview_token: str
     spec_sha256: str
+    design_images: list[DesignImageUpload] = Field(default_factory=list)
     validation_warnings: list[str] = Field(default_factory=list)
 
 

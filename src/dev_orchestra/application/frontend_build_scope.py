@@ -1,6 +1,7 @@
 """Identify changes that can affect a standalone application's bundler."""
 
 import re
+import shlex
 from pathlib import Path, PurePosixPath
 
 from dev_orchestra.domain.models import PipelineError
@@ -16,6 +17,54 @@ BUNDLE_REFERENCE = re.compile(
     r"|@(?:import|use|forward)\b"
 )
 VUE_BLOCK = re.compile(r"</?(?:script|style|template)\b[^>]*>")
+APP_CONFIGURATION = re.compile(
+    r"\.env(?:\.[\w.-]+)?|(?:vue|vite|babel)\.config\.[\w]+"
+    r"|(?:ts|js)config\.json|package\.json|yarn\.lock|package-lock\.json|pnpm-lock\.yaml"
+)
+
+
+def script_tokens(value):
+    """Only analyze a single literal command; never interpret shell expressions."""
+    if not isinstance(value, str) or re.search(r"[;&|<>`$\n\r]", value):
+        return []
+    try:
+        return shlex.split(value)
+    except ValueError:
+        return []
+
+
+def frontend_build(package, dependencies, script="build"):
+    tokens = script_tokens(package["scripts"].get(script))
+    # Options that redirect build input or invoke other tools need an explicit policy.
+    if tokens == ["vite", "build"]:
+        return "vite" in dependencies
+    return bool(
+        tokens[:2] == ["vue-cli-service", "build"]
+        and "@vue/cli-service" in dependencies
+        and re.fullmatch(
+            r"(?: --mode(?:=| )[\w-]+| --skip-plugins(?:=| )[@\w/-]+)*",
+            "".join(" " + token for token in tokens[2:]),
+        )
+    )
+
+
+def preferred_build_script(package, dependencies):
+    scripts = package["scripts"]
+    production = "build:production"
+    if package.get("workspaces") or any(
+        prefix + name in scripts for prefix in ("pre", "post") for name in ("build", production)
+    ):
+        return "build"
+    for name in ("build", production):
+        if not frontend_build(package, dependencies, name) or script_tokens(scripts[name])[:2] != [
+            "vue-cli-service",
+            "build",
+        ]:
+            return "build"
+    modes = re.findall(
+        r" --mode(?:=| )([\w-]+)", " " + " ".join(script_tokens(scripts[production])[2:])
+    )
+    return production if not modes or modes == ["production"] else "build"
 
 
 def frontend_bundle_changed(run, candidate, directory, paths):

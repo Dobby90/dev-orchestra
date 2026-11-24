@@ -4,11 +4,13 @@ import json
 from pathlib import Path
 
 from dev_orchestra.domain.models import PipelineError
+from dev_orchestra.infrastructure.design_images import design_image_binding, verified_run_images
 from dev_orchestra.infrastructure.files import digest
 
 
 def checkpoints(store, run):
     latest = {}
+    design = design_image_binding(run)
     try:
         for step in store.steps(run["id"]):
             if step["status"] != "completed" and not (
@@ -22,6 +24,8 @@ def checkpoints(store, run):
             payload = json.loads(artifact.read_text())
             if payload["sha"] != step["output_sha"]:
                 raise PipelineError("checkpoint SHA mismatch")
+            if payload.get("design_image_hash") != design.get("design_image_hash"):
+                raise PipelineError("checkpoint design references changed")
             if payload.get("test_evidence_reference"):
                 from dev_orchestra.application.test_selection import verify_tool_evidence
 
@@ -114,6 +118,7 @@ def verify_workspace_commits(run, step, payload):
 
 
 def verified_candidate(store, run, sha):
+    verified_run_images(run)
     latest = checkpoints(store, run)
     tests, review = latest.get("tester"), latest.get("reviewer")
     if not tests or not review or any(p["sha"] != sha for p in [tests, review]):

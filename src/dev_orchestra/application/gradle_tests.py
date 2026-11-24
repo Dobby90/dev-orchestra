@@ -3,11 +3,11 @@
 import re
 from pathlib import Path, PurePosixPath
 
+from dev_orchestra.application.gradle_projects import SETTINGS, GradleProjects
 from dev_orchestra.domain.models import PipelineError
 from dev_orchestra.infrastructure.git import Git
-from dev_orchestra.infrastructure.java import java_tool, wrapper_argv
+from dev_orchestra.infrastructure.java import GRADLE_DIRECTORY_TASK, java_tool, wrapper_argv
 
-SETTINGS = {"settings.gradle", "settings.gradle.kts"}
 IDENTIFIER = r"[A-Za-z_][A-Za-z_0-9]*"
 CLASS_NAME = rf"{IDENTIFIER}(?:\.{IDENTIFIER})*"
 SOURCE_DIRS = {".java": "java", ".kt": "kotlin", ".groovy": "groovy"}
@@ -61,19 +61,27 @@ def gradle_target_class(path, content):
 
 
 class GradleSelection:
-    def __init__(self, run, candidate):
+    def __init__(self, run, candidate, *, project_graph=False):
         self.git = Git(Path(run["repo"]))
         self.candidate = candidate
+        self.projects = GradleProjects(self.git, candidate) if project_graph else None
         self.project_paths = {}
 
     def affected_modules(self, commands, paths):
+        if not paths:
+            return None
         modules = {
             self.command_directory(command)
             for command in commands
             if java_tool(command) == "gradle"
         }
-        if not paths:
-            return None
+        if self.projects:
+            try:
+                if self.projects.settings_inputs().intersection(map(PurePosixPath, paths)):
+                    return None
+                modules |= self.projects.modules
+            except (PipelineError, ValueError):
+                return None
         affected = set()
         for name in paths:
             path = PurePosixPath(name)
@@ -90,12 +98,24 @@ class GradleSelection:
                 affected.add(owner)
             elif path.suffix in {".gradle", ".kts"} or path.name == "gradle.properties":
                 return None
-        return affected
+        return self.projects.dependents(modules, affected) if self.projects else affected
 
     def command_directory(self, command):
         directory = PurePosixPath(command.working_directory)
         task = "assemble" if command.kind == "check" else "test"
         index = gradle_task_index(command.argv, task)
+        if self.projects and index is not None and command.argv[index].startswith(":"):
+            try:
+                root = self.projects.root(directory)
+                path = command.argv[index].rpartition(":")[0]
+                if not path:
+                    return root
+                mapped = self.projects.directory(root, path)
+                if mapped in self.projects.modules or directory == root:
+                    return mapped
+            except (PipelineError, ValueError):
+                pass  # Retain the explicit working directory when discovery fails.
+            return directory
         if (
             index is not None
             and command.argv[index].startswith(":")
@@ -104,6 +124,15 @@ class GradleSelection:
             # Root-based commands may name a subproject in their qualified task.
             return directory.joinpath(*command.argv[index].split(":")[1:-1])
         return directory
+
+    def can_scope_check(self, command):
+        if not self.projects:
+            return True
+        index = gradle_task_index(command.argv, "assemble")
+        return index is not None and (
+            not command.argv[index].startswith(":")
+            or self.command_directory(command) in self.projects.modules
+        )
 
     def project_path(self, directory):
         if directory not in self.project_paths:
@@ -135,6 +164,8 @@ class GradleSelection:
         if index is None:
             return None
         if argv[index] == task:
+            if self.projects:
+                return argv + [GRADLE_DIRECTORY_TASK + task]
             argv[index] = self.project_path(PurePosixPath(command.working_directory)) + task
         return argv
 

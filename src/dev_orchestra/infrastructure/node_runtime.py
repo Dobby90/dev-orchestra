@@ -50,6 +50,15 @@ def node_project(worktree, command):
     )
 
 
+def package_manager(root, package):
+    if "packageManager" in package:
+        declared = package["packageManager"]
+        if not isinstance(declared, str):
+            raise PipelineError("packageManager must be a string")
+        return declared.split("@", 1)[0]
+    return "yarn" if contained(root, "yarn.lock").is_file() else "npm"
+
+
 def node_pin(root):
     pins = {}
     for name in (".node-version", ".nvmrc", "package.json"):

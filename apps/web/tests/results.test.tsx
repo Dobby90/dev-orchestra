@@ -32,6 +32,7 @@ it("최종 보고서에서 상세 테스트를 필요할 때 열고 요약본을
     worktree_removed: false,
     push_status: "not_pushed",
     test_scope: "full",
+    auto_approve_plan: false,
     deletion_pending: false,
     test_change_pending: false,
     test_change_count: 0,
@@ -120,6 +121,7 @@ it("JUnit 상세와 이전 revision 표시를 현재 통과와 구분한다", as
         duration_seconds: 1.25,
         exit_code: 1,
         argv: ["pytest"],
+        junit_artifact_id: "junit",
         failure_details: [
           {
             name: "broken",
@@ -127,6 +129,12 @@ it("JUnit 상세와 이전 revision 표시를 현재 통과와 구분한다", as
             details: "<script>CANARY</script>",
           },
         ],
+      },
+      {
+        command_id: "build",
+        status: "timeout",
+        argv: ["npm", "run", "build"],
+        error: "빌드 제한 시간 초과",
       },
     ],
     failures: [],
@@ -137,6 +145,21 @@ it("JUnit 상세와 이전 revision 표시를 현재 통과와 구분한다", as
   wrap(<TestsPanel rid="r" version={2} revision={1} />);
   expect(await screen.findByText(/이전 revision 0의 결과입니다/)).toBeVisible();
   expect(screen.getByRole("heading", { name: "테스트 실패" })).toBeVisible();
+  const summary = within(screen.getByRole("region", { name: "실패 요약" }));
+  expect(summary.getByText(/broken · mismatch/)).toBeVisible();
+  expect(summary.getByText(/시간 초과 · 빌드 제한 시간 초과/)).toBeVisible();
+  expect(screen.getByText("pytest")).not.toBeVisible();
+  expect(screen.getByText("보존된 JUnit")).not.toBeVisible();
+  fireEvent.click(screen.getByText("실행 세부 정보"));
+  expect(screen.getByText("pytest")).toBeVisible();
+  expect(screen.getByRole("link", { name: "보존된 JUnit" })).toHaveAttribute(
+    "href",
+    "/api/runs/r/artifacts/junit",
+  );
+  const raw = screen.getByText("<script>CANARY</script>");
+  expect(raw).not.toBeVisible();
+  fireEvent.click(screen.getByText("broken · mismatch", { exact: true }));
+  expect(raw).toBeVisible();
   expect(document.querySelector("script")).toBeNull();
 });
 it("미해결 차단 리뷰를 resolved로 표시하거나 사용자 제외로 우회하지 않는다", async () => {
@@ -172,7 +195,7 @@ it("미해결 차단 리뷰를 resolved로 표시하거나 사용자 제외로 �
     screen.queryByRole("button", { name: "비차단 이슈 제외 사유 기록" }),
   ).not.toBeInTheDocument();
 });
-it("보존된 Diff의 binary·잘림과 텍스트 안전성을 표시한다", async () => {
+it("보존된 변경 내용은 최신 revision부터 선택하고 Diff 상태를 표시한다", async () => {
   const file = {
     file_id: "f1",
     path: "a.bin",
@@ -183,25 +206,46 @@ it("보존된 Diff의 binary·잘림과 텍스트 안전성을 표시한다", as
     deletions: null,
     artifact_id: "artifact-1",
   };
-  vi.spyOn(api, "changes").mockResolvedValue({
-    available: true,
-    revision: 0,
-    base_sha: "a".repeat(40),
-    merge_base_sha: "a".repeat(40),
-    candidate_sha: "b".repeat(40),
-    files: [file],
-    history: [],
-  });
+  const changes = vi
+    .spyOn(api, "changes")
+    .mockImplementation(async (_, revision, sha) => ({
+      available: true,
+      revision,
+      base_sha: "a".repeat(40),
+      merge_base_sha: "a".repeat(40),
+      candidate_sha: sha ?? "b".repeat(40),
+      files: [file],
+      history: [
+        { revision: 0, candidate_sha: "c".repeat(40) },
+        { revision: 1, candidate_sha: "b".repeat(40) },
+      ],
+    }));
   vi.spyOn(api, "diff").mockResolvedValue({
     ...file,
     base_sha: "a".repeat(40),
     candidate_sha: "b".repeat(40),
     text: "<script>not executable</script>",
   });
-  wrap(<ChangesPanel rid="r" version={2} revision={0} />);
+  wrap(<ChangesPanel rid="r" version={2} revision={1} />);
+  const snapshots = await screen.findByRole<HTMLSelectElement>("combobox", {
+    name: "변경 내용 revision 선택",
+  });
+  const previous = `0:${"c".repeat(40)}`;
+  expect(Array.from(snapshots.options, (option) => option.value)).toEqual([
+    "",
+    `1:${"b".repeat(40)}`,
+    previous,
+  ]);
+  expect(snapshots).toHaveValue("");
+  expect(changes).toHaveBeenCalledWith("r", 1, undefined);
   expect(await screen.findByText(/바이너리 파일의 내용/)).toBeVisible();
   expect(screen.getByText(/1 MiB를 초과/)).toBeVisible();
   expect(document.querySelector("script")).toBeNull();
+  fireEvent.change(snapshots, { target: { value: previous } });
+  expect(
+    await screen.findByRole("combobox", { name: "변경 내용 revision 선택" }),
+  ).toHaveValue(previous);
+  expect(changes).toHaveBeenCalledWith("r", 0, "c".repeat(40));
 });
 
 it("코드 수정 확인 후 테스트 검증 대기 사유를 미해결 상태와 함께 표시한다", async () => {
@@ -243,9 +287,9 @@ it("코드 수정 확인 후 테스트 검증 대기 사유를 미해결 상태�
 
 it.each([
   ["affected", "영향 범위 검사", false],
-  ["full", "전체 검사", true],
+  ["full", "영향 범위에서 전체 검사로 확대", true],
 ] as const)(
-  "요청 범위와 실제 %s 실행·미실행 이유를 표시한다",
+  "실제 %s 범위를 요약하고 명령 선택 근거는 펼쳐서 표시한다",
   async (actual, label, expanded) => {
     vi.spyOn(api, "tests").mockResolvedValue({
       status: "passed",
@@ -291,17 +335,33 @@ it.each([
     });
     wrap(<TestsPanel rid="r" version={2} revision={0} />);
     const scope = await screen.findByLabelText("실제 테스트 범위");
+    expect(scope).toHaveTextContent(label);
     expect(scope).toHaveTextContent(
-      `요청: 변경 영향 범위 테스트 · 실제: ${label}`,
+      expanded ? "명령 2개 선택 · 0개 제외" : "명령 1개 선택 · 1개 제외",
     );
-    expect(scope).toHaveTextContent(
-      expanded ? "미실행 명령: 없음" : "미실행 명령: unrelated",
+    if (expanded) {
+      expect(
+        within(scope).getByText("공통 코드 변경으로 전체 검사 확대"),
+      ).toBeVisible();
+    }
+    expect(screen.getByText(/제외한 명령 ·/)).not.toBeVisible();
+    fireEvent.click(screen.getByText("실행 세부 정보"));
+    const evidence = within(
+      screen.getByRole("region", { name: "명령 선택 근거" }),
     );
-    expect(scope).toHaveTextContent(
-      expanded
-        ? "공통 코드 변경으로 전체 검사 확대"
-        : "변경 의존 관계 밖이라 제외",
-    );
+    expect(
+      evidence.getByText("요청 범위 · 변경 영향 범위 테스트"),
+    ).toBeVisible();
+    expect(
+      evidence.getByText(
+        expanded ? "제외한 명령 · 없음" : "제외한 명령 · unrelated",
+      ),
+    ).toBeVisible();
+    expect(
+      evidence.getByText(
+        expanded ? /전체 검사에 포함/ : /변경 의존 관계 밖이라 제외/,
+      ),
+    ).toBeVisible();
     expect(screen.queryByText("전체 테스트 통과")).not.toBeInTheDocument();
   },
 );

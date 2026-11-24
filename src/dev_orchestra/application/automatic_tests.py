@@ -6,21 +6,25 @@ import shlex
 from fnmatch import fnmatchcase
 from pathlib import Path, PurePosixPath
 
-from dev_orchestra.application.frontend_build_scope import frontend_bundle_changed
+from dev_orchestra.application.frontend_build_scope import (
+    APP_CONFIGURATION,
+    frontend_build,
+    frontend_bundle_changed,
+)
 from dev_orchestra.application.gradle_tests import SOURCE_DIRS, GradleSelection, gradle_target_class
 from dev_orchestra.application.test_changes import checksum
 from dev_orchestra.application.validation import (
     docusaurus_build,
     run_test_policy,
     run_test_policy_hash,
-    script_tokens,
 )
 from dev_orchestra.domain.models import PipelineError, TestTarget
 from dev_orchestra.infrastructure.git import Git
 from dev_orchestra.infrastructure.java import java_tool
 
-AUTOMATIC_TEST_CONTRACT = 6
-FRONTEND_PACKAGE_CONTRACTS = {5, AUTOMATIC_TEST_CONTRACT}
+AUTOMATIC_TEST_CONTRACT = 7
+BUNDLE_SCOPE_CONTRACTS = {6, AUTOMATIC_TEST_CONTRACT}
+FRONTEND_PACKAGE_CONTRACTS = {5, *BUNDLE_SCOPE_CONTRACTS}
 JEST_TEST_CONTRACTS = {4, *FRONTEND_PACKAGE_CONTRACTS}
 GRADLE_TEST_CONTRACTS = {3, *JEST_TEST_CONTRACTS}
 AUTOMATIC_TEST_CONTRACTS = {2, *GRADLE_TEST_CONTRACTS}
@@ -34,6 +38,10 @@ def automatic(run):
     )
 
 
+def prepare_selected_only(run):
+    return automatic(run) and run["test_selection_contract"] == AUTOMATIC_TEST_CONTRACT
+
+
 def candidate_file(run, candidate, name):
     root = Path(run["repo"])
     git = Git(root)
@@ -41,23 +49,6 @@ def candidate_file(run, candidate, name):
     if not entry.startswith(("100644 ", "100755 ")):
         raise PipelineError("test input must be a committed regular file")
     return git.call("show", f"{candidate}:{name}")
-
-
-def frontend_build(package, dependencies):
-    script = package["scripts"].get("build")
-    tokens = script_tokens(script) if isinstance(script, str) else None
-    # Options that redirect build input or invoke other tools need an explicit policy.
-    if tokens == ["vite", "build"]:
-        return "vite" in dependencies
-    return bool(
-        tokens
-        and tokens[:2] == ["vue-cli-service", "build"]
-        and "@vue/cli-service" in dependencies
-        and re.fullmatch(
-            r"(?: --mode(?:=| )[\w-]+| --skip-plugins(?:=| )[@\w/-]+)*",
-            "".join(" " + token for token in tokens[2:]),
-        )
-    )
 
 
 def has_parent_workspace(git, candidate, cwd):
@@ -88,22 +79,24 @@ def deferred_builds(run, candidate, tests):
     for key, command in tests.commands.items():
         cwd = PurePosixPath(command.working_directory)
         lockfile = NODE_LOCKFILES.get(Path(command.argv[0]).name)
+        script = command.argv[2] if command.argv[1:2] == ["run"] and len(command.argv) == 3 else ""
         if (
             command.kind != "check"
             or cwd == repo_root
-            and version != AUTOMATIC_TEST_CONTRACT
+            and version not in BUNDLE_SCOPE_CONTRACTS
             or not lockfile
-            or command.argv[1:] != ["run", "build"]
+            or script != "build"
+            and not (version == AUTOMATIC_TEST_CONTRACT and script == "build:production")
         ):
             continue
         try:
             package = json.loads(candidate_file(run, candidate, str(cwd / "package.json")))
             dependencies = package.get("dependencies", {}) | package.get("devDependencies", {})
-            bundle = scoped_frontend and frontend_build(package, dependencies)
+            bundle = scoped_frontend and frontend_build(package, dependencies, script)
             if (
-                (bundle or cwd != repo_root and docusaurus_build(package))
+                (bundle or script == "build" and cwd != repo_root and docusaurus_build(package))
                 and not package.get("workspaces")
-                and not {"prebuild", "postbuild"}.intersection(package["scripts"])
+                and not {"pre" + script, "post" + script}.intersection(package["scripts"])
                 and not any(
                     not isinstance(v, str) or v.startswith(("file:", "link:", "workspace:"))
                     for v in (dependencies | package.get("optionalDependencies", {})).values()
@@ -113,7 +106,7 @@ def deferred_builds(run, candidate, tests):
                 )
                 and (not scoped_frontend or not has_parent_workspace(git, candidate, cwd))
                 and (
-                    version != AUTOMATIC_TEST_CONTRACT
+                    version not in BUNDLE_SCOPE_CONTRACTS
                     or not git.call("ls-tree", candidate, "--", str(cwd / "pnpm-workspace.yaml"))
                 )
             ):
@@ -346,8 +339,14 @@ def mandatory_checks(run, candidate, tests, paths, gradle, deferred):
     scoped_frontend = version in FRONTEND_PACKAGE_CONTRACTS
     directories = {key: PurePosixPath(tests.commands[key].working_directory) for key in deferred}
     nested = set(directories.values()) - {PurePosixPath(".")}
+    root_bundle = version == AUTOMATIC_TEST_CONTRACT and any(
+        directories[key] == PurePosixPath(".") and kind == "bundle"
+        for key, kind in deferred.items()
+    )
     if paths and all(
         PurePosixPath(path).parts[:1] in {("src",), ("tests",)}
+        or root_bundle
+        and APP_CONFIGURATION.fullmatch(path)
         or scoped_frontend
         and any(PurePosixPath(path).is_relative_to(cwd) for cwd in nested)
         for path in paths
@@ -360,7 +359,7 @@ def mandatory_checks(run, candidate, tests, paths, gradle, deferred):
             ):
                 continue
             owned = [path for path in paths if PurePosixPath(path).is_relative_to(cwd)]
-            if version == AUTOMATIC_TEST_CONTRACT and deferred[key] == "bundle":
+            if version in BUNDLE_SCOPE_CONTRACTS and deferred[key] == "bundle":
                 children = {p for p in nested if p != cwd and p.is_relative_to(cwd)}
                 owned = [
                     path
@@ -380,6 +379,7 @@ def mandatory_checks(run, candidate, tests, paths, gradle, deferred):
         key
         for key in checks
         if java_tool(tests.commands[key]) != "gradle"
+        or not gradle.can_scope_check(tests.commands[key])
         or gradle.command_directory(tests.commands[key]) in affected_modules
         or (
             policy
@@ -400,7 +400,7 @@ def model_selection(run, candidate, paths, plan=None, input_error=None):
         )
     version = run.get("test_selection_contract", 2)
     gradle = (
-        GradleSelection(run, candidate)
+        GradleSelection(run, candidate, project_graph=version == AUTOMATIC_TEST_CONTRACT)
         if version in GRADLE_TEST_CONTRACTS
         and any(java_tool(c) == "gradle" for c in tests.commands.values())
         else None
@@ -408,9 +408,14 @@ def model_selection(run, candidate, paths, plan=None, input_error=None):
     policy = tests.affected
     deferred = deferred_builds(run, candidate, tests)
     checks = mandatory_checks(run, candidate, tests, paths, gradle, deferred)
-    if policy and deferred:
+    if policy:
+        eligible = (
+            {key for key, command in tests.commands.items() if command.kind == "check"}
+            if version == AUTOMATIC_TEST_CONTRACT
+            else deferred.keys()
+        )
         checks.update(
-            deferred.keys()
+            eligible
             & {
                 key
                 for criterion in run.get("criteria", [])
@@ -440,7 +445,7 @@ def model_selection(run, candidate, paths, plan=None, input_error=None):
                 " Jest supports exact test files. Include builds when the change or acceptance "
                 "criteria require bundle verification, for example loader changes, dynamic "
                 "imports, emitted assets or compatibility against the production configuration."
-                if version == AUTOMATIC_TEST_CONTRACT
+                if version in BUNDLE_SCOPE_CONTRACTS
                 else " Jest supports exact test files. Include builds when the change or acceptance "
                 "criteria affect the generated output of the corresponding package."
                 if version in FRONTEND_PACKAGE_CONTRACTS
@@ -489,7 +494,7 @@ def model_selection(run, candidate, paths, plan=None, input_error=None):
             "누적 변경의 Gradle 모듈과 프로젝트 검증 정책에 연결되지 않아 제외했습니다."
             if gradle and command.kind == "check" and java_tool(command) == "gradle"
             else "누적 변경과 검증 정책에서 별도 번들 검사가 필요하지 않아 제외했습니다."
-            if deferred.get(key) == "bundle" and version == AUTOMATIC_TEST_CONTRACT
+            if deferred.get(key) == "bundle" and version in BUNDLE_SCOPE_CONTRACTS
             else "누적 변경과 연결되지 않은 프런트엔드 패키지의 빌드를 제외했습니다."
             if key in deferred and version in FRONTEND_PACKAGE_CONTRACTS
             else "문서 빌드에 영향이 없는 앱 변경으로 검증에서 제외했습니다."

@@ -942,6 +942,80 @@
         }
       }
     },
+    "/api/design-images": {
+      "post": {
+        "summary": "Design Image Upload",
+        "operationId": "design_image_upload_api_design_images_post",
+        "requestBody": {
+          "content": {
+            "multipart/form-data": {
+              "schema": {
+                "$ref": "#/components/schemas/Body_design_image_upload_api_design_images_post"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DesignImageUpload"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/design-images/{image_id}": {
+      "get": {
+        "summary": "Design Image Preview",
+        "operationId": "design_image_preview_api_design_images__image_id__get",
+        "parameters": [
+          {
+            "name": "image_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^img-[0-9a-f]{32}$",
+              "title": "Image Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "image/png": {}
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/projects/{pid}/run-previews": {
       "post": {
         "summary": "Preview",
@@ -2502,6 +2576,51 @@
         }
       }
     },
+    "/api/runs/{rid}/design-images/{sha256}": {
+      "get": {
+        "summary": "Run Design Image",
+        "operationId": "run_design_image_api_runs__rid__design_images__sha256__get",
+        "parameters": [
+          {
+            "name": "rid",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Rid"
+            }
+          },
+          {
+            "name": "sha256",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[0-9a-f]{64}$",
+              "title": "Sha256"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "image/png": {}
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/runs/{rid}/logs/window": {
       "get": {
         "summary": "Log Window",
@@ -3175,6 +3294,20 @@
         ],
         "title": "ApprovalInput"
       },
+      "Body_design_image_upload_api_design_images_post": {
+        "properties": {
+          "file": {
+            "type": "string",
+            "contentMediaType": "application/octet-stream",
+            "title": "File"
+          }
+        },
+        "type": "object",
+        "required": [
+          "file"
+        ],
+        "title": "Body_design_image_upload_api_design_images_post"
+      },
       "Body_spec_upload_api_specs_post": {
         "properties": {
           "file": {
@@ -3693,6 +3826,70 @@
           "reason"
         ],
         "title": "DeferInput"
+      },
+      "DesignImage": {
+        "properties": {
+          "name": {
+            "type": "string",
+            "maxLength": 255,
+            "minLength": 5,
+            "title": "Name"
+          },
+          "sha256": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{64}$",
+            "title": "Sha256"
+          },
+          "bytes": {
+            "type": "integer",
+            "maximum": 5242880.0,
+            "exclusiveMinimum": 0.0,
+            "title": "Bytes"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "name",
+          "sha256",
+          "bytes"
+        ],
+        "title": "DesignImage"
+      },
+      "DesignImageUpload": {
+        "properties": {
+          "name": {
+            "type": "string",
+            "maxLength": 255,
+            "minLength": 5,
+            "title": "Name"
+          },
+          "sha256": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{64}$",
+            "title": "Sha256"
+          },
+          "bytes": {
+            "type": "integer",
+            "maximum": 5242880.0,
+            "exclusiveMinimum": 0.0,
+            "title": "Bytes"
+          },
+          "id": {
+            "type": "string",
+            "pattern": "^img-[0-9a-f]{32}$",
+            "title": "Id"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "name",
+          "sha256",
+          "bytes",
+          "id"
+        ],
+        "title": "DesignImageUpload"
       },
       "DiffView": {
         "properties": {
@@ -4712,6 +4909,11 @@
             "title": "Test Scope",
             "default": "full"
           },
+          "auto_approve_plan": {
+            "type": "boolean",
+            "title": "Auto Approve Plan",
+            "default": false
+          },
           "test_scope_notice": {
             "type": "string",
             "title": "Test Scope Notice",
@@ -4753,6 +4955,13 @@
           "spec_sha256": {
             "type": "string",
             "title": "Spec Sha256"
+          },
+          "design_images": {
+            "items": {
+              "$ref": "#/components/schemas/DesignImageUpload"
+            },
+            "type": "array",
+            "title": "Design Images"
           },
           "validation_warnings": {
             "items": {
@@ -4983,6 +5192,11 @@
             "title": "Test Scope",
             "default": "full"
           },
+          "auto_approve_plan": {
+            "type": "boolean",
+            "title": "Auto Approve Plan",
+            "default": false
+          },
           "project_id": {
             "type": "string",
             "pattern": "^prj-[0-9a-f]{32}$",
@@ -5006,6 +5220,14 @@
               }
             }
           },
+          "design_images": {
+            "items": {
+              "$ref": "#/components/schemas/DesignImageUpload"
+            },
+            "type": "array",
+            "maxItems": 8,
+            "title": "Design Images"
+          },
           "base_branch": {
             "anyOf": [
               {
@@ -5027,6 +5249,18 @@
               }
             ],
             "title": "Feature Branch"
+          },
+          "commit_prefix": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 80
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Commit Prefix"
           },
           "max_fix_attempts": {
             "anyOf": [
@@ -5551,6 +5785,11 @@
             "title": "Test Scope",
             "default": "full"
           },
+          "auto_approve_plan": {
+            "type": "boolean",
+            "title": "Auto Approve Plan",
+            "default": false
+          },
           "project_id": {
             "type": "string",
             "pattern": "^prj-[0-9a-f]{32}$",
@@ -5574,6 +5813,14 @@
               }
             }
           },
+          "design_images": {
+            "items": {
+              "$ref": "#/components/schemas/DesignImageUpload"
+            },
+            "type": "array",
+            "maxItems": 8,
+            "title": "Design Images"
+          },
           "base_branch": {
             "anyOf": [
               {
@@ -5595,6 +5842,18 @@
               }
             ],
             "title": "Feature Branch"
+          },
+          "commit_prefix": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 80
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Commit Prefix"
           },
           "max_fix_attempts": {
             "anyOf": [
@@ -5833,6 +6092,22 @@
             ],
             "title": "Test Scope",
             "default": "full"
+          },
+          "auto_approve_plan": {
+            "type": "boolean",
+            "title": "Auto Approve Plan",
+            "default": false
+          },
+          "automatic_plan_approved_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Automatic Plan Approved At"
           },
           "plan": {
             "anyOf": [
@@ -6241,6 +6516,13 @@
           "additional_instructions": {
             "type": "string",
             "title": "Additional Instructions"
+          },
+          "design_images": {
+            "items": {
+              "$ref": "#/components/schemas/DesignImage"
+            },
+            "type": "array",
+            "title": "Design Images"
           }
         },
         "type": "object",
