@@ -155,13 +155,16 @@ export function WorkflowTimeline({
 }) {
   const [now, setNow] = useState(Date.now);
   const [reveal, setReveal] = useState(0);
-  const currentStep = [...items]
-    .reverse()
-    .find(
-      (step) =>
-        step.status === "running" &&
-        (step.revision ?? 0) === (run.revision ?? 0),
-    );
+  const latestFirst = [...items].sort(
+    (a, b) =>
+      (b.revision ?? 0) - (a.revision ?? 0) ||
+      b.iteration - a.iteration ||
+      b.id - a.id,
+  );
+  const currentStep = latestFirst.find(
+    (step) =>
+      step.status === "running" && (step.revision ?? 0) === (run.revision ?? 0),
+  );
   const running = items.some((s) => s.status === "running");
   useEffect(() => {
     if (!running) return;
@@ -169,7 +172,7 @@ export function WorkflowTimeline({
     return () => clearInterval(timer);
   }, [running]);
   const groups = new Map<string, Step[]>();
-  for (const step of items) {
+  for (const step of latestFirst) {
     const key = `${step.revision ?? 0}:${step.iteration}`;
     groups.set(key, [...(groups.get(key) ?? []), step]);
   }

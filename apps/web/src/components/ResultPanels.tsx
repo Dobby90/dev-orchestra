@@ -27,6 +27,7 @@ function Attempts({
   value: string;
   onChange: (v: string) => void;
 }) {
+  const latestFirst = [...history].sort((a, b) => b.id - a.id);
   return (
     <select
       aria-label="결과 회차 선택"
@@ -34,7 +35,7 @@ function Attempts({
       onChange={(e) => onChange(e.target.value)}
     >
       <option value="">현재 revision의 최신 결과</option>
-      {history.map((s) => (
+      {latestFirst.map((s) => (
         <option key={s.id} value={s.id}>
           revision {s.revision ?? "미상"} · 회차 {s.iteration} · 시도{" "}
           {s.attempt} · {s.status}
@@ -506,14 +507,16 @@ export function ChangesPanel({
           }}
         >
           <option value="">현재 revision {revision}</option>
-          {data.history.map((s) => (
-            <option
-              key={`${s.revision}:${s.candidate_sha}`}
-              value={`${s.revision}:${s.candidate_sha}`}
-            >
-              revision {s.revision} · {s.candidate_sha.slice(0, 10)}
-            </option>
-          ))}
+          {[...data.history]
+            .sort((a, b) => b.revision - a.revision)
+            .map((s) => (
+              <option
+                key={`${s.revision}:${s.candidate_sha}`}
+                value={`${s.revision}:${s.candidate_sha}`}
+              >
+                revision {s.revision} · {s.candidate_sha.slice(0, 10)}
+              </option>
+            ))}
         </select>
       </div>
       {!data.available ? (

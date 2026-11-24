@@ -333,9 +333,15 @@ test("실제 로컬 API: 로그인 → 프로젝트 → 실행 → 재연결 →
     page.getByRole("heading", { name: "테스트 통과", exact: true }),
   ).toBeVisible();
   const history = page.getByLabel("결과 회차 선택");
-  await expect(history.locator("option")).toHaveCount(3);
+  await expect(history.getByRole("option")).toHaveText([
+    "현재 revision의 최신 결과",
+    /^revision 1 ·/,
+    /^revision 0 ·/,
+  ]);
   await history.selectOption(
-    (await history.locator("option").nth(1).getAttribute("value")) ?? "",
+    (await history
+      .getByRole("option", { name: /^revision 0 ·/ })
+      .getAttribute("value")) ?? "",
   );
   await expect(page.getByText(/이전 revision 0의 결과입니다/)).toBeVisible();
   await history.selectOption("");
