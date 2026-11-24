@@ -221,9 +221,14 @@ class TestRunner:
     def run(self, worktree, config, directory, stop=lambda: None):
         if not config.commands:
             raise PipelineError("configure at least one allowlisted test command")
+        from dev_orchestra.infrastructure.gradle_worktree_caches import (
+            GradleWorktreeCaches,
+            gradle_cache_roots,
+        )
         from dev_orchestra.infrastructure.java_cache import GradleCacheBindings
 
         bindings = GradleCacheBindings(self.preflight, worktree) if self.preflight else None
+        gradle_caches = GradleWorktreeCaches(self.preflight, worktree) if self.preflight else None
         results = []
         directory.mkdir(parents=True, exist_ok=True)
         observation = {"started_at": time.time(), "status": "incomplete", "commands": []}
@@ -373,14 +378,22 @@ class TestRunner:
                         cache_before = cache_files(git, jest_cache)
                     except (OSError, PipelineError):
                         cache_before = None
-                    rc, output = execute(
-                        argv,
-                        cwd,
-                        command.timeout_seconds,
-                        directory / f"{command_id}.log",
-                        stop=stop,
-                        env=env,
+                    gradle_roots = (
+                        gradle_cache_roots(worktree, [command], config.output_paths)
+                        if gradle_caches
+                        else set()
                     )
+                    with (
+                        gradle_caches.record(gradle_roots, stop) if gradle_roots else nullcontext()
+                    ):
+                        rc, output = execute(
+                            argv,
+                            cwd,
+                            command.timeout_seconds,
+                            directory / f"{command_id}.log",
+                            stop=stop,
+                            env=env,
+                        )
                 result["exit_code"] = rc
                 if rc:
                     diagnostic = f"exit code {rc}: {sanitize(output[-1200:].strip())}"

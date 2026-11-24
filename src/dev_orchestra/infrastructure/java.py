@@ -385,6 +385,18 @@ def check_artifacts(cache, read, tool, shared=None):
 
 
 def prepare_java(worktree, config, directory, stop=lambda: None):
+    from dev_orchestra.infrastructure.gradle_worktree_caches import (
+        GradleWorktreeCaches,
+        gradle_cache_roots,
+    )
+
+    worktree = worktree.resolve()
+    roots = gradle_cache_roots(worktree, config.commands.values(), config.output_paths)
+    with GradleWorktreeCaches(directory, worktree).record(roots, stop):
+        _prepare_java(worktree, config, directory, stop)
+
+
+def _prepare_java(worktree, config, directory, stop):
     commands = [(key, c) for key, c in config.commands.items() if java_tool(c)]
     if not commands:
         return

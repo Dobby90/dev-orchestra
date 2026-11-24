@@ -38,7 +38,7 @@ def fingerprint(value):
     return hashlib.sha256(json.dumps(value, sort_keys=True, default=str).encode()).hexdigest()
 
 
-def cache_identity(roots, stop, *, toolchain=False):
+def cache_identity(roots, stop, *, toolchain=False, exclusive=False):
     """Include every entry and kernel change time, including replaced or backdated files."""
     digest = hashlib.sha256()
     try:
@@ -72,7 +72,7 @@ def cache_identity(roots, stop, *, toolchain=False):
                             ):
                                 return None
                             digest.update(repr(file_identity(target)).encode())
-                        elif stat.S_ISREG(info.st_mode):
+                        elif stat.S_ISREG(info.st_mode) and (not exclusive or info.st_nlink == 1):
                             digest.update(
                                 os.fsencode(entry.name) + b"\0" + repr(file_identity(info)).encode()
                             )
