@@ -464,7 +464,7 @@ class Runner:
                 if role == "fixer" and run.get("review_contract") == 2:
                     from dev_orchestra.application.reviews import Reviews
 
-                    request.context["open_issues"] = Reviews(self.store).open(run_id)
+                    request.context["open_issues"] = Reviews(self.store).fixer_issues(run)
                 from dev_orchestra.agents.context import role_context
 
                 role_context(request)

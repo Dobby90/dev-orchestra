@@ -27,6 +27,46 @@ class Reviews:
     def open(self, run_id):
         return [i for i in self.issues(run_id) if i["status"] == "unresolved"]
 
+    def fixer_issues(self, run):
+        from dev_orchestra.application.results import Results
+
+        issues = self.open(run["id"])
+        assessed_steps = {i["assessed_step_id"] for i in issues if "assessed_step_id" in i}
+        if not assessed_steps:
+            return issues
+
+        assessments = {}
+        results = Results(self.store)
+        for step in self.store.steps(run["id"]):
+            if (
+                step["id"] not in assessed_steps
+                or step["role"] != "reviewer"
+                or step["status"] != "completed"
+            ):
+                continue
+            try:
+                payload = results.payload(run, step)
+            except PipelineError:
+                continue
+            if payload.get("revision", 0) != step["revision"]:
+                continue
+            for assessment in payload.get("assessments", []):
+                if (
+                    assessment["candidate_sha"] == step["output_sha"]
+                    and assessment["evidence"].strip()
+                ):
+                    assessments[step["id"], assessment["issue_id"]] = {
+                        "candidate_sha": step["output_sha"],
+                        "revision": step["revision"],
+                        "reviewer_status": assessment["status"],
+                        "evidence": assessment["evidence"],
+                    }
+        for issue in issues:
+            latest = assessments.get((issue.get("assessed_step_id"), issue["issue_id"]))
+            if latest and latest["candidate_sha"] == issue.get("assessed_sha"):
+                issue["latest_assessment"] = latest
+        return issues
+
     def apply(self, run, step_id, payload):
         sha = payload["sha"]
         existing = {i["issue_id"]: i for i in self.issues(run["id"])}
