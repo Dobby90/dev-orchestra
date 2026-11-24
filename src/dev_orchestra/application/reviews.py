@@ -2,11 +2,26 @@
 
 import json
 import uuid
+from collections import Counter
 
+from dev_orchestra.agents.contracts import ResponseError
 from dev_orchestra.domain.models import PipelineError
 from dev_orchestra.infrastructure.files import digest
 from dev_orchestra.infrastructure.process import sanitize
 from dev_orchestra.infrastructure.store import now
+
+
+def validate_assessment_ids(assessment_ids, known_ids):
+    invalid = [
+        issue_id
+        for issue_id, count in Counter(assessment_ids).items()
+        if issue_id not in known_ids or count > 1
+    ]
+    if invalid:
+        raise ResponseError(
+            "unknown or duplicate review assessment. Copy each issue_id exactly from "
+            f"open_issues and assess it once. Invalid or repeated IDs: {invalid!r}"
+        )
 
 
 class Reviews:
@@ -30,13 +45,11 @@ class Reviews:
     def apply(self, run, step_id, payload):
         sha = payload["sha"]
         existing = {i["issue_id"]: i for i in self.issues(run["id"])}
-        seen = set()
+        assessments = payload.get("assessments", [])
+        validate_assessment_ids((item["issue_id"] for item in assessments), existing)
         with self.store.connection() as db:
-            for assessment in payload.get("assessments", []):
+            for assessment in assessments:
                 key = assessment["issue_id"]
-                if key not in existing or key in seen:
-                    raise PipelineError("unknown or duplicate review assessment")
-                seen.add(key)
                 valid = assessment["candidate_sha"] == sha and bool(assessment["evidence"].strip())
                 tests = run.get("test_result") or {}
                 resolved = (

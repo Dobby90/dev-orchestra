@@ -56,6 +56,65 @@ def test_retry_budget_survives_resume(service):
     assert svc.store.get(rid)["state"] == "needs_input"
 
 
+@pytest.mark.parametrize(
+    ("invalid_id", "correct_on_retry"),
+    [("unknown", True), ("duplicate", True), ("unknown", False)],
+)
+def test_review_assessment_id_repair(service, invalid_id, correct_on_retry):
+    svc, rid, _ = service
+
+    class Agent(FakeAgent):
+        def run(self, request, directory, stop):
+            result = super().run(request, directory, stop)
+            if request.role != "reviewer" or request.iteration != 1:
+                return result
+            assessment = result.assessments[0]
+            feedback = request.context.get("response_feedback")
+            if feedback:
+                assert feedback["input_sha"] == request.input_sha
+                assert "unknown or duplicate review assessment" in feedback["error"]
+                assert "open_issues" in feedback["error"]
+                if correct_on_retry:
+                    return result
+            if invalid_id == "unknown":
+                invalid = assessment.model_copy(update={"issue_id": "issue-unregistered"})
+                result.assessments.append(invalid)
+            else:
+                result.assessments.append(assessment)
+            return result
+
+    agent = Agent(block=1)
+    Runner(svc.store, agent, FakeTests()).execute(rid)
+    run = svc.store.get(rid)
+    assert run["iteration"] == 1
+    assert agent.calls == [
+        "planner",
+        "developer",
+        "tester",
+        "reviewer",
+        "fixer",
+        "tester",
+        "reviewer",
+        "reviewer",
+    ]
+    steps = [
+        step
+        for step in svc.store.steps(rid)
+        if step["role"] == "reviewer" and step["iteration"] == 1
+    ]
+    assert [step["status"] for step in steps] == [
+        "failed",
+        "completed" if correct_on_retry else "failed",
+    ]
+    assert {step["input_sha"] for step in steps} == {run["current_sha"]}
+    with svc.store.connection() as db:
+        saved = [row["step_id"] for row in db.execute("SELECT step_id FROM issue_assessments")]
+    assert saved == ([steps[-1]["id"]] if correct_on_retry else [])
+    assert run["state"] == ("waiting_approval" if correct_on_retry else "needs_input")
+    if not correct_on_retry:
+        assert run["error"].startswith("response repair budget exhausted:")
+
+
 def test_unexpected_role_fields_rejected():
     from dev_orchestra.agents.contracts import validate_role
     from dev_orchestra.domain.models import Criterion
