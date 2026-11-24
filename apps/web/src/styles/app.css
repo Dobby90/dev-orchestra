@@ -814,6 +814,30 @@ input:read-only {
   font-size: 20px;
   padding-right: 20px;
 }
+.test-change-heading {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px 16px;
+}
+.test-change-record {
+  margin-top: 16px;
+}
+.run-disclosure {
+  margin-top: 12px;
+  padding-top: 10px;
+  border-top: 1px solid var(--border);
+}
+.run-disclosure > summary {
+  cursor: pointer;
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+.run-disclosure > summary:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 4px;
+}
 .test-change-patch {
   max-height: 400px;
   overflow: auto;
@@ -1557,24 +1581,40 @@ dd {
   flex-wrap: wrap;
 }
 .result-counts {
-  display: grid;
-  grid-template-columns: repeat(4, 1fr);
-  gap: 12px;
-  margin: 20px 0;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 18px;
+  margin: 0 0 12px;
 }
 .result-counts > div {
-  display: grid;
-  gap: 10px;
-  padding: 16px;
-  border: 1px solid var(--border);
-  border-radius: 6px;
+  display: flex;
+  align-items: baseline;
+  gap: 5px;
 }
-.result-counts span {
-  font-size: 11px;
+.result-counts dt {
   color: var(--muted);
 }
-.result-counts strong {
-  font-size: 24px;
+.result-counts dd {
+  margin: 0;
+  font-weight: 600;
+}
+.result-preview {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  overflow: hidden;
+  overflow-wrap: anywhere;
+}
+.test-failure-summary {
+  border-left: 2px solid var(--red);
+  margin: 12px 0;
+  padding: 6px 12px;
+}
+.test-failure-summary ul {
+  margin: 6px 0 0;
+}
+.test-selection-details {
+  margin-top: 12px;
 }
 .command-result,
 .review-issue {
@@ -1658,9 +1698,6 @@ dd {
 @media (max-width: 650px) {
   .diff-grid {
     grid-template-columns: 1fr;
-  }
-  .result-counts {
-    grid-template-columns: repeat(2, 1fr);
   }
 }
 

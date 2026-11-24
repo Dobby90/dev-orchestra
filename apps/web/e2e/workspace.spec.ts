@@ -303,6 +303,7 @@ test("실제 로컬 API: 로그인 → 프로젝트 → 실행 → 재연결 →
   await expect(
     page.getByRole("heading", { name: "테스트 통과", exact: true }),
   ).toBeVisible();
+  await page.getByText("실행 세부 정보", { exact: true }).click();
   const junitDownload = page.waitForEvent("download");
   await page.getByRole("link", { name: "보존된 JUnit" }).click();
   const junit = await junitDownload;

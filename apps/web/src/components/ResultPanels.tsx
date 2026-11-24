@@ -63,6 +63,20 @@ export function TestsPanel({
   if (result.error)
     return <ErrorNotice error={result.error} retry={() => result.refetch()} />;
   const data = result.data;
+  const selection = data.selection;
+  const expanded =
+    selection?.requested_scope === "affected" &&
+    selection.actual_scope === "full";
+  const failedCommands = data.commands.filter(
+    (command) =>
+      command.passed === false ||
+      ["failed", "unavailable", "parse_error", "timeout"].includes(
+        command.status,
+      ) ||
+      command.error ||
+      command.failure_details?.length ||
+      command.failures?.length,
+  );
   return (
     <div className="result-detail">
       <div className="panel-heading">
@@ -84,33 +98,7 @@ export function TestsPanel({
           과거 결과에 없는 시간·실패 상세는 미상으로 표시합니다.
         </p>
       )}
-      {data.selection && (
-        <section className="notice" aria-label="실제 테스트 범위">
-          <p>
-            요청:{" "}
-            {data.selection.requested_scope === "affected"
-              ? "변경 영향 범위 테스트"
-              : "전체 테스트"}{" "}
-            · 실제:{" "}
-            {data.selection.actual_scope === "affected"
-              ? "영향 범위 검사"
-              : "전체 검사"}
-          </p>
-          <p>실행 명령: {data.selection.included.join(", ")}</p>
-          <p>미실행 명령: {data.selection.excluded.join(", ") || "없음"}</p>
-          {Object.entries(data.selection.command_reasons ?? {}).map(
-            ([command, reason]) => (
-              <p key={command}>
-                {command}: {reason}
-              </p>
-            ),
-          )}
-          {data.selection.reasons.map((reason, index) => (
-            <p key={index}>{reason}</p>
-          ))}
-        </section>
-      )}
-      <div className="result-counts">
+      <dl className="result-counts">
         {[
           { name: "전체", n: data.total },
           { name: "성공", n: data.passed },
@@ -118,63 +106,161 @@ export function TestsPanel({
           { name: "건너뜀", n: data.skipped },
         ].map((v) => (
           <div key={v.name}>
-            <span>{v.name}</span>
-            <strong>{v.n ?? "미상"}</strong>
+            <dt>{v.name}</dt>
+            <dd>{v.n ?? "미상"}</dd>
           </div>
         ))}
-      </div>
-      {data.sha && (
-        <p className="mono help path">
-          검증 SHA {data.sha} · 소요 시간{" "}
-          {data.duration_seconds === null
-            ? "미상"
-            : `${data.duration_seconds.toFixed(2)}초`}
-        </p>
-      )}
-      {data.commands.map((c, index) => (
-        <section className="command-result" key={c.command_id ?? index}>
-          <header>
-            <h3>
-              {c.command_id ?? "과거 명령"}
-              {c.kind === "check" ? " · 빌드·정적 검사" : ""}
-            </h3>
-            <span className={c.passed === true ? "text-green" : "text-amber"}>
-              {statuses[c.status] ?? c.status}
-            </span>
-          </header>
-          <pre>{c.argv?.join(" ") ?? "명령 인자 기록 없음"}</pre>
-          <p className="help">
-            작업 경로 {c.working_directory ?? "."} · 종료 코드{" "}
-            {c.exit_code ?? "미상"} ·{" "}
-            {c.duration_seconds == null
-              ? "시간 미상"
-              : `${c.duration_seconds.toFixed(2)}초`}
+      </dl>
+      {selection && (
+        <section aria-label="실제 테스트 범위">
+          <p>
+            {expanded
+              ? "영향 범위에서 전체 검사로 확대"
+              : selection.actual_scope === "affected"
+                ? "영향 범위 검사"
+                : "전체 검사"}{" "}
+            · 명령 {selection.included.length}개 선택 ·{" "}
+            {selection.excluded.length}개 제외
           </p>
-          {c.error && <p className="notice">{c.error}</p>}
-          {c.junit_artifact_id && (
-            <Button asChild variant="secondary">
-              <a href={artifact(rid, c.junit_artifact_id)}>
-                <Download size={14} />
-                보존된 JUnit
-              </a>
-            </Button>
+          {expanded && selection.reasons[0] && (
+            <p className="text-amber result-preview">{selection.reasons[0]}</p>
           )}
-          {(c.failure_details ?? []).map((f, i) => (
-            <details key={i} className="failure">
-              <summary>
-                {f.name} · {f.message || "실패 상세"}
-              </summary>
-              {f.file && (
-                <p className="mono help">
-                  {f.file}:{f.line ?? "미상"}
-                </p>
-              )}
-              <pre>{f.details}</pre>
-            </details>
-          ))}
+          {selection.input_error && (
+            <p role="alert" className="text-red result-preview">
+              검사 범위 입력 오류 · {selection.input_error}
+            </p>
+          )}
         </section>
-      ))}
+      )}
+      {failedCommands.length > 0 && (
+        <section className="test-failure-summary" aria-label="실패 요약">
+          <h3>확인이 필요한 명령 {failedCommands.length}개</h3>
+          <ul>
+            {failedCommands.slice(0, 3).map((command, index) => {
+              const failure = command.failure_details?.[0];
+              const message =
+                command.error || failure?.message || command.failures?.[0];
+              return (
+                <li key={command.command_id ?? index}>
+                  <p className="result-preview">
+                    <strong>{command.command_id ?? "과거 명령"}</strong>
+                    {" · "}
+                    {statuses[command.status] ?? command.status}
+                    {failure && ` · ${failure.name}`}
+                    {message && ` · ${message}`}
+                  </p>
+                </li>
+              );
+            })}
+          </ul>
+        </section>
+      )}
+      {(selection || data.sha || data.commands.length > 0) && (
+        <details className="run-disclosure" key={selected}>
+          <summary>실행 세부 정보</summary>
+          {selection && (
+            <section
+              className="test-selection-details path"
+              aria-label="명령 선택 근거"
+            >
+              <p>
+                요청 범위 ·{" "}
+                {selection.requested_scope === "affected"
+                  ? "변경 영향 범위 테스트"
+                  : "전체 테스트"}
+              </p>
+              <p>선택한 명령 · {selection.included.join(", ") || "없음"}</p>
+              <p>제외한 명령 · {selection.excluded.join(", ") || "없음"}</p>
+              {selection.input_error && <p>{selection.input_error}</p>}
+              {selection.reasons.map((reason, index) => (
+                <p key={index}>{reason}</p>
+              ))}
+              {Object.entries(selection.command_reasons ?? {}).map(
+                ([command, reason]) => (
+                  <p key={command}>
+                    <code>{command}</code> · {reason}
+                  </p>
+                ),
+              )}
+            </section>
+          )}
+          {data.sha && (
+            <p className="mono help path">
+              검증 SHA {data.sha} · 소요 시간{" "}
+              {data.duration_seconds === null
+                ? "미상"
+                : `${data.duration_seconds.toFixed(2)}초`}
+            </p>
+          )}
+          {data.commands.map((command, index) => (
+            <TestCommandEvidence
+              key={command.command_id ?? index}
+              rid={rid}
+              command={command}
+            />
+          ))}
+        </details>
+      )}
     </div>
+  );
+}
+
+function TestCommandEvidence({
+  rid,
+  command: c,
+}: {
+  rid: string;
+  command: Schema["CommandView"];
+}) {
+  return (
+    <section className="command-result path">
+      <header>
+        <h3>
+          {c.command_id ?? "과거 명령"}
+          {c.kind === "check" ? " · 빌드·정적 검사" : ""}
+        </h3>
+        <span className={c.passed === true ? "text-green" : "text-amber"}>
+          {statuses[c.status] ?? c.status}
+        </span>
+      </header>
+      <pre>{c.argv?.join(" ") ?? "명령 인자 기록 없음"}</pre>
+      <p className="help">
+        작업 경로 {c.working_directory ?? "."} · 종료 코드{" "}
+        {c.exit_code ?? "미상"} ·{" "}
+        {c.duration_seconds == null
+          ? "시간 미상"
+          : `${c.duration_seconds.toFixed(2)}초`}
+      </p>
+      {c.error && <p className="notice">{c.error}</p>}
+      {c.junit_artifact_id && (
+        <Button asChild variant="secondary">
+          <a href={artifact(rid, c.junit_artifact_id)}>
+            <Download size={14} />
+            보존된 JUnit
+          </a>
+        </Button>
+      )}
+      {!c.failure_details?.length && Boolean(c.failures?.length) && (
+        <ul>
+          {c.failures?.map((failure, index) => (
+            <li key={index}>{failure}</li>
+          ))}
+        </ul>
+      )}
+      {(c.failure_details ?? []).map((f, i) => (
+        <details key={i} className="failure">
+          <summary>
+            {f.name} · {f.message || "실패 상세"}
+          </summary>
+          {f.file && (
+            <p className="mono help">
+              {f.file}:{f.line ?? "미상"}
+            </p>
+          )}
+          <pre>{f.details}</pre>
+        </details>
+      ))}
+    </section>
   );
 }
 export function ReviewPanel({
