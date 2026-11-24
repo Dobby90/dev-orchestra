@@ -23,6 +23,7 @@ from dev_orchestra.domain.models import (
     WorkspaceResult,
 )
 from dev_orchestra.infrastructure.commit_messages import describe_commit, format_branch_commit
+from dev_orchestra.infrastructure.containers import MANIFEST
 from dev_orchestra.infrastructure.files import contained, digest, write
 from dev_orchestra.infrastructure.filesystem_identity import directory_identity
 from dev_orchestra.infrastructure.git import Git
@@ -31,6 +32,41 @@ from dev_orchestra.infrastructure.secret_files import public_environment_example
 from dev_orchestra.infrastructure.store import Store
 
 DEPENDENCIES = {"node_modules", ".venv", "__pycache__", ".mypy_cache", ".ruff_cache"}
+JEST_CONFIG = re.compile(r"jest\.config\.(?:[cm]?[jt]s|json)")
+JEST_JUNIT = re.compile(r"""(['"])jest-junit\1""")
+
+
+def jest_junit_references(name, content):
+    if JEST_CONFIG.fullmatch(name):
+        return {"reporter"} if JEST_JUNIT.search(content) else set()
+    try:
+        manifest = json.loads(content)
+    except ValueError:
+        return set()
+    if not isinstance(manifest, dict):
+        return set()
+    references = set()
+    for key in ("dependencies", "devDependencies", "optionalDependencies", "peerDependencies"):
+        section = manifest.get(key)
+        if isinstance(section, dict) and "jest-junit" in section:
+            references.add("dependency")
+    config = manifest.get("jest")
+    if isinstance(config, dict) and JEST_JUNIT.search(json.dumps(config.get("reporters"))):
+        references.add("reporter")
+    return references
+
+
+def runs_jest(command, scripts):
+    from dev_orchestra.application.frontend_build_scope import script_tokens
+    from dev_orchestra.application.validation import script_identity
+
+    if identity := script_identity(command.argv):
+        argv = script_tokens(scripts.get(identity[1])) if isinstance(scripts, dict) else []
+    else:
+        argv = command.argv
+        if Path(argv[0]).name in {"npm", "pnpm", "yarn"} and argv[1:2] == ["exec"]:
+            argv = argv[4:] if argv[2:4] == ["--no", "--"] else argv[2:]
+    return bool(argv and Path(argv[0]).name == "jest")
 
 
 def workspace_policy_hash(run):
@@ -354,10 +390,12 @@ class WorkspaceSession:
             except UnicodeError as error:
                 raise PipelineError("binary source edits denied") from error
         run = self.store.get(self.run_id)
-        tests = Config.model_validate(run["config"]).tests.write_paths
-        if self.data["role"] == "tester" and not in_paths(file, tests):
+        tests = Config.model_validate(run["config"]).tests
+        existing_test = file in self.data["initial"] and in_paths(file, tests.write_paths)
+        if self.data["role"] == "tester" and not in_paths(file, tests.write_paths):
             raise PipelineError("test agent attempted production change")
-        if file in self.data["initial"] and in_paths(file, tests):
+        self._check_validation_edit(run, tests.commands, path, current, content)
+        if existing_test:
             if not test_change:
                 raise PipelineError("existing tests require requirement-bound change evidence")
             change = TestChange.model_validate(test_change)
@@ -381,6 +419,51 @@ class WorkspaceSession:
         }
         self.save()
         return {"file": file, "hash": self.data["files"][file]["hash"]}
+
+    def _check_validation_edit(self, run, commands, path, current, content):
+        adds_docker = not current and path == self.root / MANIFEST
+        adds_jest_junit = (
+            path.name == "package.json" or JEST_CONFIG.fullmatch(path.name)
+        ) and jest_junit_references(path.name, content) - jest_junit_references(
+            path.name, path.read_text() if current else ""
+        )
+        if not (adds_docker or adds_jest_junit):
+            return
+        if not commands:
+            from dev_orchestra.application.contracts import RepositoryInfo
+            from dev_orchestra.application.validation import detect_validation
+
+            info = RepositoryInfo(
+                repository_path=self.root,
+                git_common_directory=self.git.common(),
+                base_branch=run["base"],
+                base_sha=self.git.sha(),
+            )
+            detected = detect_validation(info, supported_only=True)
+            commands = {item.id: item.command for item in detected.candidates}
+        if adds_docker:
+            from dev_orchestra.infrastructure.containers import container_node_projects
+
+            container_node_projects(self.root, commands, include_root=True)
+        if adds_jest_junit:
+            from dev_orchestra.infrastructure.dependencies import read_package
+            from dev_orchestra.infrastructure.runtime_adapters import jest_json_path
+
+            package_dir = path.parent.relative_to(self.root).as_posix()
+            test_commands = [
+                command
+                for command in commands.values()
+                if command.kind == "test" and command.working_directory == package_dir
+            ]
+            reports = [(cmd, jest_json_path(self.root, cmd)) for cmd in test_commands]
+            if any(report for _, report in reports):
+                manifest = contained(path.parent, "package.json")
+                scripts = read_package(manifest).get("scripts", {}) if manifest.is_file() else {}
+                if not any(not report and runs_jest(cmd, scripts) for cmd, report in reports):
+                    raise PipelineError(
+                        f"{package_dir}: the host already converts the Jest JSON report to JUnit; "
+                        "keep the existing Jest configuration without adding jest-junit"
+                    )
 
     def changed_files(self):
         # No exclude-standard: ignored new source files must still be committed.

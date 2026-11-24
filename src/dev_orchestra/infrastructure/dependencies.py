@@ -10,7 +10,11 @@ from dev_orchestra.infrastructure.files import contained, digest, write
 from dev_orchestra.infrastructure.git import Git
 from dev_orchestra.infrastructure.java import prepare_java
 from dev_orchestra.infrastructure.node_dependencies import prepare_npm_cache, prepare_yarn
-from dev_orchestra.infrastructure.node_runtime import node_environment, node_project
+from dev_orchestra.infrastructure.node_runtime import (
+    node_environment,
+    node_project,
+    package_manager,
+)
 from dev_orchestra.infrastructure.playwright import browser_cache, prepare_browsers
 from dev_orchestra.infrastructure.pnpm import prepare_pnpm
 from dev_orchestra.infrastructure.process import environment, execute, sanitize
@@ -130,9 +134,7 @@ def prepare_dependencies(worktree, config, directory, stop=lambda: None):
             lockfile = contained(
                 worktree, (root / "package-lock.json").relative_to(worktree).as_posix()
             )
-            manager = package.get(
-                "packageManager", "yarn" if (root / "yarn.lock").is_file() else "npm"
-            ).split("@", 1)[0]
+            manager = package_manager(root, package)
             if manager == "yarn":
                 prepare_yarn(worktree, root, package, directory, tracked, stop, node_env=node_env)
                 continue

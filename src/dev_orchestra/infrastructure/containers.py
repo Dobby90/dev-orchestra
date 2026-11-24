@@ -338,27 +338,51 @@ def run_arguments(
     return args, {"DEVORCHESTRA_CONTAINER_OWNER": str(owner)}
 
 
+def container_node_projects(worktree, commands, *, include_root=False):
+    from dev_orchestra.infrastructure.dependencies import read_package
+    from dev_orchestra.infrastructure.node_runtime import node_project, package_manager
+
+    def reject_yarn(location):
+        raise PipelineError(
+            f"{location}: Docker dependency preparation does not support Yarn; "
+            "keep the existing host Yarn validation and omit the Docker environment declaration"
+        )
+
+    roots = {}
+    for command_id, item in commands.items():
+        if Path(item.argv[0]).name == "yarn":
+            reject_yarn(f"{command_id} ({item.working_directory})")
+        if root := node_project(worktree, item):
+            roots[root] = f"{command_id} ({root.relative_to(worktree)})"
+    if include_root and not commands and contained(worktree, "package.json").is_file():
+        roots[worktree] = "."
+    projects = {}
+    for root, location in roots.items():
+        package = read_package(contained(root, "package.json"))
+        manager = package_manager(root, package)
+        if manager == "yarn":
+            reject_yarn(location)
+        if manager not in {"npm", "pnpm"}:
+            raise PipelineError("container dependency preparation currently supports npm and pnpm")
+        projects[root] = package, manager
+    return projects
+
+
 def prepare_dependencies(worktree, config, directory, stop=lambda: None, *, generate_locks=False):
     """Online installers see copied manifests only; their repository hooks are unavailable."""
-    prepared = toolchain(worktree, directory, stop)
-    if prepared is None:
+    if not contained(worktree, MANIFEST).is_file():
         return None
+    projects = container_node_projects(worktree, config.commands, include_root=generate_locks)
+    prepared = toolchain(worktree, directory, stop)
     from dev_orchestra.infrastructure.git import Git
-    from dev_orchestra.infrastructure.node_runtime import node_pin, node_project
+    from dev_orchestra.infrastructure.node_runtime import node_pin
 
-    roots = {root for item in config.commands.values() if (root := node_project(worktree, item))}
-    if generate_locks and not config.commands and contained(worktree, "package.json").is_file():
-        roots.add(worktree)
     generated = {}
     tracked = [name for name in Git(worktree).call("ls-files", "-z").split("\0") if name]
-    for root in roots:
-        package = json.loads(contained(root, "package.json").read_text())
+    for root, (package, manager) in projects.items():
         pin = node_pin(root)
         if pin and pin != prepared["specification"]["node"]:
             raise PipelineError("project Node version conflicts with container environment")
-        manager = package.get("packageManager", "npm").split("@", 1)[0]
-        if manager not in {"npm", "pnpm"}:
-            raise PipelineError("container dependency preparation currently supports npm and pnpm")
         if manager == "pnpm" and package.get("packageManager") != "pnpm@" + (
             prepared["specification"]["pnpm"] or ""
         ):

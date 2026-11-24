@@ -161,6 +161,30 @@ def test_preparation_failure_releases_edit_lock_but_preserves_source(setup, monk
     assert session.data["testing"] is False and not (session.root / "package-lock.json").exists()
 
 
+@pytest.mark.parametrize("argv", [["yarn", "run", "test"], ["node", "tests.js"]])
+def test_container_preparation_rejects_yarn_before_starting_docker(tmp_path, monkeypatch, argv):
+    from dev_orchestra.config import TestCommand as Command
+    from dev_orchestra.config import Tests as Commands
+
+    manual = tmp_path / "manual"
+    manual.mkdir()
+    (tmp_path / containers.MANIFEST).write_text('{"image":"node:24-bookworm"}')
+    (manual / "package.json").write_text("{}")
+    (manual / "yarn.lock").write_text("# yarn lockfile v1\n")
+    config = Commands(
+        commands={
+            "unit": Command(argv=argv, working_directory="manual", junit_report="build/unit.xml")
+        }
+    )
+
+    def start_docker(*args, **kwargs):
+        pytest.fail("Docker must not start for a Yarn project")
+
+    monkeypatch.setattr(containers, "toolchain", start_docker)
+    with pytest.raises(PipelineError, match=r"unit \(manual\): .*does not support Yarn"):
+        containers.prepare_dependencies(tmp_path, config, tmp_path / "evidence")
+
+
 @pytest.mark.parametrize(("hooked", "deferred"), [(False, False), (False, True), (True, False)])
 def test_online_installer_receives_only_sanitized_manifests(
     tmp_path, monkeypatch, hooked, deferred
@@ -171,6 +195,7 @@ def test_online_installer_receives_only_sanitized_manifests(
     root = tmp_path / "repo"
     root.mkdir()
     subprocess.run(["git", "init", "-q", str(root)], check=True)
+    (root / containers.MANIFEST).write_text('{"image":"node:24-bookworm"}')
     (root / "package.json").write_text(
         json.dumps(
             {
