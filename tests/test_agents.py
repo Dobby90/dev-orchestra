@@ -4,7 +4,7 @@ from types import SimpleNamespace
 import pytest
 
 from dev_orchestra.agents.contracts import response_fields
-from dev_orchestra.agents.prompts import prompt
+from dev_orchestra.agents.prompts import continuation_prompt, prompt
 from dev_orchestra.domain.models import AgentRequest, PipelineError
 from dev_orchestra.infrastructure.test_runner import parse_junit
 from dev_orchestra.infrastructure.workspace_mcp import dispatch, workspace_tools
@@ -124,6 +124,21 @@ def test_prompt_matches_role_tools_permissions_and_response_fields(role, mode, t
         assert "Editing, checkpoint commits and test execution are locked" in instructions
         assert "test_plan" not in instructions
         assert "workspace.edit_file" not in data
+
+
+@pytest.mark.parametrize("role", ["developer", "fixer"])
+def test_workspace_prompts_request_summary_and_path_hashes(role):
+    req = role_request(role)
+    for render in (prompt, continuation_prompt):
+        instructions = render(req).split("\nUNTRUSTED ", 1)[0]
+        assert "workspace.workspace_state(summary_only=true)" in instructions
+        assert "batch only the needed repo-relative paths" in instructions
+        assert "workspace.workspace_state(paths=[...])" in instructions
+        metadata = render(role_request(role, workspace_resume={"metadata_only": True})).split(
+            "\nUNTRUSTED ", 1
+        )[0]
+        assert "workspace.workspace_state(summary_only=true)" in metadata
+        assert "workspace.workspace_state(paths=[...])" not in metadata
 
 
 def test_validation_guidance_only_uses_known_stack_or_keeps_fallbacks():

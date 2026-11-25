@@ -468,6 +468,7 @@ def test_codex_stdio_transport_uses_host_edits_and_metadata_only(setup, tmp_path
     )
     if outcomes:
         request.context["response_contract"] = {"issue_ids": ["issue-registered"]}
+    original_hash = digest(b"original\n")
     # A CLI stub drives the real stdio host server. No model or network is used.
     stub = tmp_path / "codex-stub"
     stub.write_text(f"""#!{sys.executable}
@@ -498,13 +499,21 @@ def call(method, params=None):
     return response['result']
 assert call('initialize')['protocolVersion'] == '2024-11-05'
 assert len(call('tools/list')['tools']) == 4
+def state(**arguments):
+    response = call('tools/call', {{'name': 'workspace_state', 'arguments': arguments}})
+    assert not response.get('isError'), response
+    return json.loads(response['content'][0]['text'])
+summary = state(summary_only=True)
+assert 'files' not in summary and summary['checkpoint_count'] == 0
+files = state(paths=['main.py', 'ignored.py'])['files']
+assert files == {{'main.py': {original_hash!r}, 'ignored.py': None}}
 result = call('tools/call', {{'name': 'edit_file', 'arguments': {{
-    'file': 'ignored.py', 'expected_hash': None, 'content': 'actual host edit\\n'
+    'file': 'ignored.py', 'expected_hash': files['ignored.py'], 'content': 'actual host edit\\n'
 }}}})
 assert not result.get('isError'), result
 file_hash = json.loads(result['content'][0]['text'])['hash']
 result = call('tools/call', {{'name': 'checkpoint_commit', 'arguments': {{
-    'request_id': 'transport', 'expected_sha': {request.input_sha!r},
+    'request_id': 'transport', 'expected_sha': summary['candidate_sha'],
     'files': {{'ignored.py': file_hash}}, 'message': '전송 계층 검증', 'summary': '실제 파일 편집'
 }}}})
 assert not result.get('isError'), result

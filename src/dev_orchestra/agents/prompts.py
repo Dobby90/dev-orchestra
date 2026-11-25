@@ -137,9 +137,16 @@ FIXED_TEST_EXECUTION = (
     " Read workspace.test_policy and pass exactly its included command_ids to workspace.run_tests. "
 )
 
+LOOKUP_HASHES = (
+    " Before editing, batch only the needed repo-relative paths in workspace.workspace_state(paths=[...]) "
+    "with up to 64 paths per call. "
+)
+
+WORKSPACE_SUMMARY = " Use workspace.workspace_state(summary_only=true) for the candidate SHA and checkpoint metadata. "
+
 EDIT_WORKSPACE = (
-    " Use workspace.workspace_state for current file hashes and workspace.edit_file for authorized "
-    "UTF-8 edits. Supply the current SHA256, or null for a new file. Leave the original checkout, "
+    " Use workspace.edit_file for authorized UTF-8 edits. Supply the current SHA256, or null "
+    "for a new file. Leave the original checkout, "
     "other Runs, evidence, Git metadata, file modes, symlinks and binary files untouched. "
 )
 
@@ -197,13 +204,9 @@ def design_guidance(request):
 
 
 def tester_instructions(request, state):
-    hashes = (
-        " If you need file hashes, pass all needed paths together to "
-        "workspace.workspace_state(paths=[...]) in batches of up to 64. "
-    )
     if state.get("metadata_only"):
         return (
-            hashes
+            WORKSPACE_SUMMARY
             + " Read workspace.test_policy for the recorded selection. Reuse the test_evidence ID "
             "in recovery without rerunning tests. " + TEST_REPORT
         )
@@ -221,8 +224,8 @@ def tester_instructions(request, state):
     return (
         " Edit only test_paths to add missing behavior coverage. Production code and validation policy "
         "are read-only. "
+        + LOOKUP_HASHES
         + EDIT_WORKSPACE
-        + hashes
         + TEST_PROTECTION
         + execution
         + " The host commits pending test edits and runs allowlisted commands. Supply the test "
@@ -238,9 +241,7 @@ def workspace_instructions(request, state):
         )
         if request.role == "tester":
             return instructions + tester_instructions(request, state)
-        instructions += (
-            " Read workspace.workspace_state to verify the preserved candidate and commits. "
-        )
+        instructions += WORKSPACE_SUMMARY
     else:
         questions = (
             " Keep questions empty while continuing the approved requirements. A change of requirements "
@@ -252,12 +253,15 @@ def workspace_instructions(request, state):
             return tester_instructions(request, state) + questions + validation_guidance(request)
         instructions = (
             "Implement the approved requirements and plan. "
+            + WORKSPACE_SUMMARY
+            + LOOKUP_HASHES
             + EDIT_WORKSPACE
             + TEST_PROTECTION
             + questions
             + " Use workspace.checkpoint_commit for meaningful units. Supply a stable request_id, "
-            "expected_sha, and selected file paths mapped to actual hashes. Retry identical "
-            "arguments after a lost response. Use no_change_reason if no cumulative change is needed. "
+            "expected_sha, and selected file paths mapped to their current hashes. Reuse hashes "
+            "returned by edit_file for edited files. Retry identical arguments after a lost response. "
+            "Use no_change_reason if no cumulative change is needed. "
             "Summarize actual changes and risks. "
             + COMMIT_MESSAGES
             + validation_guidance(request)
@@ -333,8 +337,12 @@ def continuation_prompt(request, *, metadata_only=None):
         instructions = workspace_instructions(request, state)
     else:
         instructions = (
-            "Use workspace.workspace_state, workspace.edit_file and workspace.checkpoint_commit "
-            "for remaining approved work, and workspace.prepare_environment for declared toolchain "
+            WORKSPACE_SUMMARY
+            + LOOKUP_HASHES
+            + EDIT_WORKSPACE
+            + "Use workspace.checkpoint_commit with current SHA and selected file hashes for "
+            "remaining approved work, and "
+            "workspace.prepare_environment for declared toolchain "
             "setup. Preserve existing tests and confirmed work. Keep questions empty after edits. "
             + design_guidance(request)
         )

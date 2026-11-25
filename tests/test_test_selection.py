@@ -238,8 +238,9 @@ def test_tester_cannot_edit_product_or_invoke_commit(setup):
         dispatch(session, {"method": "tools/call", "params": {"name": "checkpoint_commit"}})
 
 
-def test_tester_workspace_state_returns_only_requested_hashes(setup):
-    session, request = start_session(setup, "tester")
+@pytest.mark.parametrize("role", ["developer", "fixer", "tester"])
+def test_workspace_state_returns_only_requested_hashes(setup, role):
+    session, request = start_session(setup, role)
     full = session.workspace_state()
     paths = ["tests/test_main.py", "tests/new_test.py"]
     response = dispatch(
@@ -254,6 +255,11 @@ def test_tester_workspace_state_returns_only_requested_hashes(setup):
         "candidate_sha": request.input_sha,
         "files": {paths[0]: full["files"][paths[0]]["hash"], paths[1]: None},
     }
+    summary = session.workspace_state(summary_only=True)
+    assert summary == {key: value for key, value in full.items() if key != "files"}
+    assert full["files"]["main.py"]["hash"] == digest(b"original\n")
+    with pytest.raises(PipelineError, match="cannot be combined"):
+        session.workspace_state(paths, summary_only=True)
     for name in ("../outside", ".git/config", "build/results.xml", ".env", "node_modules/index.js"):
         with pytest.raises(PipelineError):
             session.workspace_state([name])
@@ -266,6 +272,8 @@ def test_tester_workspace_state_returns_only_requested_hashes(setup):
     assert outside_lookup.stat().st_size == original.st_size
     with pytest.raises(PipelineError, match="unrecognized workspace changes"):
         session.workspace_state(paths)
+    with pytest.raises(PipelineError, match="unrecognized workspace changes"):
+        session.workspace_state(summary_only=True)
 
 
 def test_tester_revalidates_evidence_at_each_boundary_with_single_reads(setup, monkeypatch):

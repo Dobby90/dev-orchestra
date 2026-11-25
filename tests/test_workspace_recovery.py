@@ -80,7 +80,13 @@ def test_partial_files_and_multiple_checkpoints_resume_same_stage(setup, release
                 assert req.context["workspace_resume"]["continuing"]
                 assert req.input_sha == session.data["input_sha"]
                 assert (session.root / "pending.py").read_text() == "preserved\n"
-                assert len(session.data["commits"]) == 2
+                summary = session.workspace_state(summary_only=True)
+                assert summary["candidate_sha"] == session.git.sha()
+                assert summary["checkpoint_count"] == 2
+                assert "files" not in summary
+                assert session.workspace_state(["pending.py"])["files"] == {
+                    "pending.py": digest(b"preserved\n")
+                }
                 assert session.checkpoint_commit(*self.commit_args) == self.first_commit
                 assert len(session.data["commits"]) == 2
                 edit(session, "remaining.py", "remaining\n")
@@ -123,7 +129,7 @@ def test_response_repair_locks_edits_without_reimplementing(setup):
                 assert req.context["workspace_resume"]["metadata_only"]
                 with pytest.raises(PipelineError, match="metadata repair"):
                     edit(session, "main.py", "must not rewrite\n")
-                assert session.workspace_state()["checkpoint_count"] == 1
+                assert session.workspace_state(summary_only=True)["checkpoint_count"] == 1
                 return WorkspaceResult(summary="이미 구현한 작업 요약 보완")
             return super().run_workspace(req, directory, session, stop)
 

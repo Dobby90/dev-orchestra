@@ -201,12 +201,14 @@ class WorkspaceSession:
         else:
             self.data = json.loads(self.path.read_text())
 
-    def workspace_state(self, paths=None):
+    def workspace_state(self, paths=None, summary_only=False):
         self.reload()
         self.guard()
         if paths is not None:
-            if self.data["role"] != "tester" or not 1 <= len(paths) <= MAX_HASH_PATHS:
-                raise PipelineError("workspace hash lookup range or role denied")
+            if summary_only:
+                raise PipelineError("workspace hash lookup cannot be combined with summary_only")
+            if not 1 <= len(paths) <= MAX_HASH_PATHS:
+                raise PipelineError("workspace hash lookup paths out of range")
             hashes = {}
             for name in paths:
                 path = contained(self.root, name)
@@ -220,15 +222,17 @@ class WorkspaceSession:
                     raise PipelineError("workspace hash lookup path denied")
                 hashes[name] = self.data["files"].get(name, {}).get("hash")
             return {"candidate_sha": self.data["current_sha"], "files": hashes}
-        return {
+        state = {
             "input_sha": self.data["input_sha"],
             "candidate_sha": self.data["current_sha"],
-            "files": self.data["files"],
             "checkpoint_count": len(self.data["commits"]),
             "completed_units": [c["summary"][:1000] for c in self.data["commits"][-5:]],
             "test_evidence": self.data.get("test_evidence"),
             "metadata_only": self.data.get("metadata_only", False),
         }
+        if not summary_only:
+            state["files"] = self.data["files"]
+        return state
 
     def capture_response(self, response):
         from pydantic import ValidationError

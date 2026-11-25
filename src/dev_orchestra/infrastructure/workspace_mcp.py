@@ -51,10 +51,11 @@ class ReadTesterEvidence(ReadEvidence):
     command_id: str | None = Field(default=None, pattern=r"^[A-Za-z0-9_-]+$")
 
 
-class TesterWorkspaceState(Model):
+class WorkspaceState(Model):
     paths: list[Annotated[str, Field(min_length=1, max_length=4096)]] | None = Field(
         default=None, min_length=1, max_length=MAX_HASH_PATHS
     )
+    summary_only: bool = False
 
 
 READ_EVIDENCE = (
@@ -106,12 +107,11 @@ def workspace_tools(role, metadata_only=False):
     catalog = {
         **(TEST_TOOLS if tester else TOOLS),
         "workspace_state": (
-            (
-                TesterWorkspaceState,
-                f"Batch needed paths in one call (up to {MAX_HASH_PATHS}) to get candidate SHA and requested source hashes (null for missing files). Omit paths for full state.",
-            )
-            if tester
-            else (Empty, "Read current source hashes and confirmed commits.")
+            WorkspaceState,
+            "Set summary_only=true for candidate SHA and checkpoint metadata without file hashes. "
+            f"For edits, pass only needed repo-relative paths (up to {MAX_HASH_PATHS}) for "
+            "candidate SHA and current hashes (null for missing files). Use one option at a time. "
+            "An empty argument object returns full state for legacy callers.",
         ),
     }
     if metadata_only:
