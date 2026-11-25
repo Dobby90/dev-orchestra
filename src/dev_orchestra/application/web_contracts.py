@@ -154,6 +154,7 @@ class Proposal(Input):
     name: RunName
     test_scope: Literal["full", "affected"] = "full"
     auto_approve_plan: bool = Field(default=False, strict=True)
+    brief_plan: bool = Field(default=False, strict=True)
     project_id: str = Field(pattern=r"^prj-[0-9a-f]{32}$")
     spec: Annotated[TextSpec | StoredSpec, Field(discriminator="kind")]
     design_images: list[DesignImageUpload] = Field(
@@ -399,6 +400,7 @@ class PreviewView(BaseModel):
     agent_settings: AgentSettings | None = None
     test_scope: Literal["full", "affected"] = "full"
     auto_approve_plan: bool = False
+    brief_plan: bool = False
     test_scope_notice: str = ""
     run_id: str
     branch: str

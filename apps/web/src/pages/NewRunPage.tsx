@@ -54,6 +54,7 @@ export function NewRunPage() {
     [budget, setBudget] = useDraftField("budget"),
     [testScope, setTestScope] = useDraftField("testScope"),
     [autoApprovePlan, setAutoApprovePlan] = useDraftField("autoApprovePlan"),
+    [briefPlan, setBriefPlan] = useDraftField("briefPlan"),
     [previewOpen, setPreviewOpen] = useState(false),
     [localError, setLocalError] = useState("");
   useEffect(() => {
@@ -177,6 +178,7 @@ export function NewRunPage() {
       ...(designImages.length ? { design_images: designImages } : {}),
       test_scope: testScope,
       auto_approve_plan: autoApprovePlan,
+      brief_plan: briefPlan,
       run_tests: true,
       run_review: true,
       ...(base ? { base_branch: base } : {}),
@@ -507,6 +509,19 @@ export function NewRunPage() {
                 기획안이 확정되면 바로 개발을 시작합니다. 최종 승인은 직접
                 진행합니다.
               </p>
+              <label className="check-row">
+                <input
+                  type="checkbox"
+                  checked={briefPlan}
+                  aria-describedby="brief-plan-guide"
+                  onChange={(e) => edit(() => setBriefPlan(e.target.checked))}
+                />
+                간단 기획 우선
+              </label>
+              <p id="brief-plan-guide" className="help">
+                변경 범위와 인수 조건이 명확한 작은 작업에 사용합니다. 검증
+                설정이나 변경 범위에 따라 상세 기획으로 진행할 수 있습니다.
+              </p>
               <details>
                 <summary>모델·자동 수정 설정 (선택)</summary>
                 <RunAgentSettings
@@ -703,6 +718,10 @@ export function NewRunPage() {
             </dd>
             <dt>기획 승인</dt>
             <dd>{preview.data.receipt.auto_approve_plan ? "자동" : "수동"}</dd>
+            <dt>기획 방식</dt>
+            <dd>
+              {preview.data.receipt.brief_plan ? "간단 기획 우선" : "상세 기획"}
+            </dd>
             {deferredValidation && (
               <>
                 <dt>검증 명령</dt>

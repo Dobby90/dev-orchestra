@@ -62,11 +62,13 @@ def test_first_run_preview_and_submission_defer_commands(web):
         "name": "계산기",
         "project_id": project["id"],
         "spec": {"kind": "text", "text": "Python 계산기 구현"},
+        "brief_plan": True,
     }
     preview = client.post(f"/api/projects/{project['id']}/run-previews", json=proposal)
     assert preview.status_code == 200, preview.text
     receipt = preview.json()
     assert receipt["resolved_validation"]["commands"] == {}
+    assert receipt["brief_plan"] is False
     assert "build" in receipt["resolved_validation"]["output_paths"]
     submitted = client.post(
         "/api/runs",
@@ -75,6 +77,7 @@ def test_first_run_preview_and_submission_defer_commands(web):
     )
     assert submitted.status_code == 202, submitted.text
     run = svc.store.get(submitted.json()["run_id"])
+    assert run["brief_plan"] is False
     assert run["config"]["tests"] == receipt["resolved_validation"]
     assert not client.get(f"/api/projects/{project['id']}").json()["policy"]["tests"]["commands"]
 

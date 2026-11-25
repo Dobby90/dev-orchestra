@@ -15,6 +15,18 @@ from dev_orchestra.infrastructure.process_owner import ensure_stopped
 from dev_orchestra.infrastructure.store import now
 
 
+def brief_plan_available(config, *, has_design_images):
+    """Check host prerequisites before the Planner assesses the task's scope."""
+    return bool(config.tests.commands) and not has_design_images
+
+
+def use_brief_plan(run):
+    return bool(run.get("brief_plan")) and not any(
+        run.get(key)
+        for key in ("revision", "clarifications", "planning_draft", "previous_plan_binding")
+    )
+
+
 def binding(store, run):
     steps = [
         s

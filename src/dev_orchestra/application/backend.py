@@ -55,6 +55,8 @@ def submission_hash(request: Proposal):
     omit = {"commit_prefix"} if request.commit_prefix is None else set()
     if not request.auto_approve_plan:
         omit.add("auto_approve_plan")
+    if not request.brief_plan:
+        omit.add("brief_plan")
     if not request.design_images:
         omit.add("design_images")
     return hashlib.sha256(
@@ -378,11 +380,15 @@ class BackendService:
         }
         raw = base64.urlsafe_b64encode(canonical(value).encode()).decode()
         token = raw + "." + hmac.new(self.key, raw.encode(), hashlib.sha256).hexdigest()
+        from dev_orchestra.application.plan_approval import brief_plan_available
+
         return {
             **value,
             "resolved_validation": config.tests.model_dump(mode="json"),
             "test_scope": proposal.test_scope,
             "auto_approve_plan": proposal.auto_approve_plan,
+            "brief_plan": proposal.brief_plan
+            and brief_plan_available(config, has_design_images=bool(proposal.design_images)),
             "test_scope_notice": (
                 "모델이 변경 코드와 관련 테스트를 분석해 자동 선택합니다. 필요한 경우 관련 모듈로 범위를 확대하고 이유를 기록합니다."
                 if proposal.test_scope == "affected"
@@ -465,6 +471,7 @@ class BackendService:
                     max_fixes=proposal.max_fix_attempts,
                     test_scope=proposal.test_scope,
                     auto_approve_plan=proposal.auto_approve_plan,
+                    brief_plan=proposal.brief_plan,
                 ),
                 run_id=receipt["run_id"],
                 branch=receipt["branch"],

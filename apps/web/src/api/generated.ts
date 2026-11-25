@@ -1638,6 +1638,11 @@ export interface components {
              */
             auto_approve_plan: boolean;
             /**
+             * Brief Plan
+             * @default false
+             */
+            brief_plan: boolean;
+            /**
              * Test Scope Notice
              * @default
              */
@@ -1750,6 +1755,11 @@ export interface components {
              * @default false
              */
             auto_approve_plan: boolean;
+            /**
+             * Brief Plan
+             * @default false
+             */
+            brief_plan: boolean;
             /** Project Id */
             project_id: string;
             /** Spec */
@@ -1945,6 +1955,11 @@ export interface components {
              * @default false
              */
             auto_approve_plan: boolean;
+            /**
+             * Brief Plan
+             * @default false
+             */
+            brief_plan: boolean;
             /** Project Id */
             project_id: string;
             /** Spec */

@@ -451,11 +451,16 @@ class Runner:
                         directory / "preflight" / "tools", lambda: self.store.get(run_id)["control"]
                     )
                 if role == "planner":
-                    from dev_orchestra.application.plan_approval import previous_plan
+                    from dev_orchestra.application.plan_approval import (
+                        previous_plan,
+                        use_brief_plan,
+                    )
 
                     context["planning_draft"] = run.get("planning_draft")
                     if reference := previous_plan(self.store, run):
                         context["previous_plan"] = reference
+                    if use_brief_plan(run):
+                        context["brief_plan"] = True
                 required_assessment_ids = None
                 if role == "reviewer":
                     from dev_orchestra.agents.context import bounded_rows

@@ -8,9 +8,19 @@ from test_workflow import service as service
 
 from dev_orchestra.agents.prompts import prompt
 from dev_orchestra.application.commands import Commands
-from dev_orchestra.application.plan_approval import binding, decide
+from dev_orchestra.application.plan_approval import binding, brief_plan_available, decide
+from dev_orchestra.config import Config
+from dev_orchestra.config import TestCommand as Command
 from dev_orchestra.domain.models import AgentResult, PipelineError, ReviewResultV2
 from dev_orchestra.infrastructure.migrations import upgrade
+
+
+def test_brief_plan_requires_fixed_tests_and_no_design_images():
+    config = Config()
+    assert not brief_plan_available(config, has_design_images=False)
+    config.tests.commands["unit"] = Command(argv=["pytest"], junit_report="build/junit.xml")
+    assert brief_plan_available(config, has_design_images=False)
+    assert not brief_plan_available(config, has_design_images=True)
 
 
 @pytest.fixture
@@ -57,8 +67,15 @@ def test_automatic_approval_uses_current_plan(service, monkeypatch, tmp_path, re
     svc, old, repo = service
     monkeypatch.undo()
     spec = Path(svc.store.get(old)["directory"]) / "spec.md"
-    rid = svc.create(repo, spec, auto_approve_plan=True)
-    agent = FakeAgent()
+    rid = svc.create(repo, spec, auto_approve_plan=True, brief_plan=True)
+
+    class Planner(FakeAgent):
+        def run(self, request, *args):
+            if request.role == "planner":
+                assert request.context.get("brief_plan", False) is (len(self.calls) == 0)
+            return super().run(request, *args)
+
+    agent = Planner()
     runner = Runner(svc.store, agent, FakeTests())
     if resume:
         # Interrupt after the planner result is saved but before its approval is persisted.
@@ -83,6 +100,7 @@ def test_automatic_approval_uses_current_plan(service, monkeypatch, tmp_path, re
                 if request.role == "planner":
                     previous = request.context["previous_plan"]
                     assert previous["revision"] == 0 and previous["plan"] and previous["criteria"]
+                    assert "Return a detailed Markdown plan" in prompt(request)
                     assert "추가 인수 조건을 기획에 반영" in prompt(request)
                 return original(request, *args)
 
@@ -116,11 +134,12 @@ def test_automatic_approval_waits_for_answers(service, monkeypatch):
     svc, old, repo = service
     monkeypatch.undo()
     spec = Path(svc.store.get(old)["directory"]) / "spec.md"
-    rid = svc.create(repo, spec, auto_approve_plan=True)
+    rid = svc.create(repo, spec, auto_approve_plan=True, brief_plan=True)
 
     class QuestioningAgent(FakeAgent):
         def run(self, req, directory, stop):
             assert req.role == "planner"
+            assert req.context["brief_plan"] is True
             return AgentResult(summary="기획 질문", questions=["어떤 동작이 필요한가요?"])
 
     Runner(svc.store, QuestioningAgent(), FakeTests())._execute(rid)

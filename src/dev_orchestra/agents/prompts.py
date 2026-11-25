@@ -40,6 +40,20 @@ PLANNER = (
     "blocking questions; make routine choices from repository conventions. "
 )
 
+BRIEF_PLANNER = (
+    "Inspect the relevant code and callers. Use a short Markdown plan only if the PRD and settled "
+    "instructions explicitly define a narrow change scope and verifiable acceptance criteria, "
+    "and the configured validation covers the change. Use up to five short bullets for decisions, "
+    "correctness constraints, and extra regressions. Keep every stated criterion and existing ID "
+    "in the separate criteria field. Give new criteria unique IDs. Tie test expectations to "
+    "criteria and configured command IDs. "
+    "For asynchronous or concurrent behavior, unclear policy or side effects, cross-module work, "
+    "or underspecified scope or acceptance criteria, write a detailed plan in this same response. "
+    "For asynchronous state, include out-of-order responses, reselection, and whether a submitted "
+    "value still belongs to the current options. Preserve pinned tools and runners. If validation "
+    "conflicts, cite command IDs and ask for a corrected policy in a new run. Ask only blocking questions. "
+)
+
 REVIEWER = (
     "Independently review the cumulative diff and affected callers, contracts and tests against the "
     "PRD and criteria. Use the changed file list to start. Read the actual diff with "
@@ -291,7 +305,11 @@ def prompt(request: AgentRequest, *, reviewer_evidence=None):
             + json.dumps(request.model_dump(), ensure_ascii=False)
         )
     if request.role == "planner":
-        instructions = PLANNER + validation_guidance(request)
+        instructions = (
+            BRIEF_PLANNER
+            if request.context.get("brief_plan")
+            else PLANNER + validation_guidance(request)
+        )
     else:
         instructions = REVIEWER
         if request.context.get("review_contract") == 2:

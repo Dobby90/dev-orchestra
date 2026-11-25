@@ -157,6 +157,24 @@ def test_validation_guidance_only_uses_known_stack_or_keeps_fallbacks():
     )
 
 
+def test_brief_planner_retains_full_criteria_and_falls_back_for_dashboard_races():
+    task = {
+        "prd": "대상 A → B → A에서 이전 응답과 잘못된 선택 이벤트를 무시한다.",
+        "test_commands": {"unit": {"argv": ["yarn", "run", "test"]}},
+    }
+    default = prompt(role_request("planner", **task))
+    request = role_request("planner", brief_plan=True, **task)
+    brief = prompt(request)
+    assert len(brief.encode()) < len(default.encode())
+    assert "Return a detailed Markdown plan" in default
+    assert "five short bullets" in brief and "Keep every stated criterion" in brief
+    assert "write a detailed plan in this same response" in brief
+    assert "out-of-order responses, reselection" in brief
+    assert "belongs to the current options" in brief
+    assert "A → B → A" in brief and "unit" in brief
+    assert response_fields(request) == {"summary", "questions", "plan", "criteria"}
+
+
 def test_junit_requires_executed_tests(tmp_path):
     path = tmp_path / "results.xml"
     path.write_text('<testsuite tests="0"/>')

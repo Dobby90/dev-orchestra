@@ -263,20 +263,22 @@ class CodexClient:
             else prompt(request, reviewer_evidence=_workspace is not None)
         )
         # Size-only observations; never copy prompts, source or tool content into metrics.
-        write(
-            directory / "input-metrics.json",
-            {
-                "prompt_bytes": len(task_input.encode("utf-8")),
-                "continuation": bool(
-                    _session_id
-                    or _metadata_only
-                    or request.context.get("workspace_resume", {}).get("continuing")
-                    or request.context.get("response_feedback")
-                ),
-                "conversation_resumed": bool(_session_id),
-                "metadata_only": bool(_metadata_only),
-            },
-        )
+        metrics = {
+            "prompt_bytes": len(task_input.encode("utf-8")),
+            "continuation": bool(
+                _session_id
+                or _metadata_only
+                or request.context.get("workspace_resume", {}).get("continuing")
+                or request.context.get("response_feedback")
+            ),
+            "conversation_resumed": bool(_session_id),
+            "metadata_only": bool(_metadata_only),
+        }
+        if request.role == "planner":
+            metrics["planning_mode"] = (
+                "brief_if_clear" if request.context.get("brief_plan") else "detailed"
+            )
+        write(directory / "input-metrics.json", metrics)
         collector = UsageCollector(directory / "telemetry.json", options)
         succeeded = False
         try:

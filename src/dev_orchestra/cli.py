@@ -59,6 +59,9 @@ def run(
     auto_approve_plan: bool = typer.Option(
         False, "--auto-approve-plan", help="Start development after verified planning."
     ),
+    brief_plan: bool = typer.Option(
+        False, "--brief-plan", help="Prefer a short plan when scope and criteria are explicit."
+    ),
 ):
     service = ctx.obj
     run_id = service.create(
@@ -68,6 +71,7 @@ def run(
         max_fix_attempts,
         test_scope=test_scope,
         auto_approve_plan=auto_approve_plan,
+        brief_plan=brief_plan,
         design_image_paths=image or (),
     )
     typer.echo(run_id)

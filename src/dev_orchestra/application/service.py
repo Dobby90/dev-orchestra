@@ -53,6 +53,7 @@ class RunService:
         test_scope="full",
         *,
         auto_approve_plan=False,
+        brief_plan=False,
         design_image_paths=(),
     ):
         command = CreateRun(
@@ -62,6 +63,7 @@ class RunService:
             max_fixes=max_fixes,
             test_scope=test_scope,
             auto_approve_plan=auto_approve_plan,
+            brief_plan=brief_plan,
             design_image_paths=design_image_paths,
         )
         return self.create_run(command)
@@ -143,6 +145,12 @@ class RunService:
             "next_role": "planner",
             "created_at": now(),
         }
+        if command.brief_plan:
+            from dev_orchestra.application.plan_approval import brief_plan_available
+
+            data["brief_plan"] = brief_plan_available(
+                config, has_design_images=bool(design_images or command.design_image_paths)
+            )
         with self.store.connection() as db:
             data["review_contract"] = (
                 2 if db.execute("SELECT version FROM schema_version").fetchone()[0] >= 5 else 1

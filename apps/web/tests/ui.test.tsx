@@ -531,8 +531,9 @@ describe("화면·위험 명령", () => {
     vi.spyOn(api, "project").mockResolvedValue(p);
     vi.spyOn(api, "branches").mockResolvedValue({ items: ["main"] });
     vi.spyOn(api, "preview").mockImplementation(
-      async ({ auto_approve_plan }) => ({
+      async ({ auto_approve_plan, brief_plan }) => ({
         auto_approve_plan,
+        brief_plan,
         test_scope: "full",
         test_scope_notice: "영향 판단 실패 시 전체 검사",
         resolved_validation: {
@@ -583,7 +584,9 @@ describe("화면·위험 명령", () => {
     expect(api.preview).not.toHaveBeenCalled();
     expect(screen.getByLabelText("테스트 범위")).toHaveValue("affected");
     const automatic = screen.getByRole("checkbox", { name: "기획 자동 승인" });
+    const brief = screen.getByRole("checkbox", { name: "간단 기획 우선" });
     expect(automatic).not.toBeChecked();
+    expect(brief).not.toBeChecked();
     await userEvent.click(screen.getByText("모델·자동 수정 설정 (선택)"));
     await userEvent.click(
       screen.getByRole("button", { name: "이 작업만 변경" }),
@@ -605,6 +608,7 @@ describe("화면·위험 명령", () => {
     expect(screen.getByRole("dialog", { name: "실행 미리보기" })).toBeVisible();
     expect(screen.getByText("[PROJ-123]")).toBeVisible();
     expect(screen.getByText("수동")).toBeVisible();
+    expect(screen.getByText("상세 기획")).toBeVisible();
     expect(screen.getByText("feature/x")).toBeVisible();
     expect(screen.getByText(/developer.*패스트/)).toBeVisible();
     expect(screen.getByText(/개발 후 확정 · 후보 커밋/)).toBeVisible();
@@ -614,6 +618,7 @@ describe("화면·위험 명령", () => {
     await userEvent.clear(prefix);
     await userEvent.selectOptions(screen.getByLabelText("테스트 범위"), "full");
     await userEvent.click(automatic);
+    await userEvent.click(brief);
     expect(
       screen.queryByRole("button", { name: "확인하고 작업 시작" }),
     ).not.toBeInTheDocument();
@@ -623,6 +628,8 @@ describe("화면·위험 명령", () => {
       true,
     );
     expect(screen.getByText("자동")).toBeVisible();
+    expect(vi.mocked(api.preview).mock.lastCall?.[0].brief_plan).toBe(true);
+    expect(screen.getByRole("dialog")).toHaveTextContent("간단 기획 우선");
     expect(vi.mocked(api.preview).mock.lastCall?.[0]).not.toHaveProperty(
       "commit_prefix",
     );

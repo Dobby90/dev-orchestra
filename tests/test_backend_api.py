@@ -209,10 +209,20 @@ def test_submission_atomic_idempotent_and_not_started(
         proposal["commit_prefix"] = commit_prefix
     if auto_approve_plan is not None:
         proposal["auto_approve_plan"] = auto_approve_plan
+        proposal["brief_plan"] = auto_approve_plan
     preview = c.post(f"/api/projects/{p['id']}/run-previews", json=proposal)
     assert preview.status_code == 200, preview.text
     assert preview.json()["auto_approve_plan"] is bool(auto_approve_plan)
+    assert preview.json()["brief_plan"] is bool(auto_approve_plan)
     body = {**proposal, "preview_token": preview.json()["preview_token"]}
+    assert (
+        c.post(
+            "/api/runs",
+            json={**body, "brief_plan": not auto_approve_plan},
+            headers={"Idempotency-Key": "changed-planning-mode"},
+        ).status_code
+        == 409
+    )
     assert (
         c.post(
             "/api/runs",
@@ -250,6 +260,7 @@ def test_submission_atomic_idempotent_and_not_started(
         == 409
     )
     assert svc.status(rid)["state"] == "queued"
+    assert svc.store.get(rid).get("brief_plan", False) is bool(auto_approve_plan)
     assert not Path(svc.store.get(rid)["worktree"]).exists()
     assert (repo / "main.py").read_bytes() == before
     with svc.store.connection() as db:

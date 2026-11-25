@@ -4942,6 +4942,11 @@
             "title": "Auto Approve Plan",
             "default": false
           },
+          "brief_plan": {
+            "type": "boolean",
+            "title": "Brief Plan",
+            "default": false
+          },
           "test_scope_notice": {
             "type": "string",
             "title": "Test Scope Notice",
@@ -5223,6 +5228,11 @@
           "auto_approve_plan": {
             "type": "boolean",
             "title": "Auto Approve Plan",
+            "default": false
+          },
+          "brief_plan": {
+            "type": "boolean",
+            "title": "Brief Plan",
             "default": false
           },
           "project_id": {
@@ -5838,6 +5848,11 @@
           "auto_approve_plan": {
             "type": "boolean",
             "title": "Auto Approve Plan",
+            "default": false
+          },
+          "brief_plan": {
+            "type": "boolean",
+            "title": "Brief Plan",
             "default": false
           },
           "project_id": {

@@ -20,6 +20,7 @@ type Draft = {
   budget: string;
   testScope: "full" | "affected";
   autoApprovePlan: boolean;
+  briefPlan: boolean;
   agentSettings: Schema["AgentSettings"] | null;
   designImages: Schema["DesignImageUpload"][];
 };
@@ -35,6 +36,7 @@ const empty: Draft = {
   budget: "",
   testScope: "affected",
   autoApprovePlan: false,
+  briefPlan: false,
   agentSettings: null,
   designImages: [],
 };
