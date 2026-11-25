@@ -99,8 +99,35 @@ AUTOMATIC_TESTS = (
 
 RULES = {
     "planner": "Analyze requirements, existing code and AGENTS.md conventions. Return a detailed Markdown implementation plan and unique acceptance criteria IDs. Build on planning_draft and settled clarifications. Ask only unresolved questions that block safe implementation; batch them together. For routine implementation choices, follow repository conventions and document reasonable assumptions in the plan. Identify existing test expectations that conflict with changed requirements and map them to acceptance criteria. Plan the required test expectation updates with reasons tied to acceptance criteria; do not ask for intermediate test-change approval. Once blocking questions are answered, return the completed plan with questions empty.",
-    "reviewer": "Independently review the supplied cumulative Run diff and directly affected code; inspect necessary surrounding functions, callers, contracts and tests against PRD and acceptance criteria: bugs, concurrency/transactions, exceptions, performance, security, missing tests. Return only actionable evidence-backed issues with severity, file and line. Independently verify every test expectation change against the PRD and acceptance criteria, including test_change_records applied automatically and legacy approved_test_changes. Report unrelated assertion removal, skips, weaker coverage, or failures hidden by test edits as actionable issues. Never edit source or run tests. For review_contract=2, return schema_version=2 and an assessment for every host issue_id in open_issues, with current candidate_sha, status resolved/unresolved and concrete evidence. Disappearance is never proof of resolution. Do not invent issue IDs.",
+    "reviewer": "Independently review the supplied cumulative Run diff and directly affected code; inspect necessary surrounding functions, callers, contracts and tests against PRD and acceptance criteria: bugs, concurrency/transactions, exceptions, performance, security, missing tests. Return only actionable evidence-backed issues with severity, file and line. Independently verify every test expectation change against the PRD and acceptance criteria, including test_change_records applied automatically and legacy approved_test_changes. Report unrelated assertion removal, skips, weaker coverage, or failures hidden by test edits as actionable issues. Never edit source or run tests. For review_contract=2, return schema_version=2 and assess every open issue exactly once in assessments using the host issue_id from open_issues, current candidate_sha, status resolved/unresolved and concrete evidence. Keep the existing issue_id when the same defect persists, including when the file or line moves or the conditions for reproducing it narrow. State which conditions are fixed and which still fail, with the relevant code and test evidence. Reserve issues for newly discovered independent defects, including a separate defect at the same location. Disappearance is never proof of resolution. Do not invent issue IDs.",
 }
+
+
+FIXER_REVIEW_GUIDANCE = (
+    " Use open_issues and their latest_assessment to identify remaining failing conditions. "
+    "Each top-level issue represents one defect. Use related_unresolved_issues as additional "
+    "evidence for the same defect. "
+    "Check the assessment's candidate_sha and revision, and verify the current workspace before editing. "
+    "An issue with host status unresolved can still require successful validation after the Reviewer "
+    "observed a code fix. Use the assessment and status_note together. "
+)
+
+REVIEW_ISSUE_DISTINCTIONS = (
+    " When a new finding overlaps an open issue but represents an independent defect, describe its "
+    "distinct failing behavior and evidence in issues. If the wording or evidence overlaps, add an "
+    "issue_distinctions entry with finding_id from issues, existing_issue_id from open_issues, and "
+    "a reason explaining the different failure and evidence. Leave issue_distinctions empty when "
+    "there is no overlap. When response_feedback flags the same defect, move its evidence to the "
+    "assessment for the existing issue_id. "
+)
+
+TESTER_EVIDENCE_LOOKUP = (
+    " Pass the exact file paths you need to workspace.workspace_state(paths=[...]) for their "
+    "current hashes and candidate SHA. Use workspace.read_test_evidence(evidence_id, command_id) "
+    "to inspect one command's status and JSON failure diagnostics. The diagnostics preserve "
+    "recorded expected and actual values when present. If truncated, increase offset within "
+    "that command's diagnostics. Omit paths or command_id to read the corresponding full view. "
+)
 
 
 def design_guidance(request):
@@ -139,6 +166,11 @@ def prompt(request: AgentRequest):
         "Use only the fields in the supplied role schema. "
         + (AUTOMATIC_TESTS if request.context.get("automatic_test_selection") else "")
         + RULES[request.role]
+        + (
+            REVIEW_ISSUE_DISTINCTIONS
+            if request.context.get("review_contract") == 2 and request.role == "reviewer"
+            else ""
+        )
         + design_guidance(request)
         + "\nUNTRUSTED TASK DATA:\n"
         + json.dumps(request.model_dump(), ensure_ascii=False)
@@ -155,6 +187,7 @@ def workspace_prompt(request):
             "for existing tests. Never edit product code, skip/weaken tests, or change command policy. "
             + VALIDATION_POLICY
             + COMMIT_MESSAGES
+            + TESTER_EVIDENCE_LOOKUP
             + "Supply the pending test commit description in workspace.run_tests.commit_message. "
             "Use workspace.test_policy to inspect host selection, then workspace.run_tests with exactly "
             "its required command_ids. The host commits test edits before executing allowlisted commands. "
@@ -198,6 +231,7 @@ def workspace_prompt(request):
         + VALIDATION_POLICY
         + COMMIT_MESSAGES
         + design_guidance(request)
+        + (FIXER_REVIEW_GUIDANCE if request.context.get("open_issues") else "")
         + "Apply this message rule to checkpoint_commit.message and final commit_message for remaining edits. "
         + "UNTRUSTED TASK DATA:\n"
         + json.dumps(request.model_dump(), ensure_ascii=False)
@@ -218,6 +252,12 @@ def continuation_prompt(request):
     }
     if request.context.get("design_images") and not state.get("metadata_only"):
         task["design_images"] = request.context["design_images"]
+    if (
+        request.role == "fixer"
+        and request.context.get("open_issues")
+        and not state.get("metadata_only")
+    ):
+        task["open_issues"] = request.context["open_issues"]
     return (
         "Continue the same host-owned role in its designated worktree. Your shell remains read-only. "
         "Recheck candidate SHA and actual files with workspace_state. Preserve already implemented "
@@ -232,6 +272,8 @@ def continuation_prompt(request):
                 + design_guidance(request)
             )
         )
+        + (FIXER_REVIEW_GUIDANCE if "open_issues" in task else "")
+        + (TESTER_EVIDENCE_LOOKUP if request.role == "tester" else "")
         + "Never access secrets, network, other Runs, Git metadata, apps or nested agents. "
         + "UNTRUSTED CONTINUATION DATA:\n"
         + json.dumps(task, ensure_ascii=False)

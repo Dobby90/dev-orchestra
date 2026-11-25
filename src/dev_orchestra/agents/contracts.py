@@ -28,7 +28,7 @@ def response_fields(request):
         return fields
     fields = ARTIFACT_FIELDS[request.role].copy()
     if request.role == "reviewer" and request.context.get("review_contract") == 2:
-        fields |= {"schema_version", "assessments"}
+        fields |= {"schema_version", "assessments", "issue_distinctions"}
     return fields
 
 
