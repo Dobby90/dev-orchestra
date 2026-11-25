@@ -176,6 +176,7 @@ test("실제 로컬 API: 로그인 → 프로젝트 → 실행 → 재연결 →
   const audit = await new AxeBuilder({ page }).analyze();
   expect(audit.violations).toEqual([]);
   await page.getByRole("link", { name: "연결 및 환경", exact: true }).click();
+  await page.getByRole("tab", { name: "에이전트 모델" }).click();
   await page.getByRole("button", { name: "모델 목록 불러오기" }).click();
   await page
     .getByRole("combobox", { name: "공통 기본값 모델", exact: true })
@@ -204,6 +205,7 @@ test("실제 로컬 API: 로그인 → 프로젝트 → 실행 → 재연결 →
   });
   await page.setViewportSize({ width: 1440, height: 1000 });
   await page.reload();
+  await page.getByRole("tab", { name: "에이전트 모델" }).click();
   await expect(
     page.getByRole("combobox", { name: "Review 모델", exact: true }),
   ).toHaveValue("test-review");

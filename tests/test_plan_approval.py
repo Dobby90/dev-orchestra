@@ -157,7 +157,8 @@ def test_commands_are_atomic_and_idempotent(planned):
     result = commands.execute(rid, "approve-plan", run["version"], body, "approve-once")
     assert commands.execute(rid, "approve-plan", run["version"], body, "approve-once") == result
     with svc.store.connection() as db:
-        assert db.execute("SELECT count(*) FROM jobs WHERE run_id=?", (rid,)).fetchone()[0] == 1
+        jobs = db.execute("SELECT kind, state FROM jobs WHERE run_id=? ORDER BY rowid", (rid,))
+        assert [tuple(job) for job in jobs] == [("execute", "finished"), ("resume", "queued")]
 
 
 def test_missing_approval_cannot_be_bypassed(planned):

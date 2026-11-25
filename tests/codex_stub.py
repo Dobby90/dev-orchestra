@@ -36,7 +36,7 @@ def finish_workspace(req, result):
             value = {'evidence_id':state['test_evidence']['id'], 'selection':policy}
         else:
             arguments = {'command_ids':policy['included']}
-            if policy.get('selector_version') == 2:
+            if 'available_commands' in policy:
                 available = policy.get('available_commands') or req['context']['test_commands']
                 arguments = {'command_ids':list(available), 'test_plan':[
                     {'command_id':key,'files':[],
