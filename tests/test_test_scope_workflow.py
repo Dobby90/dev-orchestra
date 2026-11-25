@@ -134,7 +134,8 @@ def test_scope_survives_developer_tester_reviewer_fixer_and_final_approval(setup
         def run(self, request, *args):
             if request.role == "reviewer":
                 assert "patch" not in request.context["test_result"]
-                assert request.context["diff"]
+                assert request.context["diff"]["changed_files"]
+                assert request.context["base_sha"] and request.context["candidate_sha"]
             result = super().run(request, *args)
             if request.role == "reviewer" and web:
                 return ReviewResultV2(

@@ -6,7 +6,7 @@ identity come from a private host descriptor, never from tool arguments.
 
 import json
 import sys
-from typing import Annotated
+from typing import Annotated, Literal
 
 from pydantic import Field, ValidationError
 
@@ -47,8 +47,9 @@ class ReadEvidence(Model):
     limit: int = Field(default=8000, ge=1, le=8000)
 
 
-class ReadTesterEvidence(ReadEvidence):
+class ReadCommandEvidence(ReadEvidence):
     command_id: str | None = Field(default=None, pattern=r"^[A-Za-z0-9_-]+$")
+    view: Literal["diagnostics", "test_cases"] = "diagnostics"
 
 
 class WorkspaceState(Model):
@@ -59,9 +60,10 @@ class WorkspaceState(Model):
 
 
 READ_EVIDENCE = (
-    ReadEvidence,
-    "Read a bounded slice of this candidate's host test evidence, including criterion coverage. "
-    "Continue with offset when truncated.",
+    ReadCommandEvidence,
+    "Read current candidate evidence. Pass command_id for one command's status and diagnostics. "
+    "Use view=test_cases with command_id for executed names from verified JUnit. Omit command_id "
+    "for full coverage and test selection. Continue with offset when truncated.",
 )
 
 
@@ -91,10 +93,7 @@ TEST_TOOLS = {
         RunTests,
         "Commit pending test edits and run host-validated commands. Supply commit_message with a Korean subject naming the tested behavior and a body describing only pending test changes; never claim unexecuted tests passed. Automatic selection requires test_plan (command_id, exact files relative to command working_directory, reason); command_ids must include mandatory commands. Inspect returned evidence.",
     ),
-    "read_test_evidence": (
-        ReadTesterEvidence,
-        "Read current host evidence for command_id. Returns command status and a bounded JSON slice of its error and failed tests. Omit command_id to page through the full evidence. Offsets are character positions within the selected view.",
-    ),
+    "read_test_evidence": READ_EVIDENCE,
 }
 
 

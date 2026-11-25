@@ -178,7 +178,8 @@ def verify_junit_artifact(path, command):
     content = read_junit(path, MAX_JUNIT_BUNDLE_BYTES)
     if digest(content) != command["junit_hash"]:
         raise PipelineError("JUnit evidence checksum mismatch")
-    counts = junit_counts(junit_tree(content))
+    tree = junit_tree(content)
+    counts = junit_counts(tree)
     passed = command["exit_code"] == 0 and counts["failed"] == 0
     if (
         any(command[key] != counts[key] for key in ("total", "failed", "skipped"))
@@ -186,6 +187,15 @@ def verify_junit_artifact(path, command):
         or command["status"] != ("passed" if passed else "failed")
     ):
         raise PipelineError("JUnit evidence differs from the recorded command result")
+    return tree
+
+
+def executed_testcase_names(tree):
+    return dict.fromkeys(
+        case.attrib["name"]
+        for case in tree.iter("testcase")
+        if case.get("name") and case.find("skipped") is None
+    ).keys()
 
 
 def junit_paths(worktree, pattern, outputs):

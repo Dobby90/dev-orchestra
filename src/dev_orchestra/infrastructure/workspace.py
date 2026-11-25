@@ -101,6 +101,53 @@ def dependency_path(name):
     return bool(set(Path(name).parts) & DEPENDENCIES)
 
 
+def evidence_page(value, evidence_id, offset, limit, command_id, view, case_names):
+    result = {"evidence_id": evidence_id}
+    if command_id is None:
+        if view != "diagnostics":
+            raise PipelineError("a command ID is required for testcase evidence")
+    else:
+        command = next(
+            (
+                row
+                for row in (value.get("execution") or {}).get("commands", [])
+                if row["command_id"] == command_id
+            ),
+            None,
+        )
+        if command is None:
+            raise PipelineError("command was not executed for this test evidence")
+        result.update(
+            sha=value["sha"],
+            revision=value["revision"],
+            command={
+                key: command.get(key)
+                for key in (
+                    "command_id",
+                    "kind",
+                    "status",
+                    "passed",
+                    "exit_code",
+                    "total",
+                    "failed",
+                    "skipped",
+                    "junit_hash",
+                )
+            },
+        )
+        if view == "test_cases":
+            value = {"test_cases": case_names(command)}
+        else:
+            value = {key: command.get(key) for key in ("error", "failures", "failure_details")}
+    text = json.dumps(sanitize(value), ensure_ascii=False)
+    return result | {
+        "offset": offset,
+        "text": text[offset : offset + limit],
+        "truncated": offset + limit < len(text),
+        "total": len(text),
+    }
+
+
 class WorkspaceSession:
     def __init__(self, path, store, *, _run_id=None):
         self.path, self.store = Path(path), store
@@ -784,10 +831,13 @@ class WorkspaceSession:
         path = contained(self.path.parent, evidence["id"] + "/evidence.json")
         return read_tool_evidence(path, evidence["hash"])
 
-    def _validate_test_payload(self, value, run, *, changed, selection=None):
+    def _validate_test_payload(
+        self, value, run, *, changed, selection=None, coverage=(), names_for=None
+    ):
         from dev_orchestra.application.automatic_tests import automatic
         from dev_orchestra.application.test_selection import (
             select_tests,
+            testcase_references,
             verify_selected_execution,
             verify_tool_artifacts,
         )
@@ -807,7 +857,9 @@ class WorkspaceSession:
             raise PipelineError("automatic test selection is not finalized")
         verify_selected_execution(run, selection, value["execution"])
         directory = contained(self.path.parent, self.data["test_evidence"]["id"])
-        verify_tool_artifacts(directory, value)
+        return verify_tool_artifacts(
+            directory, value, testcase_references(coverage), names_for=names_for
+        )
 
     def load_test_result(self, response):
         self.reload()
@@ -817,7 +869,9 @@ class WorkspaceSession:
         value = self.read_test_payload()
         if response.test_evidence_id != value["evidence_id"]:
             raise ResponseError("tester must reference the actual host test evidence")
-        self._validate_test_payload(value, run, changed=self.changed_files())
+        self._validate_test_payload(
+            value, run, changed=self.changed_files(), coverage=response.coverage
+        )
         return value
 
     @staticmethod
@@ -827,11 +881,14 @@ class WorkspaceSession:
         return {
             "evidence_id": value["evidence_id"],
             "sha": value["sha"],
+            "revision": value["revision"],
             "selection": value["selection"],
-            "execution": execution_summary(value["execution"]),
+            "execution": execution_summary(value["execution"], compact=True),
         }
 
-    def read_test_evidence(self, evidence_id, offset=0, limit=8000, command_id=None):
+    def read_test_evidence(
+        self, evidence_id, offset=0, limit=8000, command_id=None, view="diagnostics"
+    ):
         self.reload()
         run = self.guard()
         if (
@@ -843,47 +900,23 @@ class WorkspaceSession:
         ):
             raise PipelineError("test evidence range or ownership denied")
         value = self.read_test_payload()
-        result = {"evidence_id": evidence_id}
-        if command_id is not None:
-            if value["evidence_id"] != evidence_id:
-                raise PipelineError("test evidence identity mismatch")
-            self._validate_test_payload(value, run, changed=self.changed_files())
-            command = next(
-                (
-                    item
-                    for item in value["execution"]["commands"]
-                    if item["command_id"] == command_id
-                ),
-                None,
-            )
-            if command is None:
-                raise PipelineError("command was not executed for this test evidence")
-            result.update(
-                sha=value["sha"],
-                revision=value["revision"],
-                command={
-                    key: command.get(key)
-                    for key in (
-                        "command_id",
-                        "kind",
-                        "status",
-                        "passed",
-                        "exit_code",
-                        "total",
-                        "failed",
-                        "skipped",
-                        "junit_hash",
-                    )
-                },
-            )
-            value = {key: command.get(key) for key in ("error", "failures", "failure_details")}
-        text = json.dumps(sanitize(value), ensure_ascii=False)
-        return result | {
-            "offset": offset,
-            "text": text[offset : offset + limit],
-            "truncated": offset + limit < len(text),
-            "total": len(text),
-        }
+        if value["evidence_id"] != evidence_id:
+            raise PipelineError("test evidence identity mismatch")
+        names = self._validate_test_payload(
+            value,
+            run,
+            changed=self.changed_files(),
+            names_for=command_id if view == "test_cases" else None,
+        )
+        return evidence_page(
+            value,
+            evidence_id,
+            offset,
+            limit,
+            command_id,
+            view,
+            lambda _: names,
+        )
 
     def finish(self, response):
         self.reload()
@@ -1000,7 +1033,9 @@ class ReviewEvidenceSession:
         )
         return cls(path, store)
 
-    def read_test_evidence(self, evidence_id, offset=0, limit=8000):
+    def read_test_evidence(
+        self, evidence_id, offset=0, limit=8000, command_id=None, view="diagnostics"
+    ):
         run = self.store.get(self.data["run_id"])
         step = next(
             (step for step in self.store.steps(run["id"]) if step["id"] == self.data["step_id"]),
@@ -1025,7 +1060,8 @@ class ReviewEvidenceSession:
             raise PipelineError("review evidence range or ownership denied")
         from dev_orchestra.application.results import Results
 
-        value = Results(self.store).payload(run, self.data["test_step"])
+        results = Results(self.store)
+        value = results.payload(run, self.data["test_step"])
         if value.get("revision", 0) != self.data["revision"]:
             raise PipelineError("review test evidence revision mismatch")
         # Raw code patches are deliberately not a diagnostic retrieval payload.
@@ -1036,11 +1072,29 @@ class ReviewEvidenceSession:
             "execution": value.get("execution"),
             "test_selection": value.get("test_selection"),
         }
-        text = json.dumps(value, ensure_ascii=False)
-        return {
-            "evidence_id": evidence_id,
-            "offset": offset,
-            "text": text[offset : offset + limit],
-            "truncated": offset + limit < len(text),
-            "total": len(text),
-        }
+
+        def junit_path(command):
+            if artifact_id := command.get("junit_artifact_id"):
+                path, artifact = results.artifact(run["id"], artifact_id)
+                if (
+                    artifact["step_id"] != self.data["test_step"]["id"]
+                    or artifact["kind"] != "junit"
+                ):
+                    raise PipelineError("JUnit artifact belongs to a different stage")
+                return path
+            if report := command.get("junit_path"):
+                root = Path(run["directory"])
+                return contained(root, str(Path(report).relative_to(root)))
+            return None
+
+        def case_names(command):
+            from dev_orchestra.infrastructure.test_runner import (
+                executed_testcase_names,
+                verify_junit_artifact,
+            )
+
+            if path := junit_path(command):
+                return list(executed_testcase_names(verify_junit_artifact(path, command)))
+            return None
+
+        return evidence_page(value, evidence_id, offset, limit, command_id, view, case_names)

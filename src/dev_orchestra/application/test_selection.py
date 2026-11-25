@@ -4,6 +4,7 @@ from fnmatch import fnmatchcase
 
 from pydantic import ValidationError
 
+from dev_orchestra.agents.contracts import ResponseError
 from dev_orchestra.application.automatic_tests import (
     AUTOMATIC_TEST_CONTRACTS,
     CRITERION_TEST_CONTRACT,
@@ -275,19 +276,51 @@ def verify_tool_evidence(run, step, payload):
         or normalize(value["execution"]) != normalize(payload["execution"])
     ):
         raise PipelineError("host test tool result differs from stage evidence")
-    verify_tool_artifacts(path.parent, value)
+    verify_tool_artifacts(
+        path.parent,
+        value,
+        testcase_references(
+            Coverage.model_validate(item)
+            for item in payload.get("coverage", [])
+            if item.get("test_cases")
+        ),
+    )
 
 
-def verify_tool_artifacts(directory, value):
+def testcase_references(coverage):
+    names = {}
+    for row in coverage:
+        for case in row.test_cases:
+            if case.command_id not in row.command_ids:
+                raise ResponseError("testcase must reference a command for its criterion")
+            names.setdefault(case.command_id, set()).add(case.name)
+    return names
+
+
+def verify_tool_artifacts(directory, value, references=None, *, names_for=None):
     from pathlib import Path
 
     from dev_orchestra.infrastructure.files import contained, digest
-    from dev_orchestra.infrastructure.test_runner import verify_junit_artifact
+    from dev_orchestra.infrastructure.test_runner import (
+        executed_testcase_names,
+        verify_junit_artifact,
+    )
 
+    missing = dict(references or {})
+    case_names = None
     for command in value["execution"]["commands"]:
         if command.get("junit_path"):
             junit = contained(directory, str(Path(command["junit_path"]).relative_to(directory)))
-            verify_junit_artifact(junit, command)
+            tree = verify_junit_artifact(junit, command)
+            command_id = command.get("command_id")
+            names = missing.pop(command_id, None)
+            collect_names = names_for is not None and command_id == names_for
+            if names or collect_names:
+                executed = executed_testcase_names(tree)
+                if names and not names <= executed:
+                    raise ResponseError("coverage names must reference executed JUnit testcases")
+                if collect_names:
+                    case_names = list(executed)
         for adapter in command.get("runtime_adapters", []):
             if adapter == "docker":
                 # Container metadata is already bound to the checksummed execution record.
@@ -298,3 +331,6 @@ def verify_tool_artifacts(directory, value):
             files = list(directory.glob(sha[:16] + "-*"))
             if not files or not any(digest(file.read_bytes()) == sha for file in files):
                 raise PipelineError("runtime adapter checksum mismatch")
+    if missing:
+        raise ResponseError("coverage testcase names require JUnit for the cited command")
+    return case_names

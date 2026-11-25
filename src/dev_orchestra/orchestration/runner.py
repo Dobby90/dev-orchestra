@@ -458,7 +458,22 @@ class Runner:
                         context["previous_plan"] = reference
                 required_assessment_ids = None
                 if role == "reviewer":
-                    context["diff"] = git.diff(run["base_sha"], sha)
+                    from dev_orchestra.agents.context import bounded_rows
+
+                    files = git.call(
+                        "diff",
+                        "--name-only",
+                        "--no-ext-diff",
+                        "-z",
+                        f"{run['base_sha']}...{sha}",
+                        "--",
+                    ).split("\0")
+                    files = [path for path in files if path]
+                    shown = bounded_rows(files, 4000)
+                    context["diff"] = {
+                        "changed_files": shown,
+                        "omitted_files": len(files) - len(shown),
+                    }
                     context["candidate_sha"] = sha
                     context["revision"] = run.get("revision", 0)
                     if run.get("review_contract") == 2:

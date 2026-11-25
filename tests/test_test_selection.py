@@ -17,6 +17,7 @@ from dev_orchestra.application.test_selection import (
 )
 from dev_orchestra.domain.models import (
     AgentRequest,
+    CaseReference,
     Coverage,
     PipelineError,
     WorkspaceResult,
@@ -174,6 +175,7 @@ def test_role_inputs_do_not_repeat_applied_patches_and_keep_review_obligations()
         input_sha="a" * 40,
         context={
             "diff": "cumulative diff",
+            "criteria": [{"id": "AC1"}, {"id": "AC2"}],
             "test_result": {
                 "patch": marker,
                 "sha": "a" * 40,
@@ -187,6 +189,7 @@ def test_role_inputs_do_not_repeat_applied_patches_and_keep_review_obligations()
                         }
                     ]
                 },
+                "test_selection": {"actual_scope": "affected", "test_plan": [marker]},
             },
             "review_result": {"patch": marker, "issues": [{"id": "unresolved"}]},
             "test_change_records": [{"patch": marker, "changes": [{"file": "tests/test_a.py"}]}],
@@ -206,6 +209,8 @@ def test_role_inputs_do_not_repeat_applied_patches_and_keep_review_obligations()
     assert request.context["test_result"].get("coverage") == [
         {"criterion_id": "AC1", "command_ids": ["test"]}
     ]
+    assert request.context["test_result"]["unmapped_criterion_ids"] == ["AC2"]
+    assert request.context["test_result"]["test_selection"]["actual_scope"] == "affected"
     assert (
         len(
             json.dumps(
@@ -309,13 +314,29 @@ def test_tester_revalidates_evidence_at_each_boundary_with_single_reads(setup, m
     assert reads == expected
     reads.clear()
     response = WorkspaceTestResult(
-        summary="실행 근거 확인", command_ids=["unit"], test_evidence_id=value["evidence_id"]
+        summary="실행 근거 확인",
+        command_ids=["unit"],
+        test_evidence_id=value["evidence_id"],
+        coverage=[
+            Coverage(
+                criterion_id="AC1",
+                command_ids=["unit"],
+                test_cases=[CaseReference(command_id="unit", name="one")],
+            )
+        ],
     )
     session.finish(response)
     assert reads == expected
     reads.clear()
     session.load_test_result(response)
     assert reads == expected
+    reads.clear()
+    page = session.read_test_evidence(value["evidence_id"], command_id="unit", view="test_cases")
+    assert json.loads(page["text"]) == {"test_cases": ["one"]}
+    assert reads == expected
+    response.coverage[0].test_cases[0].name = "fabricated"
+    with pytest.raises(PipelineError, match="executed JUnit testcases"):
+        session.load_test_result(response)
 
     directory = session.path.parent / value["evidence_id"]
     junit = directory / "unit.junit.xml"
@@ -476,23 +497,41 @@ def test_selection_failure_expands_to_full(mapped, monkeypatch):
 def test_readonly_review_evidence_keeps_unresolved_issues_and_diagnostics(setup):
     from test_workflow import FakeTests
 
+    from dev_orchestra.application.results import Results
     from dev_orchestra.infrastructure.files import write
     from dev_orchestra.infrastructure.workspace import ReviewEvidenceSession
 
+    class Tests(FakeTests):
+        def run(self, worktree, config, directory, stop):
+            value = super().run(worktree, config, directory, stop)
+            raw = b'<testsuite><testcase name="executed"/><testcase name="skipped"><skipped/></testcase></testsuite>'
+            report = directory / "unit.junit.xml"
+            value["commands"][0].update(
+                junit_path=str(report), junit_hash=write(report, raw), total=2, failed=0, skipped=1
+            )
+            return value
+
     session, _ = start_session(setup, "tester")
-    session._test_runner = FakeTests()
+    session._test_runner = Tests()
     value = session.run_tests(["unit"])
+    svc, rid, _ = setup
+    execution = session.read_test_payload()["execution"]
+    unit = execution["commands"][0]
+    junit = Path(unit.pop("junit_path"))
+    unit["junit_artifact_id"] = Results(svc.store).register(
+        rid, junit, "junit", session.data["step_id"]
+    )
     payload = {
         "sha": value["sha"],
         "revision": 0,
         "patch": "must not resend source patch",
         "coverage": [{"criterion_id": f"AC{i}", "command_ids": ["unit"]} for i in range(1, 201)],
-        "execution": session.read_test_payload()["execution"],
+        "execution": execution,
         "test_selection": value["selection"],
     }
+    payload["coverage"][0]["test_cases"] = [{"command_id": "unit", "name": "executed"}]
     artifact = session.path.parent / "result.json"
     checksum = write(artifact, payload)
-    svc, rid, _ = setup
     svc.store.finish_step(
         session.data["step_id"], value["sha"], {"artifact": str(artifact), "hash": checksum}
     )
@@ -530,6 +569,7 @@ def test_readonly_review_evidence_keeps_unresolved_issues_and_diagnostics(setup)
     assert 0 < tests["omitted_coverage"] < len(payload["coverage"])
     assert len(json.dumps(tests["coverage"], ensure_ascii=False).encode()) <= COVERAGE_BUDGET
     assert tests["coverage"] == evidence["coverage"][: len(tests["coverage"])]
+    assert tests["coverage"][0]["test_cases"] == [{"command_id": "unit", "name": "executed"}]
 
     for stale in ({"sha": "0" * 40}, {"revision": 1}):
         current = request.model_copy(update={"context": {"test_result": payload | stale}})
@@ -545,7 +585,20 @@ def test_readonly_review_evidence_keeps_unresolved_issues_and_diagnostics(setup)
             },
         },
     )
-    assert filtered["isError"]
+    assert not filtered.get("isError")
+    single = json.loads(filtered["content"][0]["text"])
+    assert (single["sha"], single["revision"]) == (value["sha"], 0)
+    assert single["command"]["command_id"] == "unit"
+    assert "coverage" not in json.loads(single["text"])
+    named = reviewer.read_test_evidence(evidence_id, command_id="unit", view="test_cases")
+    assert json.loads(named["text"]) == {"test_cases": ["executed"]}
+    xml = junit.read_bytes()
+    junit.write_bytes(xml.replace(b"executed", b"modified"))
+    with pytest.raises(PipelineError, match="artifact missing or modified"):
+        reviewer.read_test_evidence(evidence_id, command_id="unit", view="test_cases")
+    junit.write_bytes(xml)
+    with pytest.raises(PipelineError, match="command was not executed"):
+        reviewer.read_test_evidence(evidence_id, command_id="other")
     with pytest.raises(PipelineError):
         reviewer.read_test_evidence("another-run")
     svc.store.update(rid, revision=1)

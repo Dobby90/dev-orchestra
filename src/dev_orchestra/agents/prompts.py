@@ -42,7 +42,10 @@ PLANNER = (
 
 REVIEWER = (
     "Independently review the cumulative diff and affected callers, contracts and tests against the "
-    "PRD and criteria. Check behavior, concurrency, error paths, performance and security. "
+    "PRD and criteria. Use the changed file list to start. Read the actual diff with "
+    "git diff --no-ext-diff --no-textconv BASE...CANDIDATE -- PATH using base_sha and candidate_sha. "
+    "If files were omitted, list the complete diff paths first. Read function context and callers "
+    "where needed. Check behavior, concurrency, error paths, performance and security. "
     "Report actionable findings with location, severity and evidence. Check every "
     "test expectation change, including test_change_records and approved_test_changes, for unrelated "
     "assertion removal, weakened coverage, skips and hidden failures. Inspect the test selection "
@@ -119,6 +122,9 @@ TEST_REPORT = (
     " Return test_evidence_id, actual executed command_ids and coverage of each criterion by executed "
     "kind=test commands. Honor required_criterion_test_commands when present. Page diagnostics via "
     "workspace.read_test_evidence(evidence_id, command_id, offset). Check recorded status and JUnit. "
+    "In each coverage row, include up to eight directly relevant test_cases as command_id and "
+    "exact executed JUnit name pairs. Use view=test_cases and command_id to verify names when needed. "
+    "Leave test_cases empty when only command-level evidence is available. "
     "Missing JUnit, timeout and unavailable environments cannot establish success. "
 )
 
@@ -294,8 +300,13 @@ def prompt(request: AgentRequest, *, reviewer_evidence=None):
             reviewer_evidence = bool(request.context.get("test_evidence_id"))
         if reviewer_evidence:
             instructions += (
-                " For omitted coverage or diagnostics, page through workspace.read_test_evidence "
-                "with the supplied test_evidence_id and offset. "
+                " For truncated diagnostics, read the affected command through "
+                "workspace.read_test_evidence with test_evidence_id and command_id. "
+                "Use view=test_cases to check executed names. For omitted or unmapped criteria, "
+                "omitted commands, selection reasons or exact selected files, read the full evidence "
+                "by omitting command_id. "
+                "Follow offset until the relevant data is complete. A testcase name alone does not "
+                "prove criterion coverage. Verify the test assertions against the changed behavior. "
             )
     return (
         TASK_BOUNDARY

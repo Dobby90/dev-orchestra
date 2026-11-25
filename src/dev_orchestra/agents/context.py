@@ -8,7 +8,7 @@ DIAGNOSTIC_BUDGET = 20000
 COVERAGE_BUDGET = 4000
 
 
-def execution_summary(execution):
+def execution_summary(execution, *, compact=False):
     value = {key: execution.get(key) for key in ["status", "passed", "duration_seconds"]}
     value["commands"] = []
     remaining = 12000
@@ -18,15 +18,19 @@ def execution_summary(execution):
             key: command.get(key)
             for key in ["command_id", "kind", "status", "passed", "total", "failed", "skipped"]
         }
-        details = json.dumps(
-            sanitize({key: command.get(key) for key in ["error", "failure_details", "failures"]}),
-            ensure_ascii=False,
-        )
-        row["diagnostic"] = details[: max(0, min(remaining, 3000))]
+        details = {
+            key: command[key]
+            for key in ("error", "failure_details", "failures")
+            if command.get(key)
+        }
+        text = json.dumps(sanitize(details), ensure_ascii=False) if details else ""
+        row["diagnostic"] = text[: min(remaining, 320 if compact else 3000)]
         remaining -= len(row["diagnostic"])
-        row["truncated"] = len(row["diagnostic"]) < len(details)
+        row["truncated"] = len(row["diagnostic"]) < len(text)
         value["commands"].append(row)
-        if len(json.dumps(value, ensure_ascii=False)) > DIAGNOSTIC_BUDGET - 1000:
+        if len(json.dumps(value, ensure_ascii=False).encode()) > (
+            6000 if compact else DIAGNOSTIC_BUDGET - 1000
+        ):
             value["commands"].pop()
             break
     value["omitted_commands"] = len(commands) - len(value["commands"])
@@ -36,16 +40,43 @@ def execution_summary(execution):
     return value
 
 
-def coverage_summary(coverage):
+def bounded_rows(rows, budget):
     shown = []
-    remaining = COVERAGE_BUDGET - 2  # JSON list brackets.
-    for item in coverage:
-        row = {key: item[key] for key in ("criterion_id", "command_ids")}
+    remaining = budget - 2
+    for row in rows:
         remaining -= len(json.dumps(row, ensure_ascii=False).encode()) + 2
         if remaining < 0:
             break
         shown.append(row)
-    return {"coverage": shown, "omitted_coverage": len(coverage) - len(shown)}
+    return shown
+
+
+def coverage_summary(coverage, criteria):
+    rows = [
+        {key: item[key] for key in ("criterion_id", "command_ids", "test_cases") if key in item}
+        for item in coverage
+    ]
+    shown = bounded_rows(rows, COVERAGE_BUDGET)
+    mapped = {item["criterion_id"] for item in coverage}
+    missing = [item["id"] for item in criteria if item["id"] not in mapped]
+    visible_missing = bounded_rows(missing, 1000)
+    return {
+        "coverage": shown,
+        "omitted_coverage": len(rows) - len(shown),
+        "unmapped_criterion_ids": visible_missing,
+        "omitted_unmapped_criteria": len(missing) - len(visible_missing),
+    }
+
+
+def selection_summary(selection):
+    if not selection:
+        return None
+    result = {key: selection.get(key) for key in ("requested_scope", "actual_scope", "expanded")}
+    for key in ("included", "excluded", "reasons"):
+        rows = selection.get(key, [])
+        result[key] = bounded_rows(rows, 1500)
+        result["omitted_" + key] = len(rows) - len(result[key])
+    return result
 
 
 def role_context(request):
@@ -70,12 +101,20 @@ def role_context(request):
             context["test_result"] = {
                 "sha": tests.get("sha"),
                 "revision": tests.get("revision", 0),
-                "execution": execution_summary(tests.get("execution", {})),
-                "test_selection": tests.get("test_selection"),
+                "execution": execution_summary(
+                    tests.get("execution", {}), compact=role in {"tester", "reviewer"}
+                ),
+                "test_selection": (
+                    selection_summary(tests.get("test_selection"))
+                    if role in {"tester", "reviewer"}
+                    else tests.get("test_selection")
+                ),
                 "evidence_reference": "test-result.json",
             }
             if role == "reviewer":
-                context["test_result"].update(coverage_summary(tests.get("coverage", [])))
+                context["test_result"].update(
+                    coverage_summary(tests.get("coverage", []), context.get("criteria") or [])
+                )
         review = context.get("review_result")
         if review:
             context["review_result"] = {

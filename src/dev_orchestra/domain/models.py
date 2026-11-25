@@ -4,7 +4,7 @@ from enum import StrEnum
 from pathlib import Path
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_serializer
 
 MAX_DESIGN_IMAGES = 8
 MAX_DESIGN_IMAGE_BYTES = 5 * 2**20
@@ -47,9 +47,22 @@ class Issue(Model):
     suggestion: str
 
 
+class CaseReference(Model):
+    command_id: str
+    name: str = Field(min_length=1, max_length=512)
+
+
 class Coverage(Model):
     criterion_id: str
     command_ids: list[str]
+    test_cases: list[CaseReference] = Field(default_factory=list, max_length=8)
+
+    @model_serializer(mode="wrap")
+    def serialize(self, handler):
+        value = handler(self)
+        if not self.test_cases:
+            value.pop("test_cases", None)
+        return value
 
 
 class TestChange(Model):
