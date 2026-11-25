@@ -243,14 +243,12 @@ class BackendService:
         return self.project(pid)
 
     def registered_run(self, rid):
-        run = self.store.get(rid)
-        with self.store.connection() as db:
-            row = db.execute("SELECT project_id FROM runs WHERE id=?", (rid,)).fetchone()
-        if not row["project_id"]:
+        run = self.store.get(rid, include_project=True)
+        if not run["project_id"]:
             raise ApplicationError(
                 "PROJECT_REQUIRED", "register and associate project before web commands"
             )
-        p = self.project(row["project_id"])
+        p = self.project(run["project_id"])
         info = self.verify_identity(p)
         if (
             str(info.git_common_directory) != p["git_common_directory"]

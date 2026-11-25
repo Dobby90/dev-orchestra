@@ -95,17 +95,20 @@ class Store:
                 (data["id"], "queued", json.dumps(data)),
             )
 
-    def get(self, run_id):
+    def get(self, run_id, *, include_project=False):
         with self.connection() as db:
             row = db.execute("SELECT * FROM runs WHERE id=?", (run_id,)).fetchone()
         if not row:
             raise PipelineError(f"unknown run: {run_id}")
-        return {
+        run = {
             **json.loads(row["data"]),
             "state": row["state"],
             "control": row["control"],
             "version": row["version"],
         }
+        if include_project:
+            run["project_id"] = row["project_id"] if "project_id" in row.keys() else None
+        return run
 
     def read_control(self, run_id):
         with self.connection() as db:

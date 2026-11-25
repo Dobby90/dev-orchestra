@@ -76,8 +76,9 @@ FIXER_REVIEW_GUIDANCE = (
 PINNED_VALIDATION = (
     " Preserve project pins, package managers, lockfiles and existing validation runners. Prefer "
     "compatible versions observed in host_tools. Validation commands are host-owned. If fixed "
-    "commands conflict with the repository, report the conflicting IDs and files and the exact "
-    "argv, report and allowed paths needed in project settings or CLI tests config for a new Run. "
+    "commands conflict with the repository, identify the command IDs and files. Ask the user to "
+    "set the required argv, JUnit report and allowed paths in project settings or CLI tests config "
+    "and create a new run. "
 )
 
 DISCOVERABLE_VALIDATION = (
@@ -190,7 +191,8 @@ def design_guidance(request):
         return ""
     return (
         " Read design attachments in design_images order and match PRD links by filename. "
-        "Consider depicted states and annotations within the requested scope. " + action + " "
+        "Check depicted states and annotations, including numbered callouts, within the requested "
+        f"scope. {action} "
     )
 
 

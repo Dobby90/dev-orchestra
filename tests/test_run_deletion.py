@@ -319,6 +319,28 @@ def test_api_delete_requires_confirmation_version_and_security(web):
     assert not c.get("/api/dashboard").json()["counts_by_state"]
 
 
+def test_push_preview_during_run_deletion(web, monkeypatch):
+    client, svc, rid, repo, _ = web
+    registered = project(client, svc, repo)
+    with svc.store.connection() as db:
+        db.execute("UPDATE runs SET project_id=? WHERE id=?", (registered["id"], rid))
+    svc.cancel(rid)
+    backend = client.app.state.delivery.backend
+    verify = backend.verify_identity
+
+    def delete_after_verification(project):
+        info = verify(project)
+        monkeypatch.setattr(backend, "verify_identity", verify)
+        delete(svc, rid)
+        return info
+
+    monkeypatch.setattr(backend, "verify_identity", delete_after_verification)
+    url = f"/api/runs/{rid}/push"
+    assert client.get(url).status_code == 200
+    missing = client.get(url)
+    assert missing.status_code == 404 and missing.json()["code"] == "RUN_NOT_FOUND"
+
+
 def test_cli_confirmation_and_deletion(service, tmp_path):
     svc, rid, _ = service
     svc.cancel(rid)

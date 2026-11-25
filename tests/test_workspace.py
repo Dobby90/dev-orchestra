@@ -15,7 +15,9 @@ from dev_orchestra.domain.execution import WORKSPACE_V2, execution_contract
 from dev_orchestra.domain.models import (
     AgentRequest,
     Coverage,
+    FixIssueOutcome,
     PipelineError,
+    WorkspaceFixResult,
     WorkspaceResult,
     WorkspaceTestResult,
 )
@@ -366,6 +368,18 @@ def test_runner_keeps_plan_approval_and_fix_loop(setup):
             checkpoint(session, "first", ["main.py", "tests/test_main.py"])
             edit(session, req.role + ".py", "new\n")
             checkpoint(session, "second", [req.role + ".py"])
+            if req.role == "fixer":
+                return WorkspaceFixResult(
+                    summary="보완 요청에 따라 구현과 테스트 수정",
+                    issue_outcomes=[
+                        FixIssueOutcome(
+                            issue_id=issue_id,
+                            status="implemented",
+                            evidence="main.py와 tests/test_main.py의 기대값을 함께 수정했습니다.",
+                        )
+                        for issue_id in req.context["response_contract"]["issue_ids"]
+                    ],
+                )
             return WorkspaceResult(summary="파일 직접 구현 완료")
 
     agent = Agent(block=1)
@@ -396,6 +410,13 @@ def test_runner_keeps_plan_approval_and_fix_loop(setup):
             assert payload["workspace_commits"][0]["parent"] == step["input_sha"]
             assert payload["sha"] == step["output_sha"]
             assert "main.py" in payload["patch"] and step["role"] + ".py" in payload["patch"]
+            if step["role"] == "fixer":
+                (outcome,) = payload["issue_outcomes"]
+                (assessment,) = run["review_result"]["assessments"]
+                assert outcome["status"] == "implemented"
+                assert assessment["issue_id"] == outcome["issue_id"]
+                assert assessment["status"] == "resolved"
+                assert assessment["candidate_sha"] == payload["sha"]
     svc.approve(run_id)
     assert svc.store.get(run_id)["state"] == "completed"
     assert (repo / "main.py").read_text() == "original local changes\n"
