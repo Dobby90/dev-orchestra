@@ -11,6 +11,25 @@ from dev_orchestra.infrastructure.files import digest
 from dev_orchestra.infrastructure.process import redact, sanitize
 from dev_orchestra.infrastructure.store import now
 
+SEVERITY_ORDER = {"low": 0, "medium": 1, "high": 2, "critical": 3}
+
+
+def unresolved_groups(run, issues):
+    links = run.get("review_issue_duplicates", {})
+    groups = {}
+    for index, issue in enumerate(issues):
+        if issue.get("status", "unresolved") == "unresolved":
+            issue_id = issue.get("issue_id", index)
+            groups.setdefault(links.get(issue_id, issue_id), []).append(issue)
+    return groups
+
+
+def group_severity(group, blocking):
+    return max(
+        (issue["severity"] for issue in group),
+        key=lambda severity: (severity in blocking, SEVERITY_ORDER[severity]),
+    )
+
 
 def _normalized_statement(text):
     return " ".join(text.split()).rstrip(".!?。")
@@ -99,13 +118,73 @@ class Reviews:
     def open(self, run_id):
         return [i for i in self.issues(run_id) if i["status"] == "unresolved"]
 
+    def link_duplicate(self, db, run, duplicate_id, representative_id, reason):
+        if not reason.strip():
+            raise PipelineError("review duplicate link requires a reason")
+        if duplicate_id == representative_id:
+            raise PipelineError("a review issue cannot be linked to itself")
+        ids = {issue["issue_id"] for issue in self.issues(run["id"])}
+        if not {duplicate_id, representative_id} <= ids:
+            raise PipelineError("both review issue IDs must belong to this run")
+        links = run.get("review_issue_duplicates", {})
+        if representative_id in links:
+            raise PipelineError("choose an existing representative ID as the target")
+        if links.get(duplicate_id) == representative_id:
+            return
+        if duplicate_id in links:
+            raise PipelineError("review issue is already linked to a different representative")
+        # Joining two groups keeps each member linked directly to the chosen representative.
+        updated = {
+            issue_id: representative_id if target == duplicate_id else target
+            for issue_id, target in links.items()
+        } | {duplicate_id: representative_id}
+        self.store.update(
+            run["id"], expected_version=run["version"], review_issue_duplicates=updated
+        )
+        self.store._event(
+            db,
+            run["id"],
+            "issue.duplicate_linked",
+            {
+                "duplicate_id": duplicate_id,
+                "representative_id": representative_id,
+                "reason": sanitize(reason),
+            },
+        )
+
     def fixer_issues(self, run):
+        issues = self.open(run["id"])
+        self._include_latest_assessments(run, issues)
+        blocking = run["config"]["review"]["blocking_severities"]
+        result = []
+        for representative, group in unresolved_groups(run, issues).items():
+            if len(group) == 1 and group[0]["issue_id"] == representative:
+                result.append(group[0])
+                continue
+            focus = max(
+                group,
+                key=lambda issue: (
+                    issue["assessed_step_id"] if issue.get("latest_assessment") else -1,
+                    issue["issue_id"] == representative,
+                ),
+            )
+            result.append(
+                focus
+                | {
+                    "issue_id": representative,
+                    "severity": group_severity(group, blocking),
+                    "evidence_issue_id": focus["issue_id"],
+                    "related_unresolved_issues": [issue for issue in group if issue is not focus],
+                }
+            )
+        return result
+
+    def _include_latest_assessments(self, run, issues):
         from dev_orchestra.application.results import Results
 
-        issues = self.open(run["id"])
         assessed_steps = {i["assessed_step_id"] for i in issues if "assessed_step_id" in i}
         if not assessed_steps:
-            return issues
+            return
 
         assessments = {}
         results = Results(self.store)
@@ -137,7 +216,6 @@ class Reviews:
             latest = assessments.get((issue.get("assessed_step_id"), issue["issue_id"]))
             if latest and latest["candidate_sha"] == issue.get("assessed_sha"):
                 issue["latest_assessment"] = latest
-        return issues
 
     def apply(self, run, step_id, payload):
         sha = payload["sha"]
@@ -178,7 +256,6 @@ class Reviews:
                     "UPDATE review_issues SET status=?,data=? WHERE id=?",
                     (state, json.dumps(data), key),
                 )
-            severity_order = {"low": 0, "medium": 1, "high": 2, "critical": 3}
             for finding in payload["issues"]:
                 fingerprint = digest(
                     json.dumps(
@@ -192,7 +269,7 @@ class Reviews:
                 key = old["id"] if old else "issue-" + uuid.uuid4().hex
                 severity = max(
                     [finding["severity"], old["severity"] if old else finding["severity"]],
-                    key=severity_order.get,
+                    key=SEVERITY_ORDER.get,
                 )
                 data = sanitize(finding) | {
                     "source_sha": sha,

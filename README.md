@@ -146,6 +146,13 @@ CLI에서 PNG를 첨부하려면 `run`에 `--image path/to/design.png`를 추가
 최종 승인 대기에 도달하면 보고서와 테스트·리뷰·Diff를 검토한 뒤 승인합니다.
 최종 보고서에는 변경 요약, 검증 결과, 승인 전 확인 항목이 표시됩니다. 웹에서는 보고서 아래의 링크로 테스트·코드 리뷰·변경 내용·요구사항을 열 수 있습니다. CLI에서 원문과 상세 근거가 필요하면 `report RUN_ID --detailed`를 사용합니다.
 
+같은 결함이 여러 이슈로 기록됐다면 `review-issues`로 ID와 상태를 확인한 뒤 `link-review-duplicate`로 연결합니다. 미해결 집계와 Fixer 입력은 대표 ID 기준으로 계산합니다. 회차별 리뷰 이력과 각 이슈의 판정은 보존합니다. 이슈 해결에는 동일 후보의 테스트 통과와 독립 재평가가 필요합니다.
+
+```sh
+.venv/bin/devorchestra --config config.yaml review-issues RUN_ID
+.venv/bin/devorchestra --config config.yaml link-review-duplicate RUN_ID DUPLICATE_ID REPRESENTATIVE_ID --reason '동일한 실패 조건과 근거 확인'
+```
+
 ```sh
 .venv/bin/devorchestra --config config.yaml report RUN_ID
 .venv/bin/devorchestra --config config.yaml approve RUN_ID

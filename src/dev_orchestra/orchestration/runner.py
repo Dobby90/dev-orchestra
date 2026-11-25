@@ -20,7 +20,12 @@ from dev_orchestra.application.errors import ApplicationError
 from dev_orchestra.application.handoff import repository_identity, same_repository
 from dev_orchestra.application.projects import ProjectService, verify_registered_directory
 from dev_orchestra.application.results import test_case_counts
-from dev_orchestra.application.reviews import Reviews, validate_review_findings
+from dev_orchestra.application.reviews import (
+    Reviews,
+    group_severity,
+    unresolved_groups,
+    validate_review_findings,
+)
 from dev_orchestra.application.test_changes import TestChangeService
 from dev_orchestra.application.validation import (
     is_test_source,
@@ -67,10 +72,12 @@ def transition_summary(run, target):
         issues = review.get("issue_states")
         if issues is None:
             issues = review.get("issues", [])
+        blocking = run.get("config", {}).get("review", {}).get("blocking_severities", [])
         return {
             "review_issues": dict(
                 Counter(
-                    i["severity"] for i in issues if i.get("status", "unresolved") == "unresolved"
+                    group_severity(group, blocking)
+                    for group in unresolved_groups(run, issues).values()
                 )
             ),
             "test_failed": execution.get("passed") is False,

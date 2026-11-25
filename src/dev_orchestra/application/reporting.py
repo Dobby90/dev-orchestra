@@ -8,6 +8,7 @@ from dev_orchestra.application.errors import ApplicationError
 from dev_orchestra.application.handoff import handoff_markdown
 from dev_orchestra.application.progress import role_progress
 from dev_orchestra.application.results import Results, test_case_counts
+from dev_orchestra.application.reviews import group_severity, unresolved_groups
 from dev_orchestra.config import Review
 from dev_orchestra.domain.models import PipelineError
 from dev_orchestra.infrastructure.git import Git
@@ -139,8 +140,9 @@ def review_summary(results, run, review, sha, revision, checks):
         if issue.get("status_note"):
             item += f" · {excerpt(issue['status_note'])}"
         checks.append(item)
+    groups = unresolved_groups(run, unresolved)
     return (
-        f"미해결 {len(unresolved)}건 (차단 {sum(i['severity'] in blocking for i in unresolved)}건)"
+        f"미해결 {len(groups)}건 (차단 {sum(group_severity(group, blocking) in blocking for group in groups.values())}건)"
         f" · 해결 {sum(i.get('status') == 'resolved' for i in issues)}건"
         f" · 사용자 제외 {sum(i.get('status') == 'dismissed' for i in issues)}건"
     )

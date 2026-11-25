@@ -66,6 +66,7 @@ class Commands:
             "request-changes",
             "cleanup",
             "issue-disposition",
+            "link-review-duplicate",
             "reconcile",
             "approve-test-changes",
             "reject-test-changes",
@@ -315,6 +316,11 @@ class Commands:
                         run, body["issue_id"], body["status"], body["reason"]
                     )
                     self.store.update(run_id, expected_version=expected_version)
+                elif kind == "link-review-duplicate":
+                    Reviews(self.store).link_duplicate(
+                        db, run, body["duplicate_id"], body["representative_id"], body["reason"]
+                    )
+                    result = {key: body[key] for key in ("duplicate_id", "representative_id")}
                 elif kind == "cleanup":
                     self.store.update(
                         run_id, expected_version=expected_version, cleanup_requested=True

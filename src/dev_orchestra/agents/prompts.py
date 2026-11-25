@@ -105,6 +105,8 @@ RULES = {
 
 FIXER_REVIEW_GUIDANCE = (
     " Use open_issues and their latest_assessment to identify remaining failing conditions. "
+    "Each top-level issue represents one defect. Use related_unresolved_issues as additional "
+    "evidence for the same defect. "
     "Check the assessment's candidate_sha and revision, and verify the current workspace before editing. "
     "An issue with host status unresolved can still require successful validation after the Reviewer "
     "observed a code fix. Use the assessment and status_note together. "
