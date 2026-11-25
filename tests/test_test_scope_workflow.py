@@ -11,8 +11,10 @@ from test_workspace import setup as setup
 from dev_orchestra.application.plan_approval import binding, decide
 from dev_orchestra.domain.models import (
     Coverage,
+    FixIssueOutcome,
     ReviewAssessment,
     ReviewResultV2,
+    WorkspaceFixResult,
     WorkspaceResult,
     WorkspaceTestResult,
 )
@@ -111,6 +113,18 @@ def test_scope_survives_developer_tester_reviewer_fixer_and_final_approval(setup
                     else request.context["review_result"]["issues"]
                 )
             edit(session, "main.py", request.role + "\n")
+            if request.role == "fixer":
+                return WorkspaceFixResult(
+                    summary="현재 코드에서 요구사항 수정",
+                    issue_outcomes=[
+                        FixIssueOutcome(
+                            issue_id=issue_id,
+                            status="implemented",
+                            evidence="main.py의 요구사항 동작을 수정했습니다.",
+                        )
+                        for issue_id in request.context["response_contract"]["issue_ids"]
+                    ],
+                )
             if web == "fallback" and request.role == "developer":
                 edit(session, "unmapped.py", "unmapped input\n")
             return WorkspaceResult(summary="현재 코드에서 요구사항 구현")

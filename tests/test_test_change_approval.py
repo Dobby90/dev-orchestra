@@ -9,7 +9,13 @@ from test_workspace import edit
 
 from dev_orchestra.application.test_changes import TestChangeService as Changes
 from dev_orchestra.application.test_changes import checksum, task_hash
-from dev_orchestra.domain.models import AgentResult, PipelineError, ReviewResultV2, WorkspaceResult
+from dev_orchestra.domain.models import (
+    AgentResult,
+    PipelineError,
+    ReviewResultV2,
+    WorkspaceFixResult,
+    WorkspaceResult,
+)
 from dev_orchestra.infrastructure.evidence import checkpoints
 from dev_orchestra.infrastructure.files import digest, write
 from dev_orchestra.infrastructure.git import Git
@@ -53,6 +59,18 @@ class XmlAgent(FakeAgent):
             if request.role != "tester":
                 edit(session, "main.py", "xml enabled\n")
                 self.calls.append(request.role)
+                if request.role == "fixer":
+                    return WorkspaceFixResult(
+                        summary="XML 활성화",
+                        issue_outcomes=[
+                            {
+                                "issue_id": issue_id,
+                                "status": "implemented",
+                                "evidence": "main.py에서 XML을 활성화하고 기존 테스트를 갱신했습니다.",
+                            }
+                            for issue_id in request.context["response_contract"]["issue_ids"]
+                        ],
+                    )
                 return WorkspaceResult(summary="XML 활성화")
         return super().run_workspace(request, directory, session, stop)
 

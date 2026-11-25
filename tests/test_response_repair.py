@@ -5,9 +5,13 @@ from pathlib import Path
 import pytest
 from test_workflow import FakeAgent, FakeTests
 from test_workflow import service as service
+from test_workspace import edit
 
 from dev_orchestra.agents.contracts import ResponseError
-from dev_orchestra.domain.models import AgentResult
+from dev_orchestra.agents.prompts import continuation_prompt
+from dev_orchestra.application.results import Results
+from dev_orchestra.application.reviews import Reviews
+from dev_orchestra.domain.models import AgentResult, FixIssueOutcome
 from dev_orchestra.orchestration.runner import Runner
 
 
@@ -123,6 +127,79 @@ def test_unexpected_role_fields_rejected():
         validate_role(
             "developer", AgentResult(summary="ok", criteria=[Criterion(id="A", description="x")])
         )
+
+
+@pytest.mark.parametrize(
+    "problem,status,recovers",
+    [
+        ("missing", "implemented", True),
+        ("duplicate", "partial", True),
+        ("unknown", "blocked", True),
+        ("missing", "implemented", False),
+    ],
+)
+def test_fixer_outcomes_are_validated_before_testing(service, problem, status, recovers):
+    svc, rid, _ = service
+
+    class Agent(FakeAgent):
+        def run_workspace(self, request, directory, session, stop):
+            result = super().run_workspace(request, directory, session, stop)
+            if request.role != "fixer":
+                if request.role == "tester" and request.iteration == 1:
+                    assert len(Reviews(svc.store).open(rid)) == 1
+                return result
+
+            (issue,) = request.context["open_issues"]
+            issue_id = issue["issue_id"]
+            assert request.context["response_contract"]["issue_ids"] == [issue_id]
+            self.outcome = FixIssueOutcome(
+                issue_id=issue_id,
+                status=status,
+                evidence="main.py의 반환값을 변경했습니다. 남은 조건은 검증이 필요합니다.",
+            )
+            state = request.context["workspace_resume"]
+            if self.calls.count("fixer") == 1:
+                edit(session, "main.py", "fixed\n")
+            else:
+                assert state["metadata_only"]
+                assert f"{problem} IDs" in state["remaining"]
+                assert issue_id in continuation_prompt(request)
+                assert (session.root / "main.py").read_text() == "fixed\n"
+                assert session.git.sha() == request.input_sha
+                if recovers:
+                    result.issue_outcomes = [self.outcome]
+                    return result
+
+            result.issue_outcomes = {
+                "missing": [],
+                "duplicate": [self.outcome, self.outcome],
+                "unknown": [
+                    self.outcome,
+                    self.outcome.model_copy(update={"issue_id": "issue-not-requested"}),
+                ],
+            }[problem]
+            return result
+
+    agent = Agent(block=1)
+    Runner(svc.store, agent, FakeTests()).execute(rid)
+    run = svc.store.get(rid)
+    assert run["iteration"] == 1
+    assert agent.calls[:5] == ["planner", "developer", "tester", "reviewer", "fixer"]
+    (step,) = [s for s in svc.store.steps(rid) if s["role"] == "fixer"]
+    if recovers:
+        assert agent.calls[5:] == ["fixer", "tester", "reviewer"]
+        assert run["state"] == "waiting_approval", run.get("error")
+        payload = Results(svc.store).payload(run, step)
+        assert payload["issue_outcomes"] == [agent.outcome.model_dump()]
+        assert payload["sha"] == run["current_sha"]
+        assert len(payload["workspace_commits"]) == 1
+        svc.approve(rid)
+    else:
+        assert agent.calls[5:] == ["fixer"]
+        assert run["state"] == "needs_input"
+        assert "workspace response repair budget exhausted" in run["error"]
+        assert "artifact" not in step["data"]
+        assert (Path(run["worktree"]) / "main.py").read_text() == "fixed\n"
 
 
 def test_pending_plan_with_13_criteria_and_legacy_config(service, monkeypatch):

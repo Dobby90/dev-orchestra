@@ -110,6 +110,13 @@ FIXER_REVIEW_GUIDANCE = (
     "Check the assessment's candidate_sha and revision, and verify the current workspace before editing. "
     "An issue with host status unresolved can still require successful validation after the Reviewer "
     "observed a code fix. Use the assessment and status_note together. "
+    "In issue_outcomes, report exactly one entry for each ID in response_contract.issue_ids, "
+    "using only those top-level issue IDs. Use implemented when the candidate addresses all known "
+    "failing conditions, partial when some remain, and blocked when a specific obstacle prevented "
+    "the fix. Give evidence for each entry: cite changed files or checkpoints and relevant "
+    "behavior, and identify any remaining failing condition or blocker. These are Fixer reports; "
+    "the host tests and independent Reviewer still decide whether an issue is resolved. "
+    "Return an empty issue_outcomes list when there are no requested IDs. "
 )
 
 REVIEW_ISSUE_DISTINCTIONS = (
@@ -231,7 +238,7 @@ def workspace_prompt(request):
         + VALIDATION_POLICY
         + COMMIT_MESSAGES
         + design_guidance(request)
-        + (FIXER_REVIEW_GUIDANCE if request.context.get("open_issues") else "")
+        + (FIXER_REVIEW_GUIDANCE if request.role == "fixer" else "")
         + "Apply this message rule to checkpoint_commit.message and final commit_message for remaining edits. "
         + "UNTRUSTED TASK DATA:\n"
         + json.dumps(request.model_dump(), ensure_ascii=False)
@@ -252,12 +259,8 @@ def continuation_prompt(request):
     }
     if request.context.get("design_images") and not state.get("metadata_only"):
         task["design_images"] = request.context["design_images"]
-    if (
-        request.role == "fixer"
-        and request.context.get("open_issues")
-        and not state.get("metadata_only")
-    ):
-        task["open_issues"] = request.context["open_issues"]
+    if request.role == "fixer":
+        task["open_issues"] = request.context.get("open_issues", [])
     return (
         "Continue the same host-owned role in its designated worktree. Your shell remains read-only. "
         "Recheck candidate SHA and actual files with workspace_state. Preserve already implemented "

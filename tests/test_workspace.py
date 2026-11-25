@@ -437,8 +437,16 @@ def test_installed_codex_readonly_boundary(setup):
     CodexClient(Config().codex).check_workspace(request, session.path.parent, session, lambda: None)
 
 
-def test_codex_stdio_transport_uses_host_edits_and_metadata_only(setup, tmp_path):
-    session, request = start_session(setup)
+@pytest.mark.parametrize("role", ["developer", "fixer"])
+def test_codex_stdio_transport_uses_host_edits_and_metadata_only(setup, tmp_path, role):
+    session, request = start_session(setup, role)
+    outcomes = (
+        [{"issue_id": "issue-registered", "status": "implemented", "evidence": "ignored.py 추가"}]
+        if role == "fixer"
+        else []
+    )
+    if outcomes:
+        request.context["response_contract"] = {"issue_ids": ["issue-registered"]}
     # A CLI stub drives the real stdio host server. No model or network is used.
     stub = tmp_path / "codex-stub"
     stub.write_text(f"""#!{sys.executable}
@@ -450,7 +458,11 @@ assert sys.argv[sys.argv.index('--sandbox') + 1] == 'read-only'
 assert '--ignore-user-config' in sys.argv and '--ignore-rules' in sys.argv
 assert '--ephemeral' not in sys.argv
 schema = json.loads(Path(sys.argv[sys.argv.index('--output-schema') + 1]).read_text())
-assert set(schema['properties']) == {{'summary', 'questions', 'no_change_reason', 'commit_message'}}
+outcomes = {outcomes!r}
+expected = {{'summary', 'questions', 'no_change_reason', 'commit_message'}}
+if outcomes:
+    expected.add('issue_outcomes')
+assert set(schema['properties']) == set(schema['required']) == expected
 config = {{sys.argv[i+1].split('=', 1)[0]: sys.argv[i+1].split('=', 1)[1]
           for i, arg in enumerate(sys.argv[:-1]) if arg == '-c'}}
 command = json.loads(config['mcp_servers.workspace.command'])
@@ -478,8 +490,10 @@ assert not result.get('isError'), result
 proc.stdin.close()
 assert proc.wait(timeout=10) == 0
 assert 'workspace.edit_file' in sys.stdin.read()
-Path(sys.argv[sys.argv.index('--output-last-message') + 1]).write_text(
-    json.dumps({{'summary': '직접 편집 완료', 'questions': [], 'no_change_reason': '', 'commit_message': ''}}))
+response = {{'summary': '직접 편집 완료', 'questions': [], 'no_change_reason': '', 'commit_message': ''}}
+if outcomes:
+    response['issue_outcomes'] = outcomes
+Path(sys.argv[sys.argv.index('--output-last-message') + 1]).write_text(json.dumps(response))
 """)
     stub.chmod(0o755)
     from dev_orchestra.config import Codex
@@ -490,6 +504,8 @@ Path(sys.argv[sys.argv.index('--output-last-message') + 1]).write_text(
     result, sha, commits = session.finish(response)
     assert session.git.call("show", sha + ":ignored.py") == "actual host edit"
     assert "ignored.py" in result.patch and len(commits) == 1
+    if outcomes:
+        assert result.model_dump()["issue_outcomes"] == outcomes
 
 
 def test_workspace_readonly_probe_fails_closed(setup, monkeypatch):

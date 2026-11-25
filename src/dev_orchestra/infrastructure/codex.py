@@ -5,15 +5,13 @@ import sys
 import uuid
 from pathlib import Path
 
-from dev_orchestra.agents.contracts import ResponseError, response_fields
+from dev_orchestra.agents.contracts import ResponseError, response_fields, workspace_response_model
 from dev_orchestra.domain.execution import writes_workspace
 from dev_orchestra.domain.models import (
     AgentRequest,
     AgentResult,
     PipelineError,
     ReviewResultV2,
-    WorkspaceResult,
-    WorkspaceTestResult,
 )
 from dev_orchestra.infrastructure.agent_usage import UsageCollector
 from dev_orchestra.infrastructure.files import write
@@ -194,7 +192,7 @@ class CodexClient:
         schema = directory / "schema.json"
         result = directory / "response.json"
         model = (
-            (WorkspaceTestResult if request.role == "tester" else WorkspaceResult)
+            workspace_response_model(request.role)
             if writes_workspace(request)
             else (
                 ReviewResultV2

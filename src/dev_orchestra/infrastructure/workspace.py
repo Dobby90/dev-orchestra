@@ -11,16 +11,17 @@ import stat
 from copy import deepcopy
 from pathlib import Path
 
+from dev_orchestra.agents.contracts import ResponseError, workspace_response_model
 from dev_orchestra.agents.policy import in_paths
 from dev_orchestra.application.test_changes import TestChangeService, checksum
 from dev_orchestra.config import Config
 from dev_orchestra.domain.execution import WORKSPACE_V2, execution_contract
 from dev_orchestra.domain.models import (
     AgentResult,
+    FixerResult,
     PipelineError,
     StopRequested,
     TestChange,
-    WorkspaceResult,
 )
 from dev_orchestra.infrastructure.commit_messages import describe_commit, format_branch_commit
 from dev_orchestra.infrastructure.containers import MANIFEST
@@ -227,10 +228,7 @@ class WorkspaceSession:
     def capture_response(self, response):
         from pydantic import ValidationError
 
-        from dev_orchestra.agents.contracts import ResponseError
-        from dev_orchestra.domain.models import WorkspaceTestResult
-
-        model = WorkspaceTestResult if self.data["role"] == "tester" else WorkspaceResult
+        model = workspace_response_model(self.data["role"])
         try:
             value = model.model_validate(response.model_dump(), strict=True).model_dump()
         except ValidationError as error:
@@ -244,9 +242,7 @@ class WorkspaceSession:
         self.save()
 
     def saved_response(self):
-        from dev_orchestra.domain.models import WorkspaceTestResult
-
-        model = WorkspaceTestResult if self.data["role"] == "tester" else WorkspaceResult
+        model = workspace_response_model(self.data["role"])
         return model.model_validate(self.data["response"], strict=True)
 
     def snapshot(self):
@@ -816,8 +812,6 @@ class WorkspaceSession:
         self.guard()
         value = self.read_test_payload()
         if response.test_evidence_id != value["evidence_id"]:
-            from dev_orchestra.agents.contracts import ResponseError
-
             raise ResponseError("tester must reference the actual host test evidence")
         self.validate_test_payload(value)
         return value
@@ -889,9 +883,8 @@ class WorkspaceSession:
 
     def finish(self, response):
         self.reload()
-        from dev_orchestra.domain.models import WorkspaceTestResult
-
-        model = WorkspaceTestResult if self.data["role"] == "tester" else WorkspaceResult
+        role = self.data["role"]
+        model = workspace_response_model(role)
         response = model.model_validate(response.model_dump(), strict=True)
         self.guard()
         if response.questions:
@@ -900,7 +893,7 @@ class WorkspaceSession:
                 self.data["current_sha"],
                 self.data["commits"],
             )
-        if self.data["role"] == "tester":
+        if role == "tester":
             self.load_test_result(response)
         files = self.changed_files()
         if files:
@@ -913,9 +906,7 @@ class WorkspaceSession:
                 _host=True,
             )
         patch = self.git.diff(self.data["input_sha"], self.data["current_sha"])
-        if not patch and self.data["role"] != "tester" and not response.no_change_reason.strip():
-            from dev_orchestra.agents.contracts import ResponseError
-
+        if not patch and role != "tester" and not response.no_change_reason.strip():
             raise ResponseError("workspace no change requires an explicit reason")
         if redact(patch) != patch:
             raise PipelineError("sensitive workspace diff denied")
@@ -931,12 +922,13 @@ class WorkspaceSession:
         summary = response.summary
         if not patch:
             summary += "\n무변경 사유: " + response.no_change_reason
-        extra = (
-            {"command_ids": response.command_ids, "coverage": response.coverage}
-            if self.data["role"] == "tester"
-            else {}
-        )
-        result = AgentResult(summary=summary, patch=patch, test_changes=changes, **extra)
+        fields = {"summary": summary, "patch": patch, "test_changes": changes}
+        if role == "fixer":
+            result = FixerResult(**fields, issue_outcomes=response.issue_outcomes)
+        else:
+            if role == "tester":
+                fields.update(command_ids=response.command_ids, coverage=response.coverage)
+            result = AgentResult(**fields)
         return result, self.data["current_sha"], self.data["commits"]
 
 

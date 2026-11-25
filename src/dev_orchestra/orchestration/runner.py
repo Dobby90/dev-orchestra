@@ -8,7 +8,7 @@ from contextlib import nullcontext
 from pathlib import Path
 from time import monotonic
 
-from dev_orchestra.agents.contracts import ResponseError, validate_role
+from dev_orchestra.agents.contracts import ResponseError, validate_fixer_outcomes, validate_role
 from dev_orchestra.application.automatic_tests import (
     AUTOMATIC_TEST_CONTRACTS,
     automatic,
@@ -502,6 +502,10 @@ class Runner:
                     "criterion_ids": [c["id"] for c in run.get("criteria", [])],
                     "command_ids": list(config.tests.commands),
                 }
+                if role == "fixer":
+                    request.context["response_contract"]["issue_ids"] = [
+                        issue["issue_id"] for issue in request.context.get("open_issues", [])
+                    ]
                 if workspace:
                     request.context["response_contract"]["edit_tool"] = "workspace.edit_file"
                     if role == "tester":
@@ -789,9 +793,7 @@ class Runner:
             data = session.data
             missing_development_tests = False
             try:
-                if data.get("response") is not None:
-                    response = session.saved_response()
-                else:
+                if data.get("response") is None:
                     if data.get("repair_pending"):
                         if data.get("repair_calls", 0) >= config.workflow.response_retries:
                             raise WorkspaceBlocked(
@@ -835,6 +837,11 @@ class Runner:
                         lambda: self.store.get(request.run_id)["control"],
                     )
                     session.capture_response(response)
+                response = session.saved_response()
+                if request.role == "fixer" and not response.questions:
+                    validate_fixer_outcomes(
+                        response.issue_outcomes, request.context["response_contract"]["issue_ids"]
+                    )
                 if (
                     request.role in {"developer", "fixer"}
                     and request.context["validation_policy"]["resolve_after_development"]

@@ -2,7 +2,7 @@
 
 WORKSPACE_CLIENT = r"""
 import hashlib, subprocess
-from dev_orchestra.domain.models import WorkspaceResult, WorkspaceTestResult, ReviewResultV2, ReviewAssessment
+from dev_orchestra.domain.models import WorkspaceFixResult, WorkspaceResult, WorkspaceTestResult, ReviewResultV2, ReviewAssessment
 if 'sandbox' in sys.argv:
     raise SystemExit(0)
 _workspace = None
@@ -46,7 +46,11 @@ def finish_workspace(req, result):
             value = tool('run_tests', **arguments)
         result = WorkspaceTestResult(summary='실제 테스트 확인', test_evidence_id=value['evidence_id'],
             command_ids=value['selection']['included'], coverage=[Coverage(criterion_id='AC1',command_ids=['unit'])])
-    elif role in {'developer','fixer'}:
+    elif role == 'fixer':
+        result = WorkspaceFixResult(summary='수정 확인', no_change_reason='현재 구현 확인',
+            issue_outcomes=[{'issue_id':issue_id,'status':'implemented','evidence':'테스트 대역에서 수정 결과 확인'}
+                for issue_id in req['context']['response_contract']['issue_ids']])
+    elif role == 'developer':
         result = WorkspaceResult(summary='구현 확인', no_change_reason='현재 구현 확인')
     elif role == 'reviewer':
         result = ReviewResultV2(summary='독립 검증', assessments=[
