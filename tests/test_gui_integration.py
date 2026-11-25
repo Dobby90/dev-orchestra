@@ -8,7 +8,8 @@ from test_workflow import service as service
 
 from dev_orchestra.application.commands import Commands
 from dev_orchestra.application.results import Results
-from dev_orchestra.domain.models import PipelineError, ReviewAssessment, ReviewResultV2
+from dev_orchestra.application.reviews import Reviews
+from dev_orchestra.domain.models import Issue, PipelineError, ReviewAssessment, ReviewResultV2
 from dev_orchestra.infrastructure.git import Git
 from dev_orchestra.infrastructure.migrations import upgrade
 from dev_orchestra.orchestration.runner import Runner
@@ -172,6 +173,90 @@ def test_request_changes_keeps_history_and_retests_noop_fix(completed):
     assert len([s for s in steps if s["role"] == "planner"]) == 1
     assert (repo / "main.py").read_bytes() == before
     assert Results(svc.store).changes(rid, sha, 0)["revision"] == 0
+
+
+def test_selected_review_issues_reach_next_fixer_and_keep_independent_review(service):
+    from dev_orchestra.agents.prompts import continuation_prompt
+
+    svc, rid, _ = service
+    descriptions = ["경계값 검증 누락", "입력 0 처리 누락", "도움말 오타"]
+
+    class Agent(Reviewer):
+        def run(self, request, directory, stop):
+            value = super().run(request, directory, stop)
+            if request.role == "fixer":
+                assert request.context["requested_issue_ids"] == [duplicate]
+                assert request.context["response_contract"]["issue_ids"] == [representative]
+                assert request.context["open_issues"][0]["issue_id"] == representative
+                assert duplicate in continuation_prompt(request)
+            if request.role == "reviewer" and request.iteration == 0:
+                value.issues = [
+                    Issue(
+                        id=f"finding-{index}",
+                        severity=severity,
+                        file="main.py",
+                        line=1,
+                        description=description,
+                        evidence=description,
+                        suggestion="수정",
+                    )
+                    for index, (description, severity) in enumerate(
+                        zip(descriptions, ["medium", "medium", "low"], strict=True)
+                    )
+                ]
+            elif request.role == "reviewer":
+                assert {i["issue_id"] for i in request.context["open_issues"]} == {
+                    representative,
+                    duplicate,
+                    unselected,
+                }
+                value.assessments = [
+                    i for i in value.assessments if i.issue_id in {representative, duplicate}
+                ]
+            return value
+
+    agent = Agent()
+    runner = Runner(svc.store, agent, FakeTests())
+    runner.execute(rid)
+    run = svc.store.get(rid)
+    assert run["state"] == "waiting_approval", run.get("error")
+    assert "fixer" not in agent.calls
+    reviews = Reviews(svc.store)
+    representative, duplicate, unselected = [i["issue_id"] for i in reviews.open(rid)]
+    assert {
+        i["issue_id"] for i in Results(svc.store).reviews(rid)["issues"] if i["can_request_fix"]
+    } == {representative, duplicate, unselected}
+    commands = Commands(svc)
+    commands.execute(
+        rid,
+        "link-review-duplicate",
+        run["version"],
+        {
+            "duplicate_id": duplicate,
+            "representative_id": representative,
+            "reason": "같은 경계값 결함",
+        },
+    )
+    run = svc.store.get(rid)
+    body = {"expected_sha": run["final_sha"], "instructions": "", "issue_ids": [duplicate]}
+    for invalid in (["issue-unknown"], [duplicate, duplicate], []):
+        with pytest.raises(PipelineError):
+            commands.execute(rid, "request-changes", run["version"], body | {"issue_ids": invalid})
+    op = commands.execute(rid, "request-changes", run["version"], body, "selected-issues")
+    assert (
+        commands.execute(rid, "request-changes", run["version"], body, "selected-issues")["id"]
+        == op["id"]
+    )
+    queued = svc.store.get(rid)
+    later = reviews.fixer_context(queued | {"iteration": queued["iteration"] + 1}, run["final_sha"])
+    assert {i["issue_id"] for i in later["open_issues"]} == {representative, unselected}
+
+    runner.execute(rid)
+    updated = svc.store.get(rid)
+    assert updated["state"] == "waiting_approval", updated.get("error")
+    assert agent.calls[-3:] == ["fixer", "tester", "reviewer"]
+    assert [i["issue_id"] for i in reviews.open(rid)] == [unselected]
+    svc.approve(rid)
 
 
 def test_snapshot_and_results_survive_cleanup_and_reject_tampering(completed):

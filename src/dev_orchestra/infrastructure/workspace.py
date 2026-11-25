@@ -87,6 +87,16 @@ def workspace_policy_hash(run):
     return checksum(policy)
 
 
+def workspace_task_hash(run):
+    task = {
+        key: run.get(key)
+        for key in ["spec", "plan", "criteria", "answers", "directives", "clarifications"]
+    } | design_image_binding(run)
+    if run.get("review_fix_request"):
+        task["review_fix_request"] = run["review_fix_request"]
+    return checksum(task)
+
+
 def dependency_path(name):
     return bool(set(Path(name).parts) & DEPENDENCIES)
 
@@ -132,13 +142,7 @@ class WorkspaceSession:
             "step_id": step_id,
             "policy_hash": workspace_policy_hash(run),
             "policy_hash_version": 2,
-            "task_hash": checksum(
-                {
-                    k: run.get(k)
-                    for k in ["spec", "plan", "criteria", "answers", "directives", "clarifications"]
-                }
-                | design_image_binding(run)
-            ),
+            "task_hash": workspace_task_hash(run),
             "outputs": outputs,
             "files": {},
             "initial": {},
@@ -309,14 +313,7 @@ class WorkspaceSession:
                 else checksum(run["config"])
             )
             != self.data["policy_hash"]
-            or checksum(
-                {
-                    k: run.get(k)
-                    for k in ["spec", "plan", "criteria", "answers", "directives", "clarifications"]
-                }
-                | design_image_binding(run)
-            )
-            != self.data["task_hash"]
+            or workspace_task_hash(run) != self.data["task_hash"]
             or (
                 self.data["role"] == "tester"
                 and not run["config"]["tests"]["commands"]

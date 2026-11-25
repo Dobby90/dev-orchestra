@@ -1127,8 +1127,13 @@ export interface components {
         ChangeInput: {
             /** Expected Sha */
             expected_sha: string;
-            /** Instructions */
+            /**
+             * Instructions
+             * @default
+             */
             instructions: string;
+            /** Issue Ids */
+            issue_ids?: string[];
             /** New Max Fix Attempts */
             new_max_fix_attempts?: number | null;
         };
@@ -1893,6 +1898,8 @@ export interface components {
             status_note?: string | null;
             /** Verification Pending */
             verification_pending?: boolean | null;
+            /** Can Request Fix */
+            can_request_fix?: boolean | null;
             /** Assessed Sha */
             assessed_sha?: string | null;
             /** Assessed Step Id */

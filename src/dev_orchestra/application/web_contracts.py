@@ -477,7 +477,8 @@ class ResumeView(BaseModel):
 
 class ChangeInput(Input):
     expected_sha: str = Field(pattern=r"^(?:[0-9a-f]{40}|[0-9a-f]{64})$")
-    instructions: str = Field(min_length=1, max_length=65536)
+    instructions: str = Field(default="", max_length=65536)
+    issue_ids: list[str] = Field(default_factory=list)
     new_max_fix_attempts: int | None = Field(default=None, gt=0, le=20, strict=True)
 
 
@@ -596,6 +597,7 @@ class ReviewIssueView(BaseModel):
     resolution_evidence: str | None
     status_note: str | None = None
     verification_pending: bool | None = None
+    can_request_fix: bool | None = None
     assessed_sha: str | None = None
     assessed_step_id: int | None = None
 

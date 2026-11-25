@@ -120,6 +120,8 @@ FIXER_REVIEW_GUIDANCE = (
     "behavior, and identify any remaining failing condition or blocker. These are Fixer reports; "
     "the host tests and independent Reviewer still decide whether an issue is resolved. "
     "Return an empty issue_outcomes list when there are no requested IDs. "
+    "If requested_issue_ids is present, address only those user-selected review issues, represented "
+    "by the top-level IDs in open_issues, and follow the current change instructions. "
 )
 
 REVIEW_ISSUE_DISTINCTIONS = (
@@ -265,6 +267,9 @@ def continuation_prompt(request):
     if request.role == "fixer":
         task["open_issues"] = request.context.get("open_issues", [])
         task["test_result"] = request.context.get("test_result")
+        if request.context.get("requested_issue_ids"):
+            task["requested_issue_ids"] = request.context["requested_issue_ids"]
+            task["change_instruction"] = request.context["directives"][-1]
     return (
         "Continue the same host-owned role in its designated worktree. Your shell remains read-only. "
         "Recheck candidate SHA and actual files with workspace_state. Preserve already implemented "

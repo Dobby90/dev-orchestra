@@ -114,6 +114,83 @@ function setupDetail() {
   vi.spyOn(api, "steps").mockResolvedValue({ items: [] });
 }
 
+it("승인 화면에서 선택한 리뷰 이슈 ID로 수정 요청을 보낸다", async () => {
+  setupDetail();
+  const baseIssue: Schema["ReviewIssueView"] = {
+    id: "finding",
+    issue_id: "issue-medium",
+    severity: "medium",
+    file: "main.py",
+    line: 3,
+    description: "경계값 누락",
+    evidence: "근거",
+    suggestion: "검증",
+    status: "unresolved",
+    source_sha: detail.current_sha!,
+    resolution_evidence: null,
+    can_request_fix: true,
+  };
+  vi.spyOn(api, "reviews").mockResolvedValue({
+    status: "available",
+    step_id: 1,
+    sha: detail.current_sha ?? null,
+    revision: detail.revision,
+    summary: "리뷰",
+    issues: [
+      baseIssue,
+      {
+        ...baseIssue,
+        issue_id: "issue-low",
+        severity: "low",
+        description: "표시 오류",
+      },
+      {
+        ...baseIssue,
+        issue_id: "issue-resolved",
+        description: "이미 해결",
+        status: "resolved",
+        can_request_fix: false,
+      },
+    ],
+    history: [],
+    legacy_incomplete: false,
+    blocking_severities: ["critical", "high"],
+  });
+  const submit = vi.spyOn(api, "control").mockResolvedValue(operation);
+  wrap(
+    <Routes>
+      <Route path="/runs/:id" element={<RunDetailPage />} />
+    </Routes>,
+    "/runs/r1",
+  );
+  await userEvent.click(
+    await screen.findByRole("button", { name: /^수정 요청$/ }),
+  );
+  const medium = await screen.findByRole("checkbox", { name: /경계값 누락/ });
+  expect(screen.getByRole("checkbox", { name: /표시 오류/ })).toBeVisible();
+  expect(
+    screen.queryByRole("checkbox", { name: /이미 해결/ }),
+  ).not.toBeInTheDocument();
+  const confirm = screen.getByRole("button", { name: "수정 요청 확인" });
+  expect(confirm).toBeDisabled();
+  await userEvent.click(medium);
+  await userEvent.click(confirm);
+  await waitFor(() =>
+    expect(submit).toHaveBeenCalledWith(
+      "r1",
+      detail.version,
+      "request-changes",
+      {
+        expected_sha: detail.current_sha,
+        instructions: "",
+        issue_ids: ["issue-medium"],
+        new_max_fix_attempts: null,
+      },
+      expect.any(String),
+    ),
+  );
+});
+
 it("재진입 시 정리 실패를 표시하고 Push·정리 재시도·상태 조정을 같은 줄에 둔다", async () => {
   setupDetail();
   vi.mocked(api.run).mockResolvedValue({

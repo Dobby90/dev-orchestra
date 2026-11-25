@@ -106,7 +106,8 @@ function RunDetailBody({ rid }: { rid: string }) {
     } | null>(null),
     [reason, setReason] = useState(""),
     [sha, setSha] = useState(""),
-    [budget, setBudget] = useState("");
+    [budget, setBudget] = useState(""),
+    [issueIds, setIssueIds] = useState<string[]>([]);
   const stream = useRunEvents(rid);
   const run = useQuery({
     queryKey: ["run", rid],
@@ -134,6 +135,19 @@ function RunDetailBody({ rid }: { rid: string }) {
     queryFn: () => api.spec(rid),
     enabled: tab === "spec" && !!run.data,
   });
+  const changeReview = useQuery({
+    queryKey: ["reviews", rid, "request-changes", action?.run.version],
+    queryFn: () => api.reviews(rid),
+    enabled: action?.kind === "request-changes",
+    retry: false,
+  });
+  const selectableIssues =
+    changeReview.data?.status === "available" &&
+    changeReview.data.sha === action?.run.current_sha &&
+    changeReview.data.revision === action?.run.revision
+      ? changeReview.data.issues.filter((issue) => issue.can_request_fix)
+      : [];
+  const hasChangeRequest = Boolean(reason.trim() || issueIds.length);
   const [lastOp, setLastOp] = useState<string | null>(null);
   const operation = useQuery({
     queryKey: ["operation", lastOp],
@@ -162,6 +176,7 @@ function RunDetailBody({ rid }: { rid: string }) {
             ? {
                 expected_sha: target.current_sha,
                 instructions: reason,
+                issue_ids: issueIds,
                 new_max_fix_attempts: budget ? Number(budget) : null,
               }
             : kind === "cleanup"
@@ -202,6 +217,7 @@ function RunDetailBody({ rid }: { rid: string }) {
         throw new ApiError(412, "VERSION_CONFLICT");
       control.reset();
       setReason("");
+      setIssueIds([]);
       setBudget("");
       setSha("");
       setAction({ kind, run: fresh, key: crypto.randomUUID() });
@@ -219,6 +235,7 @@ function RunDetailBody({ rid }: { rid: string }) {
     if (
       action &&
       !control.isPending &&
+      (action.kind !== "request-changes" || hasChangeRequest) &&
       (uncertain ||
         (action.run.version === run.data?.version &&
           action.run.current_sha === run.data?.current_sha)) &&
@@ -784,10 +801,46 @@ function RunDetailBody({ rid }: { rid: string }) {
             {action?.kind === "request-changes" ? (
               <>
                 <p className="mono path">후보 {action.run.current_sha}</p>
+                {changeReview.isPending && <Loading />}
+                {changeReview.error && (
+                  <ErrorNotice
+                    error={changeReview.error}
+                    retry={() => changeReview.refetch()}
+                  />
+                )}
+                {selectableIssues.length > 0 && (
+                  <fieldset>
+                    <legend>수정할 리뷰 이슈</legend>
+                    {selectableIssues.map((issue) => (
+                      <label className="check-row" key={issue.issue_id}>
+                        <input
+                          type="checkbox"
+                          checked={issueIds.includes(issue.issue_id)}
+                          onChange={(event) => {
+                            const checked = event.target.checked;
+                            setIssueIds((selected) =>
+                              checked
+                                ? [...selected, issue.issue_id]
+                                : selected.filter(
+                                    (id) => id !== issue.issue_id,
+                                  ),
+                            );
+                          }}
+                        />
+                        <span>
+                          {issue.severity.toUpperCase()} · {issue.description}{" "}
+                          <span className="mono help">
+                            {issue.file}:{issue.line}
+                          </span>
+                        </span>
+                      </label>
+                    ))}
+                  </fieldset>
+                )}
                 <label>
                   수정 지시사항
                   <textarea
-                    required
+                    required={issueIds.length === 0}
                     maxLength={65536}
                     value={reason}
                     onChange={(e) => setReason(e.target.value)}
@@ -886,6 +939,7 @@ function RunDetailBody({ rid }: { rid: string }) {
             disabled={
               control.isPending ||
               (stale && !uncertain) ||
+              (action?.kind === "request-changes" && !hasChangeRequest) ||
               (action?.kind === "approve" && sha !== action.run.current_sha)
             }
           >

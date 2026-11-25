@@ -174,6 +174,18 @@ class Reviews:
     def open(self, run_id):
         return [i for i in self.issues(run_id) if i["status"] == "unresolved"]
 
+    def selectable_issue_ids(self, run):
+        if run["state"] != "waiting_approval" or run.get("review_contract") != 2:
+            return set()
+        blocking = run["config"]["review"]["blocking_severities"]
+        return {
+            issue["issue_id"]
+            for group in unresolved_groups(run, self.open(run["id"])).values()
+            if (severity := group_severity(group, blocking)) in {"medium", "low"}
+            and severity not in blocking
+            for issue in group
+        }
+
     def link_duplicate(self, db, run, duplicate_id, representative_id, reason):
         if not reason.strip():
             raise PipelineError("review duplicate link requires a reason")
@@ -216,6 +228,22 @@ class Reviews:
         from dev_orchestra.application.results import Results
 
         issues = self.open(run["id"])
+        request = run.get("review_fix_request") or {}
+        selected = (
+            request["issue_ids"]
+            if request.get("revision") == run.get("revision", 0)
+            and request.get("iteration") == run.get("iteration", 0)
+            else []
+        )
+        if selected:
+            links = run.get("review_issue_duplicates", {})
+            targets = {links.get(issue_id, issue_id) for issue_id in selected}
+            groups = unresolved_groups(run, issues)
+            if targets - groups.keys():
+                raise PipelineError("requested review issues changed before Fixer execution")
+            issues = [
+                issue for target, group in groups.items() if target in targets for issue in group
+            ]
         steps = self.store.steps(run["id"])
         results = Results(self.store)
         revision = run.get("revision", 0)
@@ -275,7 +303,10 @@ class Reviews:
             if not item["verification_pending"] and representative in previous:
                 item["previous_fix"] = previous[representative]
             result.append(item)
-        return {"open_issues": result, "test_result": tests}
+        context = {"open_issues": result, "test_result": tests}
+        if selected:
+            context["requested_issue_ids"] = selected
+        return context
 
     @staticmethod
     def _fixer_test_result(results, run, step):
