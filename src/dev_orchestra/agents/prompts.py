@@ -54,6 +54,12 @@ BRIEF_PLANNER = (
     "conflicts, cite command IDs and ask for a corrected policy in a new run. Ask only blocking questions. "
 )
 
+PLANNER_TEST_EXECUTION = (
+    "The Tester requests registered commands by ID and the host runs them in the test sandbox. "
+    "A registered executable may live outside the worktree. Leave it to the host and continue "
+    "planning with its command ID unless you identify a concrete validation conflict. "
+)
+
 REVIEWER = (
     "Independently review the cumulative diff and affected callers, contracts and tests against the "
     "PRD and criteria. Use the changed file list to start. Read the actual diff with "
@@ -310,6 +316,8 @@ def prompt(request: AgentRequest, *, reviewer_evidence=None):
             if request.context.get("brief_plan")
             else PLANNER + validation_guidance(request)
         )
+        if request.context.get("test_commands"):
+            instructions += PLANNER_TEST_EXECUTION
     else:
         instructions = REVIEWER
         if request.context.get("review_contract") == 2:

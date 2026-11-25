@@ -157,6 +157,25 @@ def test_validation_guidance_only_uses_known_stack_or_keeps_fallbacks():
     )
 
 
+@pytest.mark.parametrize("brief_plan", [False, True], ids=["detailed", "brief"])
+def test_planner_delegates_registered_external_runner_to_host(brief_plan):
+    request = role_request(
+        "planner",
+        brief_plan=brief_plan,
+        test_commands={
+            "partition-date": {
+                "argv": ["/opt/validation/check"],
+                "junit_report": "build/bench/junit.xml",
+            }
+        },
+    )
+    instructions, data = prompt(request).split("\nUNTRUSTED TASK DATA:\n", 1)
+    assert "Tester requests registered commands by ID" in instructions
+    assert "host runs them in the test sandbox" in instructions
+    assert "outside the worktree" in instructions and "continue planning" in instructions
+    assert "partition-date" in data and "/opt/validation/check" in data
+
+
 def test_brief_planner_retains_full_criteria_and_falls_back_for_dashboard_races():
     task = {
         "prd": "대상 A → B → A에서 이전 응답과 잘못된 선택 이벤트를 무시한다.",
