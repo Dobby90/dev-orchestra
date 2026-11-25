@@ -442,7 +442,11 @@ class Runner:
                         directory / "preflight" / "tools", lambda: self.store.get(run_id)["control"]
                     )
                 if role == "planner":
+                    from dev_orchestra.application.plan_approval import previous_plan
+
                     context["planning_draft"] = run.get("planning_draft")
+                    if reference := previous_plan(self.store, run):
+                        context["previous_plan"] = reference
                 required_assessment_ids = None
                 if role == "reviewer":
                     context["diff"] = git.diff(run["base_sha"], sha)
@@ -801,14 +805,16 @@ class Runner:
                             )
                         data["repair_calls"] = data.get("repair_calls", 0) + 1
                         session.save()
+                    test_evidence = None
                     if request.role == "tester":
-                        request.context["test_selection"] = session.test_policy()
-                        policy = request.context["test_selection"]
+                        policy, test_evidence = session.test_policy_and_evidence()
+                        request.context["test_selection"] = policy
                         if (
                             policy.get("selection_hash")
                             or policy.get("selector_version") not in AUTOMATIC_TEST_CONTRACTS
                         ):
                             request.context["response_contract"]["command_ids"] = policy["included"]
+                            request.context["response_contract"].pop("available_command_ids", None)
                         else:
                             request.context["response_contract"].pop("command_ids", None)
                             request.context["response_contract"]["available_command_ids"] = list(
@@ -817,6 +823,7 @@ class Runner:
                     request.context["workspace_resume"] = {
                         "continuing": data.get("continuing", False),
                         "metadata_only": data.get("metadata_only", False),
+                        "has_edits": session.has_edits(),
                         "candidate_sha": session.git.sha(),
                         "completed_units": [c["summary"][:1000] for c in data["commits"][-5:]],
                         "preserved_files": {
@@ -828,7 +835,7 @@ class Runner:
                             "response_error",
                             "Continue only the unfinished work on the preserved files.",
                         ),
-                        "test_evidence": data.get("test_evidence"),
+                        "test_evidence": test_evidence,
                     }
                     response = self.agent.run_workspace(
                         request,
@@ -871,7 +878,8 @@ class Runner:
                 session.data.update(
                     response=None,
                     metadata_only=(
-                        not missing_development_tests
+                        session.data.get("metadata_only", False)
+                        or not missing_development_tests
                         and (
                             request.role != "tester"
                             or bool(session.data.get("test_evidence"))
@@ -951,6 +959,7 @@ class Runner:
                 "plan": payload["plan"],
                 "criteria": payload["criteria"],
                 "planning_draft": None,
+                "previous_plan_binding": None,
                 "questions": [],
             }
             if run.get("auto_approve_plan") is True:

@@ -111,6 +111,7 @@ class CodexClient:
             descriptor,
             {"session": str(session.path), "database": str(session.store.path), "kind": "review"},
         )
+        request.context["test_evidence_id"] = session.data["evidence_id"]
         return self.run(request, directory, stop, _workspace=descriptor)
 
     def check_workspace(self, request, directory, session, stop):
@@ -222,41 +223,22 @@ class CodexClient:
             "--json",
             "--output-schema",
             str(schema),
+            # Do not inherit project/user servers in any role.
+            "-c",
+            "mcp_servers={}",
         ]
         if _workspace is not None:
+            from dev_orchestra.infrastructure.workspace_mcp import workspace_tools
+
             argv += ["--ignore-rules"]
-            # Replace the MCP map so project/user servers cannot inherit write authority.
-            argv += ["-c", "mcp_servers={}"]
             for key, value in {
                 "command": sys.executable,
                 "args": ["-I", "-m", "dev_orchestra.infrastructure.workspace_mcp", str(_workspace)],
                 "required": True,
                 "default_tools_approval_mode": "approve",
-                "enabled_tools": (
-                    [
-                        "edit_file",
-                        "test_policy",
-                        "run_tests",
-                        "read_test_evidence",
-                        "workspace_state",
-                    ]
-                    if request.role == "tester"
-                    else ["read_test_evidence"]
-                    if request.role == "reviewer"
-                    else [
-                        "edit_file",
-                        "checkpoint_commit",
-                        "prepare_environment",
-                        "workspace_state",
-                    ]
-                ),
+                "enabled_tools": list(workspace_tools(request.role, _metadata_only)),
             }.items():
                 argv += ["-c", "mcp_servers.workspace." + key + "=" + json.dumps(value)]
-            if _metadata_only:
-                tools = ["workspace_state"] + (
-                    ["read_test_evidence", "test_policy"] if request.role == "tester" else []
-                )
-                argv += ["-c", "mcp_servers.workspace.enabled_tools=" + json.dumps(tools)]
         if _persistent:
             argv.remove("--ephemeral")
         if _session_id:
@@ -276,7 +258,9 @@ class CodexClient:
             argv.append(_session_id)
         argv.append("-")
         task_input = (
-            continuation_prompt(request) if _session_id or _metadata_only else prompt(request)
+            continuation_prompt(request, metadata_only=_metadata_only)
+            if _session_id or _metadata_only
+            else prompt(request, reviewer_evidence=_workspace is not None)
         )
         # Size-only observations; never copy prompts, source or tool content into metrics.
         write(

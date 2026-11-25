@@ -449,10 +449,11 @@ def model_selection(run, candidate, paths, plan=None, input_error=None):
             "available_commands": {
                 key: value.model_dump() for key, value in tests.commands.items()
             },
+            "mandatory_command_ids": sorted(command_dependencies(checks.copy(), policy)),
+            "dependencies": policy.dependencies if policy else {},
             "instructions": "Analyze cumulative diff, callers, dependencies and tests. Supply test_plan with command_id, files (relative to command working_directory), reason. No static mapping required. Use exact test files; files=[] expands one command only with a concrete reason. Cover every criterion and changed behavior. Mandatory checks/regressions remain host-owned.",
         }
         if version in GRADLE_TEST_CONTRACTS:
-            pending["mandatory_command_ids"] = sorted(command_dependencies(checks, policy))
             pending["instructions"] += (
                 " For Gradle, supply exact Java, Kotlin or Groovy class files under src/test. "
                 "The host scopes supported test tasks to the selected classes and includes Gradle "

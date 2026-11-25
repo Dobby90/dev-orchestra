@@ -179,7 +179,7 @@ class RunService:
 
             session, _ = inspect_workspace(self.store, run)
             if answers and answers.strip():
-                if session.data["commits"] or session.data["files"] != session.data["initial"]:
+                if session.has_edits():
                     raise PipelineError(
                         "unfinished workspace requirements are bound to its checkpoint; preserve files and create a new Run for changed requirements"
                     )
@@ -231,6 +231,16 @@ class RunService:
                 plan=None,
                 criteria=[],
                 plan_approval=None,
+            )
+        if (
+            changes.get("next_role") == "planner"
+            and saved_plan is not None
+            and saved_plan.get("revision", 0) == run.get("revision", 0)
+        ):
+            from dev_orchestra.application.plan_approval import binding
+
+            changes["previous_plan_binding"] = binding(
+                self.store, run | {key: saved_plan[key] for key in ("plan", "criteria")}
             )
         if max_fixes is not None:
             if max_fixes <= run["config"]["workflow"]["max_fix_attempts"]:

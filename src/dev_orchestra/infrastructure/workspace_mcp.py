@@ -97,37 +97,36 @@ TEST_TOOLS = {
 }
 
 
+def workspace_tools(role, metadata_only=False):
+    if role == "reviewer":
+        return {"read_test_evidence": READ_EVIDENCE}
+    if role == "planner":
+        return {}
+    tester = role == "tester"
+    catalog = {
+        **(TEST_TOOLS if tester else TOOLS),
+        "workspace_state": (
+            (
+                TesterWorkspaceState,
+                "Pass paths to get candidate SHA and requested source hashes (null for missing files). Omit paths for full state.",
+            )
+            if tester
+            else (Empty, "Read current source hashes and confirmed commits.")
+        ),
+    }
+    if metadata_only:
+        return {
+            key: value
+            for key, value in catalog.items()
+            if key in {"workspace_state", "test_policy", "read_test_evidence"}
+        }
+    return catalog
+
+
 def _dispatch(session, request):
     if session.data["role"] != "reviewer":
         session.reload()
-    catalog = (
-        {"read_test_evidence": READ_EVIDENCE}
-        if session.data["role"] == "reviewer"
-        else TEST_TOOLS
-        if session.data["role"] == "tester"
-        else TOOLS
-    )
-    if session.data["role"] != "reviewer":
-        catalog = {
-            **catalog,
-            "workspace_state": (
-                (
-                    TesterWorkspaceState,
-                    "Pass paths to get only the candidate SHA and the requested source hashes (null for missing files). Omit paths for the full workspace state.",
-                )
-                if session.data["role"] == "tester"
-                else (
-                    Empty,
-                    "Read current source hashes, confirmed commits and preserved test evidence; never writes files.",
-                )
-            ),
-        }
-        if session.data.get("metadata_only"):
-            catalog = {
-                key: value
-                for key, value in catalog.items()
-                if key in {"workspace_state", "test_policy", "read_test_evidence"}
-            }
+    catalog = workspace_tools(session.data["role"], session.data.get("metadata_only", False))
     method = request.get("method")
     if method == "initialize":
         return {

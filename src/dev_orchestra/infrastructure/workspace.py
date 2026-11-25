@@ -434,6 +434,8 @@ class WorkspaceSession:
             "hash": digest(content.encode()),
             "mode": stat.S_IMODE(path.stat().st_mode),
         }
+        if self.data["files"][file] != current:
+            self.data["edited"] = True
         self.save()
         return {"file": file, "hash": self.data["files"][file]["hash"]}
 
@@ -616,7 +618,17 @@ class WorkspaceSession:
         # Duplicate older requests must never roll back the last acknowledged HEAD.
         self.store.update(self.run_id, current_sha=self.data["current_sha"])
 
+    def has_edits(self):
+        return bool(
+            self.data.get("edited")
+            or self.data["commits"]
+            or self.data["files"] != self.data["initial"]
+        )
+
     def test_policy(self):
+        return self.test_policy_and_evidence()[0]
+
+    def test_policy_and_evidence(self):
         from dev_orchestra.application.test_selection import select_tests
 
         self.reload()
@@ -627,8 +639,8 @@ class WorkspaceSession:
             value = self.read_test_payload()
             if value["sha"] == self.git.sha():
                 self.validate_test_payload(value)
-                return value["selection"]
-        return select_tests(self.store.get(self.run_id), self.root, self.git.sha())
+                return value["selection"], self.data["test_evidence"]
+        return select_tests(self.store.get(self.run_id), self.root, self.git.sha()), None
 
     def run_tests(self, command_ids, test_plan=None, commit_message=""):
         from dev_orchestra.application.automatic_tests import (
@@ -886,6 +898,21 @@ class WorkspaceSession:
         response = model.model_validate(response.model_dump(), strict=True)
         self.guard()
         if response.questions:
+            if self.data.get("metadata_only"):
+                raise ResponseError(
+                    "metadata repair requires a final response with empty questions"
+                )
+            if self.has_edits():
+                from dev_orchestra.application.workspace_recovery import WorkspaceBlocked
+
+                message = (
+                    "blocking questions must precede edits; workspace changes preserved. "
+                    "Resume without answers to continue the same requirements. "
+                    "Create a new Run for changed requirements."
+                )
+                self.data.update(response=None, response_error=message, continuing=True)
+                self.save()
+                raise WorkspaceBlocked(message)
             return (
                 AgentResult(summary=response.summary, questions=response.questions),
                 self.data["current_sha"],

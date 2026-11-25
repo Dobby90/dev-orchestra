@@ -38,6 +38,7 @@ def call(method,params=None,denied=False):
     return response['result']
 call('initialize')
 tools={{tool['name'] for tool in call('tools/list')['tools']}}
+assert set(json.loads(config['mcp_servers.workspace.enabled_tools']))==tools
 if {role!r} == 'tester':
     assert tools == {{'edit_file','run_tests','test_policy','read_test_evidence','workspace_state'}}
     state=call('tools/call',{{'name':'workspace_state','arguments':{{'paths':['tests/test_main.py']}}}})
