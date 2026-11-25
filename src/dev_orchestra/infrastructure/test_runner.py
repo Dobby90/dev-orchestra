@@ -175,6 +175,163 @@ def junit_bundle(reports):
     return ET.tostring(tree, encoding="unicode")
 
 
+def validation_outputs(worktree, paths):
+    from dev_orchestra.infrastructure.git import Git
+
+    outputs = [contained(worktree, path) for path in paths]
+    if any(p.is_file() for p in outputs):
+        raise PipelineError("output path must be a directory")
+    git = Git(worktree)
+    tracked = [name for name in git.call("ls-files", "-z").split("\0") if name]
+    if any((worktree / name).is_relative_to(p) for name in tracked for p in outputs):
+        raise PipelineError("output path contains tracked source files")
+    for path in outputs:
+        path.mkdir(parents=True, exist_ok=True)
+    return outputs, git
+
+
+def result_record(command_id, command):
+    return {
+        "command_id": command_id,
+        "kind": command.kind,
+        "working_directory": command.working_directory,
+        "argv": command.argv,
+        "exit_code": None,
+        "status": "unavailable",
+        "total": None,
+        "failed": None,
+        "skipped": None,
+        "failures": [],
+        "failure_details": [],
+        "passed": False,
+        "junit_path": None,
+        "junit_hash": None,
+        "error": None,
+    }
+
+
+def scratch_environment(scratch):
+    return environment() | {
+        "HOME": str(scratch),
+        "TMPDIR": str(scratch),
+        "TMP": str(scratch),
+        "TEMP": str(scratch),
+        # Chromium on macOS ignores TMPDIR for some temporary files.
+        "MAC_CHROMIUM_TMPDIR": str(scratch),
+        "JAVA_TOOL_OPTIONS": f'-Duser.home="{scratch}" -Djava.io.tmpdir="{scratch}"',
+    }
+
+
+def loopback_slot(command, directory, stop):
+    from dev_orchestra.infrastructure.coordination import host_root, slot
+
+    if command.network == "loopback":
+        return slot(host_root() / "loopback", execution_directory() or directory, stop, limit=1)
+    return nullcontext()
+
+
+def run_gradle_batch(worktree, batch, directory, paths, bindings, gradle_caches, trace, stop):
+    from dev_orchestra.infrastructure.gradle_assemble import (
+        batch_adapter,
+        batch_outcomes,
+        compatible_caches,
+    )
+    from dev_orchestra.infrastructure.gradle_worktree_caches import gradle_cache_roots
+    from dev_orchestra.infrastructure.java import GRADLE_DIRECTORY_TASK
+    from dev_orchestra.infrastructure.runtime_adapters import runtime_command
+
+    first = batch[0]
+    command = first.command
+    outputs, _ = validation_outputs(worktree, paths)
+    if any(
+        not any(cache.is_relative_to(p) for p in outputs) for item in batch for cache in item.caches
+    ):
+        return None
+    with (
+        loopback_slot(command, directory, stop),
+        execution_scope(execution_directory() or directory),
+        tempfile.TemporaryDirectory(prefix="devorchestra-test-") as temp,
+    ):
+        if not all(compatible_caches(first, item) for item in batch[1:]):
+            return None
+        scratch = Path(temp).resolve()
+        env = scratch_environment(scratch) | command.env | first.environment
+        env["GRADLE_USER_HOME"] = str(first.caches[0])
+        runtime = command.model_copy(
+            update={
+                "argv": [
+                    arg
+                    for arg in command.argv
+                    if arg
+                    not in {
+                        GRADLE_DIRECTORY_TASK + "assemble",
+                        "--console=plain",
+                        "--no-configuration-cache",
+                    }
+                ]
+            }
+        )
+        try:
+            if bindings:
+                env.update(bindings.environment_for(first.id, stop))
+            argv, adapters = runtime_command(worktree, runtime, directory, env)
+            path, sha, marker = batch_adapter(batch, directory)
+        except StopRequested:
+            raise
+        except (PipelineError, OSError):
+            return None  # No process has started; let each command report its own setup result.
+        argv += [
+            "--continue",
+            "--console=plain",
+            "--no-configuration-cache",
+            "--init-script",
+            str(path),
+        ]
+        adapters.append({"adapter": "gradle-assemble-batch", "sha256": sha})
+        sandbox = sandbox_command(worktree, outputs, scratch, argv, command.network)
+        roots = gradle_cache_roots(worktree, [command], paths) if gradle_caches else set()
+        log = directory / trace["log"]
+        try:
+            with gradle_caches.record(roots, stop) if roots else nullcontext():
+                rc, output = execute(
+                    sandbox, first.cwd, command.timeout_seconds, log, stop=stop, env=env
+                )
+        except PipelineError as error:
+            if type(error) is PipelineError and str(error) in {
+                "process timeout",
+                "process output exceeded 8 MiB safety limit",
+            }:
+                return None  # execute confirmed cleanup; retry with per-command limits.
+            raise
+    outcomes = batch_outcomes(batch, marker, output, rc)
+    if outcomes is None:
+        return None
+    trace["exit_code"] = rc
+    results = []
+    for item in batch:
+        task, completed, failed = outcomes[item.id]
+        result = result_record(item.id, item.command)
+        result.update(
+            passed=not failed,
+            status="failed" if failed else "passed",
+            error=(
+                f"Gradle failed tasks: {', '.join(failed)} (see {log.name})" if failed else None
+            ),
+            runtime_argv=argv,
+            runtime_adapters=adapters,
+            runtime_batch={
+                "log": log.name,
+                "task": task,
+                "task_completed": completed,
+                "failed_tasks": failed,
+                "exit_code": rc,
+            },
+            duration_seconds=None,
+        )
+        results.append(result)
+    return results
+
+
 class TestRunner:
     __test__ = False
 
@@ -221,6 +378,7 @@ class TestRunner:
     def run(self, worktree, config, directory, stop=lambda: None):
         if not config.commands:
             raise PipelineError("configure at least one allowlisted test command")
+        from dev_orchestra.infrastructure.gradle_assemble import assemble_batches
         from dev_orchestra.infrastructure.gradle_worktree_caches import (
             GradleWorktreeCaches,
             gradle_cache_roots,
@@ -229,6 +387,7 @@ class TestRunner:
 
         bindings = GradleCacheBindings(self.preflight, worktree) if self.preflight else None
         gradle_caches = GradleWorktreeCaches(self.preflight, worktree) if self.preflight else None
+        batches = assemble_batches(worktree.resolve(), config.commands, directory, bindings, stop)
         results = []
         directory.mkdir(parents=True, exist_ok=True)
         observation = {"started_at": time.time(), "status": "incomplete", "commands": []}
@@ -240,25 +399,48 @@ class TestRunner:
             except OSError:
                 pass  # Measurements never replace actual JUnit or execution evidence.
 
+        def record(result):
+            results.append(result)
+            observation["commands"].append(
+                {key: result[key] for key in ["command_id", "status", "duration_seconds"]}
+            )
+            observe()
+
         observe()
+        batched = set()
         for command_id, command in config.commands.items():
+            if command_id in batched:
+                continue
+            if batch := batches.get(command_id):
+                started = time.monotonic()
+                trace = {
+                    "command_ids": [item.id for item in batch],
+                    "log": f"gradle-assemble-{uuid.uuid4().hex}.log",
+                }
+                combined = run_gradle_batch(
+                    worktree,
+                    batch,
+                    directory,
+                    config.output_paths,
+                    bindings,
+                    gradle_caches,
+                    trace,
+                    stop,
+                )
+                trace.update(duration_seconds=time.monotonic() - started, used=combined is not None)
+                observation.setdefault("batches", []).append(trace)
+                observe()
+                if combined is not None:
+                    batched.update(trace["command_ids"])
+                    for result in combined:
+                        record(result)
+                    continue
             cwd = (
                 worktree
                 if command.working_directory == "."
                 else contained(worktree, command.working_directory)
             )
-            outputs = [contained(worktree, p) for p in config.output_paths]
-            if any(p.is_file() for p in outputs):
-                raise PipelineError("output path must be a directory")
-            # Never grant write access to any tracked production/test file via output paths.
-            from dev_orchestra.infrastructure.git import Git
-
-            git = Git(worktree)
-            tracked = [name for name in git.call("ls-files", "-z").split("\0") if name]
-            if any((worktree / name).is_relative_to(p) for name in tracked for p in outputs):
-                raise PipelineError("output path contains tracked source files")
-            for p in outputs:
-                p.mkdir(parents=True, exist_ok=True)
+            outputs, git = validation_outputs(worktree, config.output_paths)
             from dev_orchestra.infrastructure.runtime_adapters import (
                 convert_jest_report,
                 gradle_directory_command,
@@ -281,50 +463,16 @@ class TestRunner:
                 for report in junit_paths(worktree, command.junit_report, outputs):
                     report.unlink()
             started = time.monotonic()
-            result = {
-                "command_id": command_id,
-                "kind": command.kind,
-                "working_directory": command.working_directory,
-                "argv": command.argv,
-                "exit_code": None,
-                "status": "unavailable",
-                "total": None,
-                "failed": None,
-                "skipped": None,
-                "failures": [],
-                "failure_details": [],
-                "passed": False,
-                "junit_path": None,
-                "junit_hash": None,
-                "error": None,
-            }
+            result = result_record(command_id, command)
             diagnostic = ""
             try:
-                from dev_orchestra.infrastructure.coordination import host_root, slot
-
-                resource = (
-                    slot(
-                        host_root() / "loopback", execution_directory() or directory, stop, limit=1
-                    )
-                    if command.network == "loopback"
-                    else nullcontext()
-                )
                 with (
-                    resource,
+                    loopback_slot(command, directory, stop),
                     execution_scope(execution_directory() or directory),
                     tempfile.TemporaryDirectory(prefix="devorchestra-test-") as temp,
                 ):
                     scratch = Path(temp).resolve()
-                    env = environment() | {
-                        "HOME": str(scratch),
-                        "TMPDIR": str(scratch),
-                        "TMP": str(scratch),
-                        "TEMP": str(scratch),
-                        # Chromium on macOS ignores TMPDIR for some temporary files.
-                        "MAC_CHROMIUM_TMPDIR": str(scratch),
-                        "JAVA_TOOL_OPTIONS": f'-Duser.home="{scratch}" -Djava.io.tmpdir="{scratch}"',
-                    }
-                    env.update(command.env)
+                    env = scratch_environment(scratch) | command.env
                     from dev_orchestra.infrastructure.containers import run_arguments, toolchain
                     from dev_orchestra.infrastructure.java import java_environment
 
@@ -449,11 +597,7 @@ class TestRunner:
                     status="timeout" if "timeout" in str(error) else result["status"],
                 )
             result["duration_seconds"] = time.monotonic() - started
-            results.append(result)
-            observation["commands"].append(
-                {key: result[key] for key in ["command_id", "status", "duration_seconds"]}
-            )
-            observe()
+            record(result)
         statuses = {r["status"] for r in results}
         status = next(
             (s for s in ["timeout", "unavailable", "parse_error", "failed"] if s in statuses),
@@ -465,7 +609,8 @@ class TestRunner:
             {
                 "passed": all(r["passed"] for r in results),
                 "status": status,
-                "duration_seconds": sum(r["duration_seconds"] for r in results),
+                "duration_seconds": sum(r["duration_seconds"] or 0 for r in results)
+                + sum(batch["duration_seconds"] for batch in observation.get("batches", [])),
                 "commands": results,
             }
         )
