@@ -2497,6 +2497,8 @@ export interface components {
             commands?: {
                 [key: string]: components["schemas"]["TestCommand"];
             };
+            /** Required Command Ids */
+            required_command_ids?: string[];
             /** Write Paths */
             write_paths?: string[];
             /** Output Paths */

@@ -12,10 +12,11 @@ from test_backend_api import project
 from test_backend_api import web as web
 from test_workflow import FakeAgent, FakeTests
 from test_workflow import service as service
+from test_workspace import setup as setup
 
 from dev_orchestra.agents.prompts import prompt
 from dev_orchestra.application.projects import ProjectService
-from dev_orchestra.config import Config
+from dev_orchestra.config import AffectedTests, Config
 from dev_orchestra.config import TestCommand as Command
 from dev_orchestra.config import Tests as Commands
 from dev_orchestra.domain.models import AgentRequest, AgentResult, Coverage, PipelineError
@@ -184,6 +185,82 @@ def test_web_preview_and_submission_complete_old_project_vite_policy(web):
     assert "node_modules/.vite-temp" in cfg["tests"]["output_paths"]
     current = client.get(f"/api/projects/{p['id']}").json()
     assert "node_modules/.vite-temp" not in current["policy"]["tests"]["output_paths"]
+
+
+def test_missing_required_lint_blocks_preview_and_cli_creation(web):
+    client, svc, old_id, repo, _ = web
+    spec = Path(svc.store.get(old_id)["directory"]) / "spec.md"
+    before = svc.store.get(old_id)["config"]
+    svc.config.tests.required_command_ids = ["unit", "lint"]
+    p = project(client, svc, repo)
+    response = client.post(
+        f"/api/projects/{p['id']}/run-previews",
+        json={"name": "로그 검색", "project_id": p["id"], "spec": {"kind": "text", "text": "PRD"}},
+    )
+    assert response.status_code == 422
+    assert "누락된 명령 ID lint" in response.text
+    with pytest.raises(PipelineError, match="누락된 명령 ID lint"):
+        svc.create(repo, spec)
+    assert svc.store.get(old_id)["config"] == before
+    assert [run["id"] for run in svc.queries.list()] == [old_id]
+
+
+def test_required_commands_use_committed_scripts_and_join_existing_regressions(service):
+    svc, old_id, repo = service
+    commit_files(repo, {"package.json": '{"scripts":{"lint":"eslint --no-fix"}}'})
+    (repo / "package.json").write_text("{}")
+    svc.config.tests.required_command_ids = ["lint"]
+    svc.config.tests.commands["lint"] = Command(
+        kind="check", argv=["yarn", "run", "lint", "tests/not-yet-written.spec.js"]
+    )
+    svc.config.tests.affected = AffectedTests(required_commands=["unit"])
+    spec = Path(svc.store.get(old_id)["directory"]) / "spec.md"
+    rid = svc.create(repo, spec, test_scope="affected")
+    frozen = svc.store.get(rid)["config"]["tests"]
+    assert frozen["affected"]["required_commands"] == ["unit", "lint"]
+    assert svc.config.tests.affected.required_commands == ["unit"]
+    assert frozen["commands"]["lint"]["argv"][-1] == "tests/not-yet-written.spec.js"
+
+
+@pytest.mark.parametrize(
+    "argv,cwd,message",
+    [
+        (["yarn", "run", "lint"], ".", "패키지 스크립트"),
+        (["./scripts/lint"], ".", "실행 파일"),
+        (["eslint"], "missing", "작업 경로"),
+    ],
+)
+def test_required_check_with_invalid_committed_configuration_blocks_creation(
+    service, argv, cwd, message
+):
+    svc, old_id, repo = service
+    svc.config.tests.required_command_ids = ["lint"]
+    svc.config.tests.commands["lint"] = Command(kind="check", argv=argv, working_directory=cwd)
+    spec = Path(svc.store.get(old_id)["directory"]) / "spec.md"
+    with pytest.raises(PipelineError, match=message):
+        svc.create(repo, spec)
+
+
+def test_affected_run_prepares_required_commands_before_planning(setup):
+    svc, old_id, repo = setup
+    svc.config.tests.required_command_ids = ["lint"]
+    svc.config.tests.commands["lint"] = Command(kind="check", argv=["yarn", "exec", "eslint"])
+    spec = Path(svc.store.get(old_id)["directory"]) / "spec.md"
+    rid = svc.create(repo, spec, test_scope="affected")
+
+    class YarnMismatch(FakeTests):
+        def prepare(self, worktree, config, directory, stop):
+            assert list(config.commands) == ["lint"]
+            raise PipelineError("offline Yarn dependency check failed")
+
+    agent = FakeAgent()
+    Runner(svc.store, agent, YarnMismatch()).execute(rid)
+    run = svc.store.get(rid)
+    assert run["state"] == "needs_input"
+    assert "Yarn dependency check failed" in run["error"]
+    assert agent.calls == []
+    assert not svc.store.steps(rid)
+    assert set(run["config"]["tests"]["commands"]) == {"unit", "lint"}
 
 
 def test_detect_wrappers_package_managers_and_distinct_reports(service):

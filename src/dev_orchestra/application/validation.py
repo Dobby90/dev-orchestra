@@ -12,7 +12,7 @@ from dev_orchestra.application.errors import ApplicationError
 from dev_orchestra.application.frontend_build_scope import preferred_build_script, script_tokens
 from dev_orchestra.application.test_changes import checksum
 from dev_orchestra.application.web_contracts import ValidationCandidate, ValidationDetection
-from dev_orchestra.config import TestCommand, Tests
+from dev_orchestra.config import AffectedTests, TestCommand, Tests
 from dev_orchestra.domain.models import PipelineError
 from dev_orchestra.infrastructure.dependencies import vite_cache_output
 from dev_orchestra.infrastructure.files import relative_path
@@ -723,9 +723,81 @@ def automatic_validation(info, spec="", *, detected=None):
     )
 
 
+def pin_required_commands(tests, info):
+    if not tests.required_command_ids:
+        return
+    missing = [key for key in tests.required_command_ids if key not in tests.commands]
+    if missing:
+        raise ApplicationError(
+            "VALIDATION_ERROR",
+            "필수 검증 명령을 등록하세요. 누락된 명령 ID " + ", ".join(missing),
+        )
+    git = Git(info.repository_path)
+
+    @cache
+    def tree_entry(path, kind):
+        ref = f"{info.base_sha}:{path}" if path != PurePosixPath(".") else info.base_sha + "^{tree}"
+        try:
+            return ref if git.call("cat-file", "-t", ref) == kind else None
+        except PipelineError:
+            return None
+
+    for key in tests.required_command_ids:
+        command = tests.commands[key]
+        cwd = PurePosixPath(command.working_directory)
+        if not tree_entry(cwd, "tree"):
+            raise ApplicationError(
+                "VALIDATION_ERROR", f"필수 검증 {key}의 작업 경로가 기준 커밋에 없습니다."
+            )
+        identity = script_identity(command.argv)
+        if identity:
+            ref = tree_entry(cwd / "package.json", "blob")
+            try:
+                scripts = (
+                    json.loads(git.call("cat-file", "blob", ref)).get("scripts", {})
+                    if ref and int(git.call("cat-file", "-s", ref)) <= 262144
+                    else {}
+                )
+            except (ValueError, AttributeError):
+                scripts = {}
+            script = identity[1]
+            if (
+                not isinstance(scripts, dict)
+                or not isinstance(scripts.get(script), str)
+                or not scripts[script].strip()
+            ):
+                raise ApplicationError(
+                    "VALIDATION_ERROR",
+                    f"필수 검증 {key}에 지정된 패키지 스크립트를 기준 커밋에서 확인하세요.",
+                )
+        if "/" in command.argv[0] and not PurePosixPath(command.argv[0]).is_absolute():
+            try:
+                executable = PurePosixPath(
+                    relative_path(posixpath.normpath(str(cwd / command.argv[0])))
+                )
+            except PipelineError as error:
+                raise ApplicationError(
+                    "VALIDATION_ERROR", f"필수 검증 {key}의 실행 파일 경로를 확인하세요."
+                ) from error
+            if "node_modules" not in executable.parts and not tree_entry(executable, "blob"):
+                raise ApplicationError(
+                    "VALIDATION_ERROR",
+                    f"필수 검증 {key}의 실행 파일이 기준 커밋에 없습니다.",
+                )
+    policy = tests.affected or AffectedTests()
+    tests.affected = policy.model_copy(
+        update={
+            "required_commands": list(
+                dict.fromkeys([*policy.required_commands, *tests.required_command_ids])
+            )
+        }
+    )
+
+
 def complete_run_validation(config, info):
     """Freeze manual or existing test policy, or reserve paths for first development."""
     snapshot = config.model_copy(deep=True)
+    pin_required_commands(snapshot.tests, info)
     detected = None
     if not snapshot.tests.commands:
         detected = detect_validation(info)

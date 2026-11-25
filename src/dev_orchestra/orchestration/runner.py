@@ -285,16 +285,24 @@ class Runner:
                 except (ApplicationError, PipelineError, ValueError) as error:
                     self.store.update(run_id, "needs_input", error=redact(str(error)))
                     return
+            selected_only = prepare_selected_only(run)
+            preplan_commands = config.tests.required_command_ids if role == "planner" else []
             if (
                 config.tests.commands
                 and hasattr(self.tests, "prepare")
-                and not prepare_selected_only(run)
+                and (not selected_only or preplan_commands)
                 # A pending stage repaired only from evidence must remain read-only.
                 and not (resumed_workspace and resumed_workspace.data.get("metadata_only"))
             ):
                 try:
                     tests = config.tests
-                    if automatic(run) and (deferred := deferred_builds(run, git.sha(), tests)):
+                    if selected_only:
+                        tests = tests.model_copy(
+                            update={
+                                "commands": {key: tests.commands[key] for key in preplan_commands}
+                            }
+                        )
+                    elif automatic(run) and (deferred := deferred_builds(run, git.sha(), tests)):
                         tests = tests.model_copy(
                             update={
                                 "commands": {

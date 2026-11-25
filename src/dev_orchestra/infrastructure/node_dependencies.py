@@ -227,4 +227,8 @@ def prepare_yarn(worktree, root, package, directory, tracked, stop, *, node_env=
             env=env,
         )
         if rc:
-            raise PipelineError(f"offline Yarn dependency check failed: {output[-1000:]}")
+            raise PipelineError(
+                "offline Yarn dependency check failed. 작업 Worktree의 의존성을 잠금 파일과 "
+                "Yarn Classic 설치 옵션(--offline --frozen-lockfile --ignore-scripts)에 맞춰 "
+                f"준비한 뒤 재개하세요.\n{output[-1000:]}"
+            )

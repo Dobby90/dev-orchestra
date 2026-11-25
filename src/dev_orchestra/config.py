@@ -134,9 +134,18 @@ class AffectedTests(Model):
 
 class Tests(Model):
     commands: dict[str, TestCommand] = Field(default_factory=dict)
+    required_command_ids: list[str] = Field(default_factory=list)
     write_paths: list[str] = Field(default_factory=lambda: ["tests"])
     output_paths: list[str] = Field(default_factory=lambda: [".pytest_cache", "build", "target"])
     affected: AffectedTests | None = None
+
+    @model_serializer(mode="wrap")
+    def serialize(self, handler):
+        value = handler(self)
+        # Preserve existing validation policy fingerprints when no commands are declared required.
+        if not self.required_command_ids:
+            value.pop("required_command_ids", None)
+        return value
 
     @model_validator(mode="after")
     def validate_tests(self):
@@ -146,8 +155,13 @@ class Tests(Model):
 
         for path in self.write_paths + self.output_paths:
             relative_path(path)
-        if any(not re.fullmatch(r"[A-Za-z0-9_-]+", key) for key in self.commands):
+        if any(
+            not re.fullmatch(r"[A-Za-z0-9_-]+", key)
+            for key in [*self.commands, *self.required_command_ids]
+        ):
             raise ValueError("test command IDs must be safe identifiers")
+        if len(self.required_command_ids) != len(set(self.required_command_ids)):
+            raise ValueError("required test command IDs must be unique")
         if self.commands and not any(c.kind == "test" for c in self.commands.values()):
             raise ValueError(
                 "at least one JUnit test command is required; checks alone are insufficient"

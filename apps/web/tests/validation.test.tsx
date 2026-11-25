@@ -98,6 +98,31 @@ it("프로젝트 수정에서 기존 직접 설정을 유지하고 자동 설정
   );
 });
 
+it("필수 검증 명령을 저장하고 현재 누락된 ID를 표시한다", async () => {
+  const submit = mount();
+  await userEvent.type(screen.getByLabelText("프로젝트 이름"), "대시보드");
+  await userEvent.type(
+    screen.getByLabelText("저장소 절대 경로"),
+    "/tmp/dashboard",
+  );
+  await userEvent.click(screen.getByText("고급 설정 · 검증 직접 설정"));
+  await userEvent.type(
+    screen.getByLabelText(/필수 검증 명령 ID/),
+    "unit{Enter}lint",
+  );
+  expect(screen.getByText("등록이 필요한 명령 unit, lint")).toBeInTheDocument();
+  await userEvent.click(screen.getByRole("button", { name: "프로젝트 등록" }));
+  expect(submit).toHaveBeenCalledWith(
+    expect.objectContaining({
+      policy: expect.objectContaining({
+        tests: expect.objectContaining({
+          required_command_ids: ["unit", "lint"],
+        }),
+      }),
+    }),
+  );
+});
+
 it("Java 도구를 직접 선택하고 명령·보고서 경로를 폼으로 수정한다", async () => {
   const maven: Schema["ValidationCandidate"] = {
     ...unit,

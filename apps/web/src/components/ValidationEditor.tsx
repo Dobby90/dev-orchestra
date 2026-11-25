@@ -19,6 +19,11 @@ export function ValidationEditor({
   const [busy, setBusy] = useState(false);
   const [notices, setNotices] = useState<string[]>([]);
   const [error, setError] = useState<Error | null>(null);
+  const [requiredDraft, setRequiredDraft] = useState<string | null>(null);
+  const required = value.required_command_ids ?? [];
+  const missing = required.filter(
+    (id) => !Object.hasOwn(value.commands ?? {}, id),
+  );
   async function manual() {
     setError(null);
     setBusy(true);
@@ -39,6 +44,7 @@ export function ValidationEditor({
       commands[key] = structuredClone(c.command);
     }
     onChange({
+      ...value,
       commands,
       write_paths: [
         ...new Set([
@@ -69,6 +75,30 @@ export function ValidationEditor({
         기존 테스트는 새 작업에서 자동으로 재사용합니다. 실행 명령을 직접
         지정해야 하는 경우에만 아래 설정을 변경하세요.
       </p>
+      <label>
+        필수 검증 명령 ID · 한 줄에 하나
+        <textarea
+          rows={2}
+          value={requiredDraft ?? required.join("\n")}
+          onBlur={() => setRequiredDraft(null)}
+          onChange={(e) => {
+            setRequiredDraft(e.target.value);
+            onChange({
+              ...value,
+              required_command_ids: lines(e.target.value).map((id) =>
+                id.trim(),
+              ),
+            });
+          }}
+        />
+        <span className="help">
+          예를 들어 테스트와 lint를 요구하면 두 명령의 ID를 등록하세요. 필수
+          명령이 빠지면 실행 전 확인에서 새 작업 생성을 차단합니다.
+        </span>
+      </label>
+      {missing.length > 0 && (
+        <p className="notice">등록이 필요한 명령 {missing.join(", ")}</p>
+      )}
       <div className="inline-actions">
         <Button
           type="button"

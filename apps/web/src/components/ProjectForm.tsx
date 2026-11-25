@@ -46,6 +46,7 @@ function editablePolicy(value: unknown): value is Schema["Policy"] {
   if (
     !strings(tests.write_paths) ||
     !strings(tests.output_paths) ||
+    !strings(tests.required_command_ids) ||
     !strings(p.blocking_severities)
   )
     return false;

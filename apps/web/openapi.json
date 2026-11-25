@@ -7473,6 +7473,13 @@
             "type": "object",
             "title": "Commands"
           },
+          "required_command_ids": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Required Command Ids"
+          },
           "write_paths": {
             "items": {
               "type": "string"
