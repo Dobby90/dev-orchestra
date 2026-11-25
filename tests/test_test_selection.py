@@ -9,7 +9,7 @@ import pytest
 from test_workspace import edit, start_session
 from test_workspace import setup as setup
 
-from dev_orchestra.agents.context import execution_summary, role_context
+from dev_orchestra.agents.context import COVERAGE_BUDGET, execution_summary, role_context
 from dev_orchestra.application.test_selection import (
     selection_for_paths,
     verify_selection,
@@ -177,6 +177,7 @@ def test_role_inputs_do_not_repeat_applied_patches_and_keep_review_obligations()
             "test_result": {
                 "patch": marker,
                 "sha": "a" * 40,
+                "coverage": [{"criterion_id": "AC1", "command_ids": ["test"]}],
                 "execution": {
                     "commands": [
                         {
@@ -202,6 +203,9 @@ def test_role_inputs_do_not_repeat_applied_patches_and_keep_review_obligations()
         and "last Fixer diff" in request.context["review_scope"]
     )
     assert request.context["test_result"]["execution"]["truncated"]
+    assert request.context["test_result"].get("coverage") == [
+        {"criterion_id": "AC1", "command_ids": ["test"]}
+    ]
     assert (
         len(
             json.dumps(
@@ -409,6 +413,7 @@ def test_readonly_review_evidence_keeps_unresolved_issues_and_diagnostics(setup)
         "sha": value["sha"],
         "revision": 0,
         "patch": "must not resend source patch",
+        "coverage": [{"criterion_id": f"AC{i}", "command_ids": ["unit"]} for i in range(1, 201)],
         "execution": session.read_test_payload()["execution"],
         "test_selection": value["selection"],
     }
@@ -426,10 +431,37 @@ def test_readonly_review_evidence_keeps_unresolved_issues_and_diagnostics(setup)
     assert [tool["name"] for tool in dispatch(reviewer, {"method": "tools/list"})["tools"]] == [
         "read_test_evidence"
     ]
-    evidence = reviewer.read_test_evidence(reviewer.data["evidence_id"])
-    assert (
-        "must not resend source patch" not in evidence["text"] and "execution" in evidence["text"]
+    evidence_id = reviewer.data["evidence_id"]
+    page = reviewer.read_test_evidence(evidence_id)
+    assert page["truncated"]
+    text = page["text"]
+    while page["truncated"]:
+        page = reviewer.read_test_evidence(evidence_id, offset=len(text))
+        text += page["text"]
+    assert "must not resend source patch" not in text
+    evidence = json.loads(text)
+    assert evidence["execution"] == payload["execution"]
+    assert evidence["coverage"] == payload["coverage"]
+    assert (evidence["sha"], evidence["revision"]) == (value["sha"], 0)
+
+    request = AgentRequest(
+        run_id=rid,
+        role="reviewer",
+        worktree=str(session.root),
+        input_sha=value["sha"],
+        iteration=0,
+        context={"test_result": payload, "revision": 0},
     )
+    role_context(request)
+    tests = request.context["test_result"]
+    assert 0 < tests["omitted_coverage"] < len(payload["coverage"])
+    assert len(json.dumps(tests["coverage"], ensure_ascii=False).encode()) <= COVERAGE_BUDGET
+    assert tests["coverage"] == evidence["coverage"][: len(tests["coverage"])]
+
+    for stale in ({"sha": "0" * 40}, {"revision": 1}):
+        current = request.model_copy(update={"context": {"test_result": payload | stale}})
+        role_context(current)
+        assert "test_result" not in current.context
     filtered = dispatch(
         reviewer,
         {
@@ -443,6 +475,10 @@ def test_readonly_review_evidence_keeps_unresolved_issues_and_diagnostics(setup)
     assert filtered["isError"]
     with pytest.raises(PipelineError):
         reviewer.read_test_evidence("another-run")
+    svc.store.update(rid, revision=1)
+    with pytest.raises(PipelineError, match="ownership denied"):
+        reviewer.read_test_evidence(evidence_id)
+    svc.store.update(rid, revision=0)
     svc.store.finish_step(step_id, value["sha"], {})
     with pytest.raises(PipelineError):
         reviewer.read_test_evidence(reviewer.data["evidence_id"])

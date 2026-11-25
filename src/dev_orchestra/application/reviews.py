@@ -14,6 +14,7 @@ from dev_orchestra.infrastructure.store import now
 
 SEVERITY_ORDER = {"low": 0, "medium": 1, "high": 2, "critical": 3}
 VERIFICATION_PENDING_NOTE = "코드 수정 확인, 동일 SHA·revision 테스트 통과 근거 대기"
+CODE_SPAN = re.compile(r"`([^`\r\n]+)`")
 
 
 def verification_pending(issue, candidate_sha, review_step_id):
@@ -30,10 +31,18 @@ def cited_case(text, name):
 
 
 def linked_test_failures(evidence, tests):
+    commands = (tests or {}).get("execution", {}).get("commands", [])
+    executed = {command.get("command_id") for command in commands}
+    cited = executed.intersection(CODE_SPAN.findall(evidence))
+    case_evidence = CODE_SPAN.sub(lambda match: " " if match[1] in cited else match[0], evidence)
     linked = []
-    for command in (tests or {}).get("execution", {}).get("commands", []):
+    for command in commands:
         command_id = command.get("command_id")
-        if not command_id or command.get("passed") is not False:
+        if (
+            not command_id
+            or command.get("passed") is not False
+            or (cited and command_id not in cited)
+        ):
             continue
         details = command.get("failure_details") or [
             {"name": name} for name in command.get("failures", [])
@@ -42,9 +51,11 @@ def linked_test_failures(evidence, tests):
             {"name": case["name"], "message": (case.get("message") or "")[:500]}
             for case in details
             if case.get("name")
-            and any(cited_case(evidence, case.get(key)) for key in ("name", "file", "classname"))
+            and any(
+                cited_case(case_evidence, case.get(key)) for key in ("name", "file", "classname")
+            )
         ]
-        if cases or f"`{command_id}`" in evidence:
+        if cases or command_id in cited:
             linked.append(
                 {
                     "command_id": command_id,
@@ -54,7 +65,9 @@ def linked_test_failures(evidence, tests):
                     "error": (command.get("error") or "")[:500],
                 }
             )
-    return linked
+    if not cited and len(linked) > 1:
+        return [], sorted(item["command_id"] for item in linked)
+    return linked, []
 
 
 def unresolved_groups(run, issues):
@@ -153,6 +166,27 @@ def validate_assessment_ids(assessment_ids, known_ids):
         raise ResponseError(
             "unknown or duplicate review assessment. Copy each issue_id exactly from "
             f"open_issues and assess it once. Invalid or repeated IDs: {invalid!r}"
+        )
+
+
+def validate_review_assessments(assessments, required_ids, candidate_sha):
+    received = [item["issue_id"] for item in assessments]
+    validate_assessment_ids(received, required_ids)
+    missing = sorted(set(required_ids) - set(received))
+    if missing:
+        raise ResponseError(
+            "missing review assessments for response_contract.required_assessment_ids: "
+            f"{missing!r}. Assess every open issue exactly once."
+        )
+    invalid = [
+        item["issue_id"]
+        for item in assessments
+        if item["candidate_sha"] != candidate_sha or not item["evidence"].strip()
+    ]
+    if invalid:
+        raise ResponseError(
+            f"review assessments must use current candidate_sha {candidate_sha} and nonempty "
+            f"evidence. Invalid IDs: {invalid!r}"
         )
 
 
@@ -273,7 +307,10 @@ class Reviews:
                     else issue["evidence"]
                 )
                 issue["remaining_failure"] = remaining
-                issue["test_failures"] = linked_test_failures(remaining, tests)
+                links, ambiguous = linked_test_failures(remaining, tests)
+                issue["test_failures"] = links
+                if ambiguous:
+                    issue["ambiguous_test_failure_command_ids"] = ambiguous
 
         blocking = run["config"]["review"]["blocking_severities"]
         groups = unresolved_groups(run, issues)
@@ -395,7 +432,14 @@ class Reviews:
         sha = payload["sha"]
         existing = {i["issue_id"]: i for i in self.issues(run["id"])}
         assessments = payload.get("assessments", [])
-        validate_assessment_ids((item["issue_id"] for item in assessments), existing)
+        if run.get("review_contract") == 2:
+            open_ids = {key for key, item in existing.items() if item["status"] == "unresolved"}
+            if set(payload.get("required_assessment_ids", open_ids)) != open_ids:
+                raise PipelineError("open review issues changed during assessment")
+            validate_review_assessments(assessments, open_ids, sha)
+        else:
+            # Historical review imports retain their original assessment contract.
+            validate_assessment_ids((item["issue_id"] for item in assessments), existing)
         with self.store.connection() as db:
             for assessment in assessments:
                 key = assessment["issue_id"]

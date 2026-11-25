@@ -9,7 +9,7 @@ from typer.testing import CliRunner
 
 from dev_orchestra.application.commands import Commands
 from dev_orchestra.application.results import Results
-from dev_orchestra.application.reviews import Reviews
+from dev_orchestra.application.reviews import Reviews, linked_test_failures
 from dev_orchestra.cli import app
 from dev_orchestra.domain.models import PipelineError
 from dev_orchestra.infrastructure.files import write
@@ -17,7 +17,7 @@ from dev_orchestra.infrastructure.locking import OwnershipError, lock
 from dev_orchestra.orchestration.runner import transition_summary
 
 
-def save_review(svc, rid, iteration, *, issues=(), assessments=()):
+def save_review(svc, rid, iteration, *, issues=(), assessments=(), historical=False):
     run = svc.store.get(rid)
     sha = run["base_sha"]
     step, _ = svc.store.start_step(rid, "reviewer", iteration, sha)
@@ -29,7 +29,9 @@ def save_review(svc, rid, iteration, *, issues=(), assessments=()):
         "issues": list(issues),
         "assessments": list(assessments),
     }
-    payload["issue_states"] = Reviews(svc.store).apply(run, step, payload)
+    payload["issue_states"] = Reviews(svc.store).apply(
+        run | {"review_contract": 1} if historical else run, step, payload
+    )
     artifact = Path(run["directory"]) / f"review-{step}.json"
     checksum = write(artifact, payload)
     svc.store.finish_step(step, sha, {"artifact": str(artifact), "hash": checksum})
@@ -74,10 +76,10 @@ def test_link_preserves_history_and_resolution_gate(service):
     svc.store.update(rid, revision=2)
     reviews = Reviews(svc.store)
     old_step, old_artifact = save_review(svc, rid, 0, issues=[finding(1, "medium")])
-    save_review(svc, rid, 1, issues=[finding(2, "high")])
+    save_review(svc, rid, 1, issues=[finding(2, "high")], historical=True)
     representative, duplicate = [issue["issue_id"] for issue in reviews.issues(rid)]
     recent_step, recent_artifact = save_review(
-        svc, rid, 2, assessments=[assessment(duplicate, "unresolved", sha)]
+        svc, rid, 2, assessments=[assessment(duplicate, "unresolved", sha)], historical=True
     )
     originals = [path.read_bytes() for path in (old_artifact, recent_artifact)]
     ledger = reviews.issues(rid)
@@ -117,12 +119,14 @@ def test_link_preserves_history_and_resolution_gate(service):
     assert len(Results(svc.store).reviews(rid, old_step)["issues"]) == 1
     assert len(Results(svc.store).reviews(rid, recent_step)["issues"]) == 2
 
-    save_review(svc, rid, 3, assessments=[assessment(duplicate, "resolved", sha)])
+    save_review(svc, rid, 3, assessments=[assessment(duplicate, "resolved", sha)], historical=True)
     assert len(reviews.open(rid)) == 2
     assert "미해결 1건 (차단 1건)" in svc.report(rid)
 
     svc.store.update(rid, test_result={"sha": sha, "revision": 2, "execution": {"passed": True}})
-    save_review(svc, rid, 4, assessments=[assessment(representative, "resolved", sha)])
+    save_review(
+        svc, rid, 4, assessments=[assessment(representative, "resolved", sha)], historical=True
+    )
     (issue,) = reviews.fixer_issues(svc.store.get(rid))
     assert (issue["issue_id"], issue["evidence_issue_id"]) == (representative, duplicate)
     assert "미해결 1건 (차단 1건) · 해결 1건" in svc.report(rid)
@@ -156,6 +160,44 @@ def test_linking_groups_keeps_direct_links_and_rejects_invalid_ids(service):
     assert issue["issue_id"] == second
     events = svc.store.events(rid)
     assert sum(event["kind"] == "issue.duplicate_linked" for event in events) == 2
+
+
+@pytest.mark.parametrize(
+    "citation,expected,ambiguous",
+    [
+        ("`chromium`의 `restores focus` 실패", [("chromium", ["restores focus"])], []),
+        ("`chromium` 실패", [("chromium", [])], []),
+        (
+            "`chromium`과 `webkit`에서 `restores focus` 실패",
+            [("chromium", ["restores focus"]), ("webkit", ["restores focus"])],
+            [],
+        ),
+        ("`restores focus` 실패", [], ["chromium", "webkit"]),
+        ("`tests/chromium.spec.ts` 실패", [("chromium", ["restores focus"])], []),
+        ("`firefox`의 `restores focus` 실패", [], []),
+    ],
+)
+def test_test_failure_links_prefer_cited_commands(citation, expected, ambiguous):
+    tests = {
+        "execution": {
+            "commands": [
+                {
+                    "command_id": browser,
+                    "passed": False,
+                    "failure_details": [
+                        {"name": "restores focus", "file": f"tests/{browser}.spec.ts"}
+                    ],
+                }
+                for browser in ("chromium", "webkit")
+            ]
+            + [{"command_id": "firefox", "passed": True}]
+        }
+    }
+    linked, candidates = linked_test_failures(citation, tests)
+    assert [
+        (item["command_id"], [case["name"] for case in item["cases"]]) for item in linked
+    ] == expected
+    assert candidates == ambiguous
 
 
 def test_fixer_distinguishes_pending_code_fix_and_links_verified_failure(service):
@@ -195,7 +237,7 @@ def test_fixer_distinguishes_pending_code_fix_and_links_verified_failure(service
                         {"name": "unrelated failure", "message": "different case"},
                     ],
                 },
-                {"command_id": "unit-other", "passed": False, "failures": ["other failure"]},
+                {"command_id": "unit-other", "passed": False, "failures": ["restores focus"]},
             ],
         },
     }
@@ -233,6 +275,9 @@ def test_fixer_distinguishes_pending_code_fix_and_links_verified_failure(service
     assert not newer["open_issues"][0]["verification_pending"]
     assert not newer["open_issues"][1]["test_failures"]
     assert newer["test_result"] is None
+    different_sha = reviews.fixer_context(run, "0" * 40)
+    assert different_sha["test_result"] is None
+    assert not different_sha["open_issues"][1]["test_failures"]
 
     link(svc, rid, active, fixed)
     (group,) = reviews.fixer_context(svc.store.get(rid), sha)["open_issues"]

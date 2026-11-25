@@ -7,7 +7,12 @@ from test_workflow import service as service
 from dev_orchestra.agents.contracts import ResponseError
 from dev_orchestra.agents.prompts import continuation_prompt, prompt
 from dev_orchestra.application.reviews import Reviews, validate_review_findings
-from dev_orchestra.domain.models import Issue, ReviewIssueDistinction, ReviewResultV2
+from dev_orchestra.domain.models import (
+    Issue,
+    ReviewAssessment,
+    ReviewIssueDistinction,
+    ReviewResultV2,
+)
 from dev_orchestra.orchestration.runner import Runner
 
 
@@ -124,7 +129,16 @@ def test_fixer_receives_latest_unresolved_assessment_for_existing_issue(service,
                 result.issues = []
                 result.assessments[0].evidence = evidence
                 feedback = request.context.get("response_feedback")
-                if same_sha and not feedback:
+                if feedback:
+                    assert self.issue_id in feedback["error"]
+                    assert ("use assessments" if same_sha else "current candidate_sha") in feedback[
+                        "error"
+                    ]
+                    with svc.store.connection() as db:
+                        assert (
+                            db.execute("SELECT COUNT(*) FROM issue_assessments").fetchone()[0] == 0
+                        )
+                elif same_sha:
                     result.issues = [
                         self.original_finding.model_copy(
                             update={
@@ -135,13 +149,6 @@ def test_fixer_receives_latest_unresolved_assessment_for_existing_issue(service,
                             }
                         )
                     ]
-                elif same_sha:
-                    assert self.issue_id in feedback["error"]
-                    assert "use assessments" in feedback["error"]
-                    with svc.store.connection() as db:
-                        assert (
-                            db.execute("SELECT COUNT(*) FROM issue_assessments").fetchone()[0] == 0
-                        )
                 else:
                     result.assessments[0].candidate_sha = "0" * 40
             if request.role == "fixer":
@@ -152,17 +159,14 @@ def test_fixer_receives_latest_unresolved_assessment_for_existing_issue(service,
                     assert "latest_assessment" not in issue
                 else:
                     assert issue["issue_id"] == self.issue_id
-                    if same_sha:
-                        assert issue["latest_assessment"] == {
-                            "candidate_sha": request.input_sha,
-                            "revision": 2,
-                            "reviewer_status": "unresolved",
-                            "evidence": evidence,
-                        }
-                        assert evidence in prompt(request)
-                        assert evidence in continuation_prompt(request)
-                    else:
-                        assert "latest_assessment" not in issue
+                    assert issue["latest_assessment"] == {
+                        "candidate_sha": request.input_sha,
+                        "revision": 2,
+                        "reviewer_status": "unresolved",
+                        "evidence": evidence,
+                    }
+                    assert evidence in prompt(request)
+                    assert evidence in continuation_prompt(request)
             return result
 
     agent = Agent(block=2)
@@ -176,7 +180,7 @@ def test_fixer_receives_latest_unresolved_assessment_for_existing_issue(service,
     review_attempts = [
         s["status"] for s in svc.store.steps(rid) if s["role"] == "reviewer" and s["iteration"] == 1
     ]
-    assert review_attempts == (["failed", "completed"] if same_sha else ["completed"])
+    assert review_attempts == ["failed", "completed"]
     svc.approve(rid)
 
 
@@ -218,9 +222,54 @@ def test_same_line_can_have_two_independent_review_findings(service):
     validate_review_findings(result, [old], sha)
 
     step, _ = svc.store.start_step(rid, "reviewer", 1, sha)
+    result.assessments = [
+        ReviewAssessment(
+            issue_id=old["issue_id"],
+            candidate_sha=sha,
+            status="unresolved",
+            evidence="Independent notification defect remains.",
+        )
+    ]
     saved = reviews.apply(run, step, result.model_dump() | {"sha": sha})
     assert len({item["issue_id"] for item in saved}) == 2
     assert {item["description"] for item in saved} == {original.description, new.description}
+
+
+def test_closed_issue_assessment_is_rejected_without_ledger_change(service):
+    svc, rid, _ = service
+    run = svc.store.get(rid)
+    sha = run["base_sha"]
+    reviews = Reviews(svc.store)
+    step, _ = svc.store.start_step(rid, "reviewer", 0, sha)
+    finding = Issue(
+        id="help",
+        severity="low",
+        file="main.py",
+        line=1,
+        description="Typo in help text",
+        evidence="The displayed spelling differs from the spec.",
+        suggestion="Correct the spelling.",
+    )
+    (issue,) = reviews.apply(run, step, {"sha": sha, "issues": [finding.model_dump()]})
+    reviews.disposition(run, issue["issue_id"], "dismissed", "사용자가 검토 후 수용했습니다.")
+    before = reviews.issues(rid)
+    step, _ = svc.store.start_step(rid, "reviewer", 1, sha)
+    result = ReviewResultV2(
+        summary="review",
+        assessments=[
+            ReviewAssessment(
+                issue_id=issue["issue_id"],
+                candidate_sha=sha,
+                status="unresolved",
+                evidence="The spelling remains.",
+            )
+        ],
+    )
+    with pytest.raises(ResponseError, match="unknown or duplicate review assessment"):
+        reviews.apply(run, step, result.model_dump() | {"sha": sha, "required_assessment_ids": []})
+    assert reviews.issues(rid) == before
+    with svc.store.connection() as db:
+        assert db.execute("SELECT COUNT(*) FROM issue_assessments").fetchone()[0] == 0
 
 
 def test_similar_finding_requests_reassessment_even_with_changed_evidence():

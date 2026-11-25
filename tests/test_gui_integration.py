@@ -1,5 +1,6 @@
 """Phase 5 evidence and shared commands use only disposable Git/SQLite."""
 
+import json
 from pathlib import Path
 
 import pytest
@@ -182,8 +183,27 @@ def test_selected_review_issues_reach_next_fixer_and_keep_independent_review(ser
     descriptions = ["경계값 검증 누락", "입력 0 처리 누락", "도움말 오타"]
 
     class Agent(Reviewer):
+        def run_readonly(self, request, directory, session, stop):
+            page = session.read_test_evidence(request.context["test_evidence_id"])
+            evidence = json.loads(page["text"])
+            tests = request.context["test_result"]
+            for key in ("sha", "revision", "coverage"):
+                assert evidence[key] == tests[key]
+            return self.run(request, directory, stop)
+
+        def run_workspace(self, request, directory, session, stop):
+            value = super().run_workspace(request, directory, session, stop)
+            if request.role == "fixer":
+                (outcome,) = value.issue_outcomes
+                assert outcome.issue_id == representative
+                outcome.status = "implemented"
+                outcome.evidence = "선택한 결함의 수정 결과를 확인했습니다."
+            return value
+
         def run(self, request, directory, stop):
             value = super().run(request, directory, stop)
+            if request.role == "reviewer":
+                assert request.context["test_evidence_id"]
             if request.role == "fixer":
                 assert request.context["requested_issue_ids"] == [duplicate]
                 assert request.context["response_contract"]["issue_ids"] == [representative]
@@ -205,14 +225,33 @@ def test_selected_review_issues_reach_next_fixer_and_keep_independent_review(ser
                     )
                 ]
             elif request.role == "reviewer":
-                assert {i["issue_id"] for i in request.context["open_issues"]} == {
+                required_ids = {i["issue_id"] for i in request.context["open_issues"]}
+                assert required_ids == {
                     representative,
                     duplicate,
                     unselected,
                 }
-                value.assessments = [
-                    i for i in value.assessments if i.issue_id in {representative, duplicate}
-                ]
+                assert (
+                    set(request.context["response_contract"]["required_assessment_ids"])
+                    == required_ids
+                )
+                tests = request.context["test_result"]
+                assert tests["sha"] == request.input_sha and tests["revision"] == 1
+                assert tests["coverage"] == [{"criterion_id": "AC1", "command_ids": ["unit"]}]
+                feedback = request.context.get("response_feedback")
+                if feedback:
+                    assert unselected in feedback["error"] and "missing" in feedback["error"]
+                    assert feedback["input_sha"] == request.input_sha
+                    with svc.store.connection() as db:
+                        assert (
+                            db.execute("SELECT COUNT(*) FROM issue_assessments").fetchone()[0] == 0
+                        )
+                    for item in value.assessments:
+                        if item.issue_id == unselected:
+                            item.status = "unresolved"
+                            item.evidence = "도움말 오타가 현재 후보에 남아 있습니다."
+                else:
+                    value.assessments = [i for i in value.assessments if i.issue_id != unselected]
             return value
 
     agent = Agent()
@@ -254,9 +293,23 @@ def test_selected_review_issues_reach_next_fixer_and_keep_independent_review(ser
     runner.execute(rid)
     updated = svc.store.get(rid)
     assert updated["state"] == "waiting_approval", updated.get("error")
-    assert agent.calls[-3:] == ["fixer", "tester", "reviewer"]
+    assert agent.calls[-4:] == ["fixer", "tester", "reviewer", "reviewer"]
+    attempts = [s for s in svc.store.steps(rid) if s["role"] == "reviewer" and s["revision"] == 1]
+    assert [step["status"] for step in attempts] == ["failed", "completed"]
+    assert {step["input_sha"] for step in attempts} == {updated["final_sha"]}
+    assert set(updated["review_result"]["required_assessment_ids"]) == {
+        representative,
+        duplicate,
+        unselected,
+    }
+    with svc.store.connection() as db:
+        saved = db.execute("SELECT issue_id, step_id FROM issue_assessments").fetchall()
+    assert {tuple(row) for row in saved} == {
+        (issue_id, attempts[-1]["id"]) for issue_id in [representative, duplicate, unselected]
+    }
     assert [i["issue_id"] for i in reviews.open(rid)] == [unselected]
     svc.approve(rid)
+    assert svc.store.get(rid)["state"] == "completed"
 
 
 def test_snapshot_and_results_survive_cleanup_and_reject_tampering(completed):
@@ -357,9 +410,17 @@ def test_omitted_prior_issue_cannot_become_fixed(service):
     rid = svc.create(repo, Path(svc.store.get(old)["directory"]) / "spec.md", max_fixes=1)
     Runner(svc.store, Reviewer(block=1, omit=True), FakeTests()).execute(rid)
     run = svc.store.get(rid)
-    assert run["state"] == "needs_input" and run["error"] == "fix budget exhausted"
-    review = Results(svc.store).reviews(rid)
-    assert len(review["issues"]) == 1 and review["issues"][0]["status"] == "unresolved"
+    assert run["state"] == "needs_input"
+    assert "response repair budget exhausted" in run["error"] and "missing" in run["error"]
+    steps = [step for step in svc.store.steps(rid) if step["role"] == "reviewer"]
+    assert [step["status"] for step in steps] == ["completed", "failed", "failed"]
+    assert all("artifact" not in step["data"] for step in steps[1:])
+    (issue,) = Reviews(svc.store).issues(rid)
+    assert issue["status"] == "unresolved"
+    (historical,) = Results(svc.store).reviews(rid, steps[0]["id"])["issues"]
+    assert historical["issue_id"] == issue["issue_id"]
+    with svc.store.connection() as db:
+        assert db.execute("SELECT COUNT(*) FROM issue_assessments").fetchone()[0] == 0
     with pytest.raises(PipelineError):
         svc.approve(rid)
 

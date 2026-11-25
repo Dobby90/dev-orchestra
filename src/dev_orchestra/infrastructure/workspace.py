@@ -991,7 +991,10 @@ class ReviewEvidenceSession:
             or run["next_role"] != "reviewer"
             or run["control"]
             or not step
+            or step["role"] != "reviewer"
             or step["status"] != "running"
+            or step["input_sha"] != self.data["sha"]
+            or step["revision"] != self.data["revision"]
             or run["current_sha"] != self.data["sha"]
             or self.git.sha() != self.data["sha"]
             or run.get("revision", 0) != self.data["revision"]
@@ -1003,8 +1006,16 @@ class ReviewEvidenceSession:
         from dev_orchestra.application.results import Results
 
         value = Results(self.store).payload(run, self.data["test_step"])
+        if value.get("revision", 0) != self.data["revision"]:
+            raise PipelineError("review test evidence revision mismatch")
         # Raw code patches are deliberately not a diagnostic retrieval payload.
-        value = {key: value.get(key) for key in ["sha", "revision", "execution", "test_selection"]}
+        value = {
+            "sha": value["sha"],
+            "revision": self.data["revision"],
+            "coverage": value.get("coverage", []),
+            "execution": value.get("execution"),
+            "test_selection": value.get("test_selection"),
+        }
         text = json.dumps(value, ensure_ascii=False)
         return {
             "evidence_id": evidence_id,

@@ -25,7 +25,7 @@ from dev_orchestra.application.reviews import (
     Reviews,
     group_severity,
     unresolved_groups,
-    validate_assessment_ids,
+    validate_review_assessments,
     validate_review_findings,
 )
 from dev_orchestra.application.test_changes import TestChangeService
@@ -443,16 +443,16 @@ class Runner:
                     )
                 if role == "planner":
                     context["planning_draft"] = run.get("planning_draft")
-                review_issue_ids = None
+                required_assessment_ids = None
                 if role == "reviewer":
                     context["diff"] = git.diff(run["base_sha"], sha)
                     context["candidate_sha"] = sha
+                    context["revision"] = run.get("revision", 0)
                     if run.get("review_contract") == 2:
-                        issues = Reviews(self.store).issues(run_id)
-                        review_issue_ids = {issue["issue_id"] for issue in issues}
-                        context["open_issues"] = [
-                            issue for issue in issues if issue["status"] == "unresolved"
-                        ]
+                        context["open_issues"] = Reviews(self.store).open(run_id)
+                        required_assessment_ids = tuple(
+                            issue["issue_id"] for issue in context["open_issues"]
+                        )
                 image_paths = verified_run_images(run) if role != "tester" else ()
                 if image_paths:
                     context["design_images"] = [image["name"] for image in run["design_images"]]
@@ -503,6 +503,10 @@ class Runner:
                     "criterion_ids": [c["id"] for c in run.get("criteria", [])],
                     "command_ids": list(config.tests.commands),
                 }
+                if required_assessment_ids is not None:
+                    request.context["response_contract"]["required_assessment_ids"] = list(
+                        required_assessment_ids
+                    )
                 if role == "fixer":
                     request.context["response_contract"]["issue_ids"] = [
                         issue["issue_id"] for issue in request.context.get("open_issues", [])
@@ -538,11 +542,7 @@ class Runner:
                         )
                         if workspace_execution:
                             selection = workspace_execution["selection"]
-                    elif (
-                        role == "reviewer"
-                        and run.get("test_selection_contract")
-                        and hasattr(self.agent, "run_readonly")
-                    ):
+                    elif role == "reviewer" and hasattr(self.agent, "run_readonly"):
                         from dev_orchestra.infrastructure.workspace import ReviewEvidenceSession
 
                         readonly = ReviewEvidenceSession.create(self.store, run, step_id, step_dir)
@@ -560,13 +560,13 @@ class Runner:
                     if not workspace and (git.sha() != sha or git.dirty()):
                         raise PipelineError("read-only agent changed the worktree")
                     validate_role(role, result)
-                    if (
-                        review_issue_ids is not None
-                        and isinstance(result, ReviewResultV2)
-                        and not result.questions
-                    ):
-                        validate_assessment_ids(
-                            (item.issue_id for item in result.assessments), review_issue_ids
+                    if required_assessment_ids is not None and not result.questions:
+                        if not isinstance(result, ReviewResultV2):
+                            raise ResponseError("reviewer must return contract V2")
+                        validate_review_assessments(
+                            [item.model_dump() for item in result.assessments],
+                            required_assessment_ids,
+                            sha,
                         )
                         validate_review_findings(
                             result, request.context.get("open_issues", []), sha
@@ -744,9 +744,8 @@ class Runner:
                     )
                 )
                 with self.store.transaction() if atomic_result else nullcontext() as db:
-                    if role == "reviewer" and run.get("review_contract") == 2:
-                        if not isinstance(result, ReviewResultV2):
-                            raise PipelineError("reviewer must return contract V2")
+                    if required_assessment_ids is not None:
+                        payload["required_assessment_ids"] = list(required_assessment_ids)
                         payload["issue_states"] = Reviews(self.store).apply(run, step_id, payload)
                     if role == "tester" and results.enabled():
                         for command in payload["execution"].get("commands", []):

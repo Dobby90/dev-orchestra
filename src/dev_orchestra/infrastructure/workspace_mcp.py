@@ -57,7 +57,11 @@ class TesterWorkspaceState(Model):
     )
 
 
-READ_EVIDENCE = (ReadEvidence, "Read a bounded slice of the candidate's host test evidence.")
+READ_EVIDENCE = (
+    ReadEvidence,
+    "Read a bounded slice of this candidate's host test evidence, including criterion coverage. "
+    "Continue with offset when truncated.",
+)
 
 
 TOOLS = {

@@ -112,7 +112,9 @@ FIXER_REVIEW_GUIDANCE = (
     "Preserve it unless current code or test evidence shows a remaining defect; validation and approval "
     "still run. For other issues, use remaining_failure, linked test_failures (command IDs and cases), "
     "and previous_fix evidence, especially any blocker. Shared test_result diagnostics may be unrelated "
-    "to an individual issue. Check their SHA and revision before using them. "
+    "to an individual issue. ambiguous_test_failure_command_ids lists possible matches when the "
+    "review did not identify a unique command. Verify the cause before relying on those matches. "
+    "Check the SHA and revision of test evidence before using it. "
     "In issue_outcomes, report exactly one entry for each ID in response_contract.issue_ids, "
     "using only those top-level issue IDs. Use implemented when the candidate addresses all known "
     "failing conditions, partial when some remain, and blocked when a specific obstacle prevented "
@@ -125,6 +127,8 @@ FIXER_REVIEW_GUIDANCE = (
 )
 
 REVIEW_ISSUE_DISTINCTIONS = (
+    " Use response_contract.required_assessment_ids as the complete list of issue IDs to assess. "
+    "Assess unselected open issues too, and explicitly mark any remaining defect unresolved. "
     " When a new finding overlaps an open issue but represents an independent defect, describe its "
     "distinct failing behavior and evidence in issues. If the wording or evidence overlaps, add an "
     "issue_distinctions entry with finding_id from issues, existing_issue_id from open_issues, and "
@@ -181,6 +185,13 @@ def prompt(request: AgentRequest):
         + (
             REVIEW_ISSUE_DISTINCTIONS
             if request.context.get("review_contract") == 2 and request.role == "reviewer"
+            else ""
+        )
+        + (
+            " Check test_result.coverage against the acceptance criteria, candidate SHA and revision. "
+            "If omitted_coverage is greater than zero, read the complete candidate evidence using "
+            "workspace.read_test_evidence(test_evidence_id) and page through it with offset as needed. "
+            if request.role == "reviewer" and request.context.get("test_evidence_id")
             else ""
         )
         + design_guidance(request)
