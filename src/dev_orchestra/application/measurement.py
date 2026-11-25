@@ -2,17 +2,25 @@
 
 import json
 from datetime import datetime
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 
 from dev_orchestra.application.agent_usage import usage_view
+from dev_orchestra.application.automatic_tests import AUTOMATIC_TEST_CONTRACTS, automatic
+from dev_orchestra.application.results import Results
 from dev_orchestra.application.test_changes import checksum
-from dev_orchestra.infrastructure.files import contained
+from dev_orchestra.application.test_selection import SELECTOR_VERSION
+from dev_orchestra.application.validation import run_test_policy, run_test_policy_hash
+from dev_orchestra.domain.execution import WORKSPACE_V2
+from dev_orchestra.domain.models import PipelineError
+from dev_orchestra.infrastructure.files import contained, relative_path
+
+COMPARISON_KEY_VERSION = 2
 
 
 def _read(root, relative):
     try:
         return json.loads(contained(root, relative).read_text())
-    except (OSError, ValueError):
+    except (OSError, ValueError, PipelineError):
         return None
 
 
@@ -24,6 +32,122 @@ def _elapsed(start, finish):
         return value if value >= 0 else None
     except (ValueError, TypeError):
         return None
+
+
+def _command_signature(command):
+    cwd = command["working_directory"]
+    return command["argv"], "." if cwd == "." else relative_path(cwd), command["kind"]
+
+
+def _test_workload(run, step, result, invocations):
+    selection = result["test_selection"]
+    selector = run["test_selection_contract"] if automatic(run) else SELECTOR_VERSION
+    revision = step.get("revision", 0)
+    if (
+        selection["selector_version"] != selector
+        or selection["requested_scope"] != run.get("test_scope", "full")
+        or selection["actual_scope"] not in {"full", "affected"}
+        or selection["base_sha"] != run["base_sha"]
+        or result.get("revision", 0) != revision
+        or selection["revision"] != revision
+        or selection["candidate_sha"] != result["sha"]
+        or selection["selection_hash"]
+        != checksum({key: val for key, val in selection.items() if key != "selection_hash"})
+    ):
+        return None
+    included = selection["included"]
+    if selector in AUTOMATIC_TEST_CONTRACTS:
+        commands = selection["resolved_commands"]
+    else:
+        stage_run = run | {"revision": revision, "iteration": step["iteration"]}
+        policy = run_test_policy(stage_run)
+        if selection["policy_hash"] != run_test_policy_hash(stage_run):
+            return None
+        commands = {key: policy.commands[key].model_dump() for key in included}
+
+    execution = result["execution"]
+    actual = execution["commands"]
+    command_order = [item["command_id"] for item in actual]
+    if (
+        not included
+        or set(included) != commands.keys()
+        or len(included) != len(commands)
+        or set(command_order) != commands.keys()
+        or len(command_order) != len(commands)
+        or selection["commands_hash"] != checksum(commands)
+        or execution["status"] not in {"passed", "failed"}
+        or invocations[0]["status"] != execution["status"]
+        or [item["command_id"] for item in invocations[0]["commands"]] != command_order
+        or any(
+            item["status"] not in {"passed", "failed"}
+            or _command_signature(item) != _command_signature(commands[item["command_id"]])
+            for item in actual
+        )
+    ):
+        return None
+
+    # All selectors hash the resolved argv and working directory. Gradle can translate
+    # selected files to the same class filters, so retain canonical file identities too.
+    targets = {
+        item["command_id"]: sorted(
+            str(
+                PurePosixPath(
+                    commands[item["command_id"]]["working_directory"], relative_path(path)
+                )
+            )
+            for path in item["files"]
+        )
+        for item in selection.get("test_plan", [])
+        if item["files"]
+    }
+    return {
+        "actual_scope": selection["actual_scope"],
+        "commands_hash": selection["commands_hash"],
+        "command_order": command_order,
+        "targets": targets,
+    }
+
+
+def _comparison_key(store, run, steps, stages, conditions, scope):
+    cached = run.get("test_result") or {}
+    if (
+        run.get("execution_contract") != WORKSPACE_V2
+        or run.get("test_selection_contract")
+        not in {None, SELECTOR_VERSION, *AUTOMATIC_TEST_CONTRACTS}
+        or not cached.get("sha")
+        or cached["sha"] != run.get("current_sha")
+        or cached.get("revision", 0) != run.get("revision", 0)
+    ):
+        return None
+    workloads = []
+    latest = None
+    results = Results(store)
+    try:
+        for step, stage in zip(steps, stages, strict=True):
+            if step["role"] != "tester":
+                continue
+            invocations = stage["test_invocations"]
+            # One finalized result proves one invocation. Additional or interrupted
+            # invocations lack complete per-command workload evidence.
+            if step["status"] != "completed" or not invocations or len(invocations) != 1:
+                return None
+            latest = results.payload(run, step)
+            workload = _test_workload(run, step, latest, invocations)
+            if workload is None:
+                return None
+            workloads.append(workload)
+    except (PipelineError, KeyError, OSError, TypeError, ValueError):
+        return None
+    if latest != cached:
+        return None
+    return checksum(
+        {
+            "version": COMPARISON_KEY_VERSION,
+            "conditions": conditions,
+            "test_scope": scope,
+            "test_workloads": workloads,
+        }
+    )
 
 
 def measurement(store, run_id, *, version_label, scenario):
@@ -52,7 +176,8 @@ def measurement(store, run_id, *, version_label, scenario):
             )
         ]
     stages = []
-    for step in store.steps(run_id):
+    steps = store.steps(run_id)
+    for step in steps:
         relative = f"iterations/{step['iteration']:03}/{step['role']}/attempt-{step['attempt']:03}"
         directory = contained(root, relative)
         calls = sorted((directory / "calls").glob("call-*"))
@@ -141,14 +266,8 @@ def measurement(store, run_id, *, version_label, scenario):
         "test_scope": scope,
         "conditions": conditions,
         "validation": validation,
-        "same_scope_comparison_key": checksum(
-            {
-                **conditions,
-                "test_scope": scope,
-                "actual_scope": selection.get("actual_scope") if selection else None,
-                "required_commands": selection.get("included") if selection else None,
-            }
-        ),
+        "same_scope_comparison_version": COMPARISON_KEY_VERSION,
+        "same_scope_comparison_key": _comparison_key(store, run, steps, stages, conditions, scope),
         "usage": (
             {**total, "uncached_input_tokens": total["input_tokens"] - total["cached_input_tokens"]}
             if total is not None

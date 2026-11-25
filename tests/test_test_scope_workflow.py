@@ -191,6 +191,7 @@ def test_scope_survives_developer_tester_reviewer_fixer_and_final_approval(setup
     from dev_orchestra.application.measurement import measurement
 
     observed = measurement(svc.store, rid, version_label="candidate", scenario="normal")
+    assert observed["same_scope_comparison_key"]
     invocations = [
         item for stage in observed["stages"] for item in (stage["test_invocations"] or [])
     ]
@@ -259,6 +260,12 @@ def test_mapped_tests_bind_tester_repair_and_final_approval(setup):
     saved = run["test_result"]
     assert saved["coverage"] == [{"criterion_id": "AC1", "command_ids": ["integration"]}]
     assert len(list(Path(run["directory"]).rglob("test-*/evidence.json"))) == 1
+
+    from dev_orchestra.application.measurement import measurement
+
+    assert measurement(svc.store, rid, version_label="candidate", scenario="recovery")[
+        "same_scope_comparison_key"
+    ]
 
     step = next(step for step in svc.store.steps(rid) if step["role"] == "tester")
     path = Path(step["data"]["artifact"])

@@ -11,8 +11,10 @@ from test_workspace import setup as setup
 
 from dev_orchestra.application.measurement import measurement
 from dev_orchestra.application.service import RunService
+from dev_orchestra.application.test_selection import selected_config, selection_for_paths
 from dev_orchestra.domain.models import PipelineError
 from dev_orchestra.infrastructure.files import write
+from dev_orchestra.infrastructure.git import Git
 from dev_orchestra.infrastructure.locking import lock
 from dev_orchestra.infrastructure.migrations import SCHEMA, upgrade
 from dev_orchestra.infrastructure.schema4 import SCHEMA as SCHEMA4
@@ -128,16 +130,16 @@ def test_measurement_preserves_unknown_and_counts_failed_calls_without_contents(
     )
     assert before == (svc.store.get(rid), svc.store.steps(rid), svc.store.events(rid))
     same = measurement(svc.store, rid, version_label="baseline", scenario="recovery")
-    assert result["same_scope_comparison_key"] == same["same_scope_comparison_key"]
+    assert result["same_scope_comparison_key"] is same["same_scope_comparison_key"] is None
     svc.store.update(rid, test_scope="affected")
     other = measurement(svc.store, rid, version_label="candidate", scenario="recovery")
-    assert result["same_scope_comparison_key"] != other["same_scope_comparison_key"]
+    assert other["test_scope"] == "affected" and other["same_scope_comparison_key"] is None
     svc.store.update(
         rid, test_result={"test_selection": {"actual_scope": "full", "included": ["unit"]}}
     )
     expanded = measurement(svc.store, rid, version_label="candidate", scenario="recovery")
     assert expanded["validation"]["actual_scope"] == "full"
-    assert expanded["same_scope_comparison_key"] != other["same_scope_comparison_key"]
+    assert expanded["same_scope_comparison_key"] is None
     write(
         directory / "telemetry.json",
         {
@@ -166,6 +168,193 @@ def test_measurement_preserves_unknown_and_counts_failed_calls_without_contents(
         "step_resumed",
         "step_completed",
     ]
+
+
+def save_measured_tests(svc, run, step, attempt, selection, *, runtime_prefix=""):
+    sha = selection["candidate_sha"]
+    commands = [
+        {
+            "command_id": key,
+            "kind": command.kind,
+            "argv": command.argv,
+            "runtime_argv": [*command.argv, "--basetemp=" + runtime_prefix],
+            "working_directory": command.working_directory,
+            "status": "passed",
+            "exit_code": 0,
+            "passed": True,
+        }
+        for key, command in selected_config(run, selection).commands.items()
+    ]
+    evidence = {
+        "sha": sha,
+        "revision": run["revision"],
+        "test_selection": selection,
+        "execution": {"commands": commands, "status": "passed", "passed": True},
+    }
+    directory = Path(run["directory"]) / "iterations" / f"{run['iteration']:03}" / "tester"
+    directory /= f"attempt-{attempt:03}"
+    path = directory / "result.json"
+    svc.store.finish_step(step, sha, {"artifact": str(path), "hash": write(path, evidence)})
+    write(
+        directory / "test-invocation-fixture.json",
+        {"status": "passed", "commands": [{"command_id": item["command_id"]} for item in commands]},
+    )
+    svc.store.update(run["id"], current_sha=sha, test_result=evidence)
+    return path
+
+
+@pytest.mark.parametrize("version", range(2, 9))
+def test_measurement_distinguishes_selected_files_under_same_command(setup, version):
+    svc, rid, repo = setup
+    (repo / "tests/test_second.py").write_text("def test_second():\n    assert True\n")
+    git = Git(repo)
+    git.commit("비교용 테스트 파일 준비")
+    sha = git.sha()
+    svc.store.update(rid, base_sha=sha, test_scope="affected", test_selection_contract=version)
+    run = svc.store.get(rid)
+    step, attempt = svc.store.start_step(rid, "tester", 0, sha)
+
+    def measure(files, *, reason="조건 검증", label="candidate"):
+        selection = selection_for_paths(
+            run, sha, ["main.py"], plan=[{"command_id": "unit", "files": files, "reason": reason}]
+        )
+        save_measured_tests(
+            svc, run, step, attempt, selection, runtime_prefix=f"/tmp/{label}/adapter"
+        )
+        return measurement(
+            ReadOnlyStore(svc.store.path), rid, version_label=label, scenario="normal"
+        )
+
+    first = measure(["tests/test_main.py"])
+    same = measure(["tests/test_main.py"], reason="같은 대상 재검증", label="baseline")
+    larger = measure(["tests/test_main.py", "tests/test_second.py"])
+    key = "same_scope_comparison_key"
+    assert first["conditions"] == same["conditions"] == larger["conditions"]
+    assert first["validation"]["included"] == larger["validation"]["included"] == ["unit"]
+    assert first[key] and first[key] == same[key]
+    assert larger[key] and larger[key] != first[key]
+    assert first["same_scope_comparison_version"] == 2
+    assert "tests/test_main.py" not in json.dumps(first) and "/tmp/candidate" not in json.dumps(
+        first
+    )
+
+
+@pytest.mark.parametrize(
+    "problem",
+    [
+        "old",
+        "missing_hash",
+        "cwd_mismatch",
+        "tampered",
+        "missing_invocation",
+        "extra_invocation",
+        "stale",
+    ],
+)
+def test_measurement_marks_unverifiable_workload_incomparable(setup, problem):
+    svc, rid, _ = setup
+    run = svc.store.get(rid)
+    sha = run["base_sha"]
+    selection = selection_for_paths(run, sha, [])
+    step, attempt = svc.store.start_step(rid, "tester", 0, sha)
+    artifact = save_measured_tests(svc, run, step, attempt, selection)
+
+    def measure():
+        return measurement(
+            ReadOnlyStore(svc.store.path), rid, version_label="candidate", scenario="normal"
+        )
+
+    assert measure()["same_scope_comparison_key"]
+    if problem == "old":
+        svc.store.update(rid, test_selection_contract=99)
+    elif problem in {"missing_hash", "cwd_mismatch"}:
+        evidence = json.loads(artifact.read_text())
+        if problem == "missing_hash":
+            evidence["test_selection"].pop("commands_hash")
+        else:
+            evidence["execution"]["commands"][0]["working_directory"] = "different"
+        svc.store.finish_step(
+            step, sha, {"artifact": str(artifact), "hash": write(artifact, evidence)}
+        )
+        svc.store.update(rid, test_result=evidence)
+    elif problem == "tampered":
+        write(artifact, {})
+    elif problem == "missing_invocation":
+        artifact.with_name("test-invocation-fixture.json").unlink()
+    elif problem == "extra_invocation":
+        original = artifact.with_name("test-invocation-fixture.json")
+        write(artifact.with_name("test-invocation-extra.json"), original.read_bytes())
+    else:
+        svc.store.update(rid, revision=1)
+    assert measure()["same_scope_comparison_key"] is None
+
+
+def test_measurement_counts_workload_across_tester_stages(setup):
+    svc, rid, _ = setup
+    run = svc.store.get(rid)
+    sha = run["base_sha"]
+    selection = selection_for_paths(run, sha, [])
+    reader = ReadOnlyStore(svc.store.path)
+    step, attempt = svc.store.start_step(rid, "tester", 0, sha)
+    save_measured_tests(svc, run, step, attempt, selection)
+    single = measurement(reader, rid, version_label="single", scenario="normal")
+    step, attempt = svc.store.start_step(rid, "tester", 1, sha)
+    save_measured_tests(svc, run | {"iteration": 1}, step, attempt, selection)
+    repeated = measurement(reader, rid, version_label="repeated", scenario="normal")
+    assert single["validation"] == repeated["validation"]
+    assert repeated["same_scope_comparison_key"]
+    assert single["same_scope_comparison_key"] != repeated["same_scope_comparison_key"]
+
+
+def test_measurement_keeps_gradle_source_paths_and_class_filters(setup):
+    svc, rid, repo = setup
+    java_path = "src/test/java/example/ExampleTest.java"
+    kotlin_path = "src/test/kotlin/example/ExampleTest.kt"
+    for name, content in {
+        "settings.gradle": "rootProject.name = 'test-workload'\n",
+        "build.gradle": "plugins { id 'java' }\n",
+        java_path: "package example;\nclass ExampleTest {}\n",
+    }.items():
+        path = repo / name
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(content)
+    git = Git(repo)
+    git.commit("Gradle 비교용 테스트 준비")
+    base = git.sha()
+    config = svc.store.get(rid)["config"]
+    config["tests"]["commands"]["unit"]["argv"] = ["gradle", "test"]
+    svc.store.update(
+        rid, config=config, base_sha=base, test_scope="affected", test_selection_contract=8
+    )
+    run = svc.store.get(rid)
+    step, attempt = svc.store.start_step(rid, "tester", 0, base)
+
+    def compare(file, sha):
+        selection = selection_for_paths(
+            run,
+            sha,
+            [file],
+            plan=[{"command_id": "unit", "files": [file], "reason": "클래스 검증"}],
+        )
+        save_measured_tests(svc, run, step, attempt, selection)
+        observed = measurement(svc.store, rid, version_label="candidate", scenario="normal")
+        return selection["commands_hash"], observed["same_scope_comparison_key"]
+
+    java_hash, java_key = compare(java_path, base)
+    (repo / java_path).unlink()
+    kotlin = repo / kotlin_path
+    kotlin.parent.mkdir(parents=True)
+    kotlin.write_text("package example\nclass ExampleTest {}\n")
+    git.commit("같은 클래스의 테스트 소스 이동")
+    kotlin_hash, kotlin_key = compare(kotlin_path, git.sha())
+    assert java_hash == kotlin_hash
+    assert java_key and kotlin_key and java_key != kotlin_key
+
+    kotlin.write_text("package changed\nclass ExampleTest {}\n")
+    git.commit("선택 클래스의 패키지 변경")
+    changed_hash, changed_key = compare(kotlin_path, git.sha())
+    assert changed_hash != kotlin_hash
+    assert changed_key and changed_key != kotlin_key
 
 
 def test_running_standalone_api_blocks_activation(service):
