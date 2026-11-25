@@ -1,5 +1,6 @@
 """Real stdio host tool traffic, driven by a CLI stub without any model call."""
 
+import json
 import sys
 
 from test_workspace import setup as setup
@@ -7,6 +8,7 @@ from test_workspace import start_session
 
 from dev_orchestra.config import Codex
 from dev_orchestra.domain.models import AgentRequest
+from dev_orchestra.infrastructure import workspace_mcp
 from dev_orchestra.infrastructure.codex import CodexClient
 from dev_orchestra.infrastructure.files import write
 from dev_orchestra.infrastructure.workspace import ReviewEvidenceSession
@@ -48,10 +50,20 @@ if {role!r} == 'tester':
     assert not result.get('isError'),result
     value=json.loads(result['content'][0]['text'])
     assert value['execution']['status']=='passed'
-    result=call('tools/call',{{'name':'read_test_evidence','arguments':{{'evidence_id':value['evidence_id'],'command_id':'unit'}}}})
+    target={{'evidence_id':value['evidence_id'],'command_id':'unit'}}
+    def read(**changes):
+        return call('tools/call',{{'name':'read_test_evidence','arguments':target|changes}})
+    result=read()
     command=json.loads(result['content'][0]['text'])
     assert command['command']['status']=='passed' and command['sha']==files['candidate_sha']
     assert command['command']['junit_hash'] and json.loads(command['text'])['failure_details']==[]
+    assert read(view='diagnostics',offset=0,limit=8000)==result
+    first=json.loads(read(limit=20)['content'][0]['text'])
+    second=json.loads(read(offset=20,limit=20)['content'][0]['text'])
+    assert first['truncated'] and first['text']+second['text']==command['text'][:40]
+    named=json.loads(read(view='test_cases')['content'][0]['text'])
+    assert json.loads(named['text'])['test_cases']==['one']
+    assert read(evidence_id='private-invalid-argument')['isError']
     response={{'summary':'실제 테스트 결과 확인','questions':[],'no_change_reason':'',
                'command_ids':['unit'],'coverage':[{{'criterion_id':'AC1','command_ids':['unit']}}],
                'test_evidence_id':value['evidence_id']}}
@@ -92,6 +104,42 @@ def test_tester_metadata_and_actual_tool_execution_over_stdio(setup, tmp_path):
     result, sha, _ = session.finish(response)
     assert result.command_ids == ["unit"] and sha == request.input_sha
     assert session.load_test_result(response)["execution"]["passed"]
+    metrics_text = (session.path.parent / "tool-metrics.json").read_text()
+    metrics = json.loads(metrics_text)["read_test_evidence"]
+    assert metrics["calls"] == 6 and metrics["failed_calls"] == 1
+    assert metrics["argument_bytes"] > 0 and metrics["result_bytes"] > 0
+    pages = metrics["pages"]
+    assert [
+        (p["target"]["view"], p["target"]["offset"], p["target"]["limit"], p["calls"])
+        for p in pages
+    ] == [
+        ("diagnostics", 0, 8000, 2),
+        ("diagnostics", 0, 20, 1),
+        ("diagnostics", 20, 20, 1),
+        ("test_cases", 0, 8000, 1),
+    ]
+    assert all(p["target"]["evidence_id"] == response.test_evidence_id for p in pages)
+    assert all(p["target"]["command_id"] == "unit" for p in pages)
+    assert all(p["duration_seconds"] >= 0 for p in pages)
+    assert metrics["duration_seconds"] >= sum(p["duration_seconds"] for p in pages)
+    assert all(value not in metrics_text for value in ["private-invalid-argument", "junit_hash"])
+
+
+def test_tester_evidence_metrics_keep_legacy_counts_and_bound_distinct_pages(monkeypatch):
+    monkeypatch.setattr(workspace_mcp, "MAX_TRACKED_EVIDENCE_PAGES", 2)
+    metrics = {"calls": 5, "argument_bytes": 10, "result_bytes": 20}
+    for evidence_id in ("test-first", "test-second", "test-third", "test-first"):
+        workspace_mcp.observe_evidence_read(metrics, {"evidence_id": evidence_id}, False, 0.25)
+
+    assert metrics["calls"] == 5
+    assert metrics["duration_seconds"] == 1
+    assert metrics["untracked_page_reads"] == 1
+    assert [
+        (p["target"]["evidence_id"], p["calls"], p["duration_seconds"]) for p in metrics["pages"]
+    ] == [
+        ("test-first", 2, 0.5),
+        ("test-second", 1, 0.25),
+    ]
 
 
 def test_reviewer_stdio_exposes_only_readonly_candidate_evidence(setup, tmp_path):

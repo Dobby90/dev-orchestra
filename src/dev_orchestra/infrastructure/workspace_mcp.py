@@ -6,6 +6,7 @@ identity come from a private host descriptor, never from tool arguments.
 
 import json
 import sys
+import time
 from typing import Annotated, Literal
 
 from pydantic import Field, ValidationError
@@ -14,6 +15,8 @@ from dev_orchestra.domain.models import Model, PipelineError, TestChange, TestTa
 from dev_orchestra.infrastructure.files import write
 from dev_orchestra.infrastructure.process import execution_scope, redact
 from dev_orchestra.infrastructure.workspace import MAX_HASH_PATHS, load_session
+
+MAX_TRACKED_EVIDENCE_PAGES = 128
 
 
 class EditFile(Model):
@@ -163,22 +166,46 @@ def _dispatch(session, request):
         return {"isError": True, "content": [{"type": "text", "text": message}]}
 
 
+def observe_evidence_read(entry, arguments, failed, elapsed):
+    entry["duration_seconds"] = entry.get("duration_seconds", 0) + elapsed
+    entry["failed_calls"] = entry.get("failed_calls", 0) + int(failed)
+    if failed:
+        return
+    # Successful reads have passed the host's evidence and command checks.
+    # Normalize omitted defaults so equivalent requests share a counter.
+    target = ReadCommandEvidence.model_validate(arguments, strict=True).model_dump()
+    pages = entry.setdefault("pages", [])
+    for page in pages:
+        if page["target"] == target:
+            page["calls"] += 1
+            page["duration_seconds"] += elapsed
+            return
+    if len(pages) < MAX_TRACKED_EVIDENCE_PAGES:
+        pages.append({"target": target, "calls": 1, "duration_seconds": elapsed})
+    else:
+        entry["untracked_page_reads"] = entry.get("untracked_page_reads", 0) + 1
+
+
 def dispatch(session, request):
+    started = time.monotonic()
     result = _dispatch(session, request)
+    elapsed = time.monotonic() - started
     if request.get("method") == "tools/call":
         try:
             # Observation only: counts include retries and errors, not just successful tools.
             path = session.path.parent / "tool-metrics.json"
             values = json.loads(path.read_text()) if path.exists() else {}
-            name = request["params"]["name"]
+            params = request["params"]
+            name = params["name"]
+            arguments = params.get("arguments", {})
             entry = values.setdefault(name, {"calls": 0, "argument_bytes": 0, "result_bytes": 0})
             entry["calls"] += 1
             entry["argument_bytes"] += len(
-                json.dumps(request["params"].get("arguments", {}), ensure_ascii=False).encode(
-                    "utf-8"
-                )
+                json.dumps(arguments, ensure_ascii=False).encode("utf-8")
             )
             entry["result_bytes"] += len(json.dumps(result, ensure_ascii=False).encode("utf-8"))
+            if name == "read_test_evidence" and session.data["role"] == "tester":
+                observe_evidence_read(entry, arguments, result.get("isError", False), elapsed)
             write(path, values)
         except (OSError, ValueError, TypeError, KeyError):
             pass  # Metrics never change the completed host operation or its evidence.

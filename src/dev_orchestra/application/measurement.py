@@ -1,4 +1,4 @@
-"""Read-only, size-only observations for reproducible offline comparisons."""
+"""Read-only observations for reproducible offline comparisons."""
 
 import json
 from datetime import datetime
