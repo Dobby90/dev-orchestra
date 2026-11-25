@@ -370,7 +370,9 @@ export function ReviewPanel({
                       ? "독립 재검증으로 해결"
                       : item.status === "dismissed"
                         ? "사용자 제외"
-                        : "미해결"}
+                        : item.verification_pending
+                          ? "검증 대기"
+                          : "미해결"}
                   </span>
                 </header>
                 <h3>{item.description}</h3>

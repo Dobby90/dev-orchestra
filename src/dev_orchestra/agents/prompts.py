@@ -99,7 +99,7 @@ AUTOMATIC_TESTS = (
 
 RULES = {
     "planner": "Analyze requirements, existing code and AGENTS.md conventions. Return a detailed Markdown implementation plan and unique acceptance criteria IDs. Build on planning_draft and settled clarifications. Ask only unresolved questions that block safe implementation; batch them together. For routine implementation choices, follow repository conventions and document reasonable assumptions in the plan. Identify existing test expectations that conflict with changed requirements and map them to acceptance criteria. Plan the required test expectation updates with reasons tied to acceptance criteria; do not ask for intermediate test-change approval. Once blocking questions are answered, return the completed plan with questions empty.",
-    "reviewer": "Independently review the supplied cumulative Run diff and directly affected code; inspect necessary surrounding functions, callers, contracts and tests against PRD and acceptance criteria: bugs, concurrency/transactions, exceptions, performance, security, missing tests. Return only actionable evidence-backed issues with severity, file and line. Independently verify every test expectation change against the PRD and acceptance criteria, including test_change_records applied automatically and legacy approved_test_changes. Report unrelated assertion removal, skips, weaker coverage, or failures hidden by test edits as actionable issues. Never edit source or run tests. For review_contract=2, return schema_version=2 and assess every open issue exactly once in assessments using the host issue_id from open_issues, current candidate_sha, status resolved/unresolved and concrete evidence. Keep the existing issue_id when the same defect persists, including when the file or line moves or the conditions for reproducing it narrow. State which conditions are fixed and which still fail, with the relevant code and test evidence. Reserve issues for newly discovered independent defects, including a separate defect at the same location. Disappearance is never proof of resolution. Do not invent issue IDs.",
+    "reviewer": "Independently review the supplied cumulative Run diff and directly affected code; inspect necessary surrounding functions, callers, contracts and tests against PRD and acceptance criteria: bugs, concurrency/transactions, exceptions, performance, security, missing tests. Return only actionable evidence-backed issues with severity, file and line. Independently verify every test expectation change against the PRD and acceptance criteria, including test_change_records applied automatically and legacy approved_test_changes. Report unrelated assertion removal, skips, weaker coverage, or failures hidden by test edits as actionable issues. Never edit source or run tests. For review_contract=2, return schema_version=2 and assess every open issue exactly once in assessments using the host issue_id from open_issues, current candidate_sha, status resolved/unresolved and concrete evidence. Keep the existing issue_id when the same defect persists, including when the file or line moves or the conditions for reproducing it narrow. State which conditions are fixed and which still fail, with the relevant code and test evidence. When citing a failing host test, quote the recorded command ID in backticks and give the exact test case name or recorded file path when available. Reserve issues for newly discovered independent defects, including a separate defect at the same location. Disappearance is never proof of resolution. Do not invent issue IDs.",
 }
 
 
@@ -108,8 +108,11 @@ FIXER_REVIEW_GUIDANCE = (
     "Each top-level issue represents one defect. Use related_unresolved_issues as additional "
     "evidence for the same defect. "
     "Check the assessment's candidate_sha and revision, and verify the current workspace before editing. "
-    "An issue with host status unresolved can still require successful validation after the Reviewer "
-    "observed a code fix. Use the assessment and status_note together. "
+    "For verification_pending issues, the Reviewer confirmed the code fix for the assessed candidate. "
+    "Preserve it unless current code or test evidence shows a remaining defect; validation and approval "
+    "still run. For other issues, use remaining_failure, linked test_failures (command IDs and cases), "
+    "and previous_fix evidence, especially any blocker. Shared test_result diagnostics may be unrelated "
+    "to an individual issue. Check their SHA and revision before using them. "
     "In issue_outcomes, report exactly one entry for each ID in response_contract.issue_ids, "
     "using only those top-level issue IDs. Use implemented when the candidate addresses all known "
     "failing conditions, partial when some remain, and blocked when a specific obstacle prevented "
@@ -261,6 +264,7 @@ def continuation_prompt(request):
         task["design_images"] = request.context["design_images"]
     if request.role == "fixer":
         task["open_issues"] = request.context.get("open_issues", [])
+        task["test_result"] = request.context.get("test_result")
     return (
         "Continue the same host-owned role in its designated worktree. Your shell remains read-only. "
         "Recheck candidate SHA and actual files with workspace_state. Preserve already implemented "

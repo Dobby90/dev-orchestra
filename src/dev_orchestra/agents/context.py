@@ -46,6 +46,7 @@ def role_context(request):
         if tests:
             context["test_result"] = {
                 "sha": tests.get("sha"),
+                "revision": tests.get("revision", 0),
                 "execution": execution_summary(tests.get("execution", {})),
                 "test_selection": tests.get("test_selection"),
                 "evidence_reference": "test-result.json",

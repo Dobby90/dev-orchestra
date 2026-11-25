@@ -474,7 +474,7 @@ class Runner:
                 if selection:
                     request.context["test_selection"] = selection
                 if role == "fixer" and run.get("review_contract") == 2:
-                    request.context["open_issues"] = Reviews(self.store).fixer_issues(run)
+                    request.context.update(Reviews(self.store).fixer_context(run, sha))
                 from dev_orchestra.agents.context import role_context
 
                 role_context(request)

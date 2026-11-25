@@ -156,3 +156,89 @@ def test_linking_groups_keeps_direct_links_and_rejects_invalid_ids(service):
     assert issue["issue_id"] == second
     events = svc.store.events(rid)
     assert sum(event["kind"] == "issue.duplicate_linked" for event in events) == 2
+
+
+def test_fixer_distinguishes_pending_code_fix_and_links_verified_failure(service):
+    svc, rid, _ = service
+    run = svc.store.get(rid)
+    root = Path(run["directory"])
+    sha = run["base_sha"]
+    initial_step, _ = save_review(svc, rid, 0, issues=[finding(1, "high"), finding(2, "medium")])
+    reviews = Reviews(svc.store)
+    fixed, active = [item["issue_id"] for item in reviews.open(rid)]
+
+    def save_stage(role, data):
+        step, _ = svc.store.start_step(rid, role, 1, sha)
+        artifact = root / f"{role}-{step}.json"
+        checksum = write(artifact, data)
+        svc.store.finish_step(step, sha, {"artifact": str(artifact), "hash": checksum})
+        return artifact
+
+    blocked = {
+        "issue_id": active,
+        "status": "blocked",
+        "evidence": "호스트가 공유 파일 편집을 차단했습니다.",
+    }
+    save_stage("fixer", {"sha": sha, "revision": 0, "issue_outcomes": [blocked]})
+    tests = {
+        "sha": sha,
+        "revision": 0,
+        "execution": {
+            "passed": False,
+            "commands": [
+                {
+                    "command_id": "unit-ui",
+                    "passed": False,
+                    "status": "failed",
+                    "failure_details": [
+                        {"name": "restores focus", "message": "expected button focus"},
+                        {"name": "unrelated failure", "message": "different case"},
+                    ],
+                },
+                {"command_id": "unit-other", "passed": False, "failures": ["other failure"]},
+            ],
+        },
+    }
+    tester_artifact = save_stage("tester", tests)
+    svc.store.update(rid, test_result=tests)
+    remaining = "팝업을 닫으면 포커스가 사라집니다. `unit-ui`의 `restores focus` 실패."
+    review_step, _ = save_review(
+        svc,
+        rid,
+        1,
+        assessments=[
+            assessment(fixed, "resolved", sha),
+            assessment(active, "unresolved", sha) | {"evidence": remaining},
+        ],
+    )
+    run = svc.store.get(rid)
+    context = reviews.fixer_context(run, sha)
+    pending, unresolved = context["open_issues"]
+    assert pending["verification_pending"] and pending["status"] == "unresolved"
+    assert "remaining_failure" not in pending
+    assert not unresolved["verification_pending"] and unresolved["remaining_failure"] == remaining
+    (failure,) = unresolved["test_failures"]
+    assert failure["command_id"] == "unit-ui"
+    assert failure["cases"] == [{"name": "restores focus", "message": "expected button focus"}]
+    assert unresolved["previous_fix"] == blocked | {"candidate_sha": sha, "revision": 0}
+    assert context["test_result"] == tests
+
+    for step_id in (None, review_step):
+        fixed_view, active_view = Results(svc.store).reviews(rid, step_id)["issues"]
+        assert fixed_view["verification_pending"] and fixed_view["status"] == "unresolved"
+        assert not active_view["verification_pending"]
+    assert not Results(svc.store).reviews(rid, initial_step)["issues"][0]["verification_pending"]
+
+    newer = reviews.fixer_context(run | {"revision": 1}, sha)
+    assert not newer["open_issues"][0]["verification_pending"]
+    assert not newer["open_issues"][1]["test_failures"]
+    assert newer["test_result"] is None
+
+    link(svc, rid, active, fixed)
+    (group,) = reviews.fixer_context(svc.store.get(rid), sha)["open_issues"]
+    assert group["issue_id"] == fixed and group["evidence_issue_id"] == active
+    assert not group["verification_pending"] and group["previous_fix"]["status"] == "blocked"
+
+    write(tester_artifact, tests | {"summary": "checksum mismatch"})
+    tampered = reviews.fixer_context(run, sha)
+    assert tampered["test_result"] is None and not tampered["open_issues"][1]["test_failures"]

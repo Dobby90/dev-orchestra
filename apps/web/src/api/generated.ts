@@ -1891,6 +1891,8 @@ export interface components {
             resolution_evidence: string | null;
             /** Status Note */
             status_note?: string | null;
+            /** Verification Pending */
+            verification_pending?: boolean | null;
             /** Assessed Sha */
             assessed_sha?: string | null;
             /** Assessed Step Id */

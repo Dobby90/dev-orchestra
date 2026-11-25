@@ -5630,6 +5630,17 @@
             ],
             "title": "Status Note"
           },
+          "verification_pending": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Verification Pending"
+          },
           "assessed_sha": {
             "anyOf": [
               {

@@ -1,6 +1,7 @@
 """Host issue identity and explicit, SHA-bound independent reassessment."""
 
 import json
+import re
 import uuid
 from collections import Counter
 from difflib import SequenceMatcher
@@ -12,6 +13,48 @@ from dev_orchestra.infrastructure.process import redact, sanitize
 from dev_orchestra.infrastructure.store import now
 
 SEVERITY_ORDER = {"low": 0, "medium": 1, "high": 2, "critical": 3}
+VERIFICATION_PENDING_NOTE = "코드 수정 확인, 동일 SHA·revision 테스트 통과 근거 대기"
+
+
+def verification_pending(issue, candidate_sha, review_step_id):
+    return (
+        issue["status"] == "unresolved"
+        and issue.get("status_note") == VERIFICATION_PENDING_NOTE
+        and issue.get("assessed_sha") == candidate_sha
+        and issue.get("assessed_step_id") == review_step_id
+    )
+
+
+def cited_case(text, name):
+    return bool(name and re.search(r"(?<![\w./-])" + re.escape(name) + r"(?![\w/-]|\.\w)", text))
+
+
+def linked_test_failures(evidence, tests):
+    linked = []
+    for command in (tests or {}).get("execution", {}).get("commands", []):
+        command_id = command.get("command_id")
+        if not command_id or command.get("passed") is not False:
+            continue
+        details = command.get("failure_details") or [
+            {"name": name} for name in command.get("failures", [])
+        ]
+        cases = [
+            {"name": case["name"], "message": (case.get("message") or "")[:500]}
+            for case in details
+            if case.get("name")
+            and any(cited_case(evidence, case.get(key)) for key in ("name", "file", "classname"))
+        ]
+        if cases or f"`{command_id}`" in evidence:
+            linked.append(
+                {
+                    "command_id": command_id,
+                    "status": command.get("status"),
+                    "cases": cases[:10],
+                    "omitted_cases": max(0, len(cases) - 10),
+                    "error": (command.get("error") or "")[:500],
+                }
+            )
+    return linked
 
 
 def unresolved_groups(run, issues):
@@ -166,42 +209,129 @@ class Reviews:
         )
 
     def fixer_issues(self, run):
+        candidate_sha = run.get("current_sha") or run["base_sha"]
+        return self.fixer_context(run, candidate_sha)["open_issues"]
+
+    def fixer_context(self, run, candidate_sha):
+        from dev_orchestra.application.results import Results
+
         issues = self.open(run["id"])
-        self._include_latest_assessments(run, issues)
+        steps = self.store.steps(run["id"])
+        results = Results(self.store)
+        revision = run.get("revision", 0)
+        current_steps = {
+            step["role"]: step
+            for step in steps
+            if step["role"] in {"tester", "reviewer"}
+            and step["status"] == "completed"
+            and step["output_sha"] == candidate_sha
+            and step["revision"] == revision
+        }
+        tests = self._fixer_test_result(results, run, current_steps.get("tester"))
+        self._include_latest_assessments(results, run, steps, issues)
+        review_step = current_steps.get("reviewer", {})
+        for issue in issues:
+            latest = issue.get("latest_assessment", {})
+            pending = latest.get("reviewer_status") == "resolved" and verification_pending(
+                issue, candidate_sha, review_step.get("id")
+            )
+            issue["verification_pending"] = pending
+            if not pending:
+                if issue.get("status_note") == VERIFICATION_PENDING_NOTE:
+                    issue["status_note"] = None
+                remaining = (
+                    latest["evidence"]
+                    if latest.get("reviewer_status") == "unresolved"
+                    else issue["evidence"]
+                )
+                issue["remaining_failure"] = remaining
+                issue["test_failures"] = linked_test_failures(remaining, tests)
+
         blocking = run["config"]["review"]["blocking_severities"]
+        groups = unresolved_groups(run, issues)
+        previous = self._previous_fixer_outcomes(results, run, steps, groups)
         result = []
-        for representative, group in unresolved_groups(run, issues).items():
-            if len(group) == 1 and group[0]["issue_id"] == representative:
-                result.append(group[0])
-                continue
+        for representative, group in groups.items():
             focus = max(
                 group,
                 key=lambda issue: (
+                    not issue["verification_pending"],
                     issue["assessed_step_id"] if issue.get("latest_assessment") else -1,
                     issue["issue_id"] == representative,
                 ),
             )
-            result.append(
-                focus
-                | {
-                    "issue_id": representative,
-                    "severity": group_severity(group, blocking),
-                    "evidence_issue_id": focus["issue_id"],
-                    "related_unresolved_issues": [issue for issue in group if issue is not focus],
+            item = dict(focus)
+            if len(group) != 1 or focus["issue_id"] != representative:
+                item.update(
+                    {
+                        "issue_id": representative,
+                        "severity": group_severity(group, blocking),
+                        "evidence_issue_id": focus["issue_id"],
+                        "related_unresolved_issues": [
+                            issue for issue in group if issue is not focus
+                        ],
+                    }
+                )
+            if not item["verification_pending"] and representative in previous:
+                item["previous_fix"] = previous[representative]
+            result.append(item)
+        return {"open_issues": result, "test_result": tests}
+
+    @staticmethod
+    def _fixer_test_result(results, run, step):
+        from dev_orchestra.application.test_selection import verify_selection, verify_tool_evidence
+
+        if not step:
+            return None
+        try:
+            payload = results.payload(run, step)
+            if payload.get("revision", 0) != step["revision"]:
+                return None
+            verify_tool_evidence(run, step, payload)
+            verify_selection(run, payload)
+            return payload
+        except (PipelineError, KeyError, OSError, ValueError):
+            return None
+
+    @staticmethod
+    def _previous_fixer_outcomes(results, run, steps, groups):
+        previous = {}
+        links = run.get("review_issue_duplicates", {})
+        pending = set(groups)
+        for step in reversed(steps):
+            if not pending:
+                break
+            if step["role"] != "fixer" or step["status"] != "completed":
+                continue
+            try:
+                payload = results.payload(run, step)
+            except PipelineError:
+                continue
+            if payload.get("revision", 0) != step["revision"]:
+                continue
+            # A current representative takes precedence over an alias in the same result.
+            outcomes = {
+                outcome["issue_id"]: outcome for outcome in payload.get("issue_outcomes", [])
+            }
+            for issue_id in sorted(outcomes, key=lambda key: key in links):
+                representative = links.get(issue_id, issue_id)
+                if representative not in pending:
+                    continue
+                previous[representative] = outcomes[issue_id] | {
+                    "candidate_sha": step["output_sha"],
+                    "revision": step["revision"],
                 }
-            )
-        return result
+                pending.remove(representative)
+        return previous
 
-    def _include_latest_assessments(self, run, issues):
-        from dev_orchestra.application.results import Results
-
+    @staticmethod
+    def _include_latest_assessments(results, run, steps, issues):
         assessed_steps = {i["assessed_step_id"] for i in issues if "assessed_step_id" in i}
         if not assessed_steps:
             return
 
         assessments = {}
-        results = Results(self.store)
-        for step in self.store.steps(run["id"]):
+        for step in steps:
             if (
                 step["id"] not in assessed_steps
                 or step["role"] != "reviewer"
@@ -256,7 +386,7 @@ class Reviews:
                 data = existing[key] | {
                     "resolution_evidence": evidence if resolved else None,
                     "status_note": (
-                        "코드 수정 확인, 동일 SHA·revision 테스트 통과 근거 대기"
+                        VERIFICATION_PENDING_NOTE
                         if valid and assessment["status"] == "resolved" and not resolved
                         else None
                     ),

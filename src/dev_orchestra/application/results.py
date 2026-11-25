@@ -162,6 +162,11 @@ class Results:
         return base
 
     def reviews(self, run_id, step_id=None):
+        from dev_orchestra.application.reviews import (
+            VERIFICATION_PENDING_NOTE,
+            verification_pending,
+        )
+
         run, step, history = self.selected(run_id, "reviewer", step_id)
         base = {
             "status": "not_run",
@@ -199,10 +204,17 @@ class Results:
             ]
         if step_id is None and payload.get("schema_version") == 2:
             issues = self.current_review_issues(run_id, issues)
+        presented = []
+        for issue in issues:
+            pending = verification_pending(issue, step["output_sha"], step["id"])
+            note = issue.get("status_note")
+            if note == VERIFICATION_PENDING_NOTE and not pending:
+                note = None
+            presented.append(issue | {"verification_pending": pending, "status_note": note})
         base.update(
             status="available",
             summary=payload.get("summary", ""),
-            issues=issues,
+            issues=presented,
             legacy_incomplete=payload.get("schema_version") != 2,
         )
         return base

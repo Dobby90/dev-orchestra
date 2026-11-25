@@ -595,6 +595,7 @@ class ReviewIssueView(BaseModel):
     source_sha: str
     resolution_evidence: str | None
     status_note: str | None = None
+    verification_pending: bool | None = None
     assessed_sha: str | None = None
     assessed_step_id: int | None = None
 
