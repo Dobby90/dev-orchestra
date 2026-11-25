@@ -503,6 +503,62 @@ def test_coverage_cannot_replace_host_criterion_mapping_with_unrelated_regressio
     Runner.validate_test_result(mapped, result, Config.model_validate(mapped["config"]), selection)
 
 
+@pytest.mark.parametrize(
+    "version,mapping,covered,valid",
+    [
+        (8, ["integration"], ["a"], False),
+        (8, ["integration", "a"], ["a"], True),
+        (8, ["types"], ["a"], True),
+        (8, ["types"], ["types"], False),
+        (8, [], ["a"], True),
+        (7, ["integration"], ["a"], True),
+    ],
+    ids=["wrong-test", "alternative", "build-and-test", "build-only", "unmapped", "v7"],
+)
+def test_automatic_criterion_mapping_in_response_and_stored_result(
+    mapped, setup, version, mapping, covered, valid
+):
+    from dev_orchestra.agents.contracts import ResponseError
+    from dev_orchestra.config import Config
+    from dev_orchestra.domain.models import AgentResult
+    from dev_orchestra.orchestration.runner import Runner
+
+    svc, rid, repo = setup
+    sha = svc.store.get(rid)["base_sha"]
+    mapped.update(repo=str(repo), base_sha=sha, test_selection_contract=version)
+    mapped["config"]["tests"]["affected"]["criterion_commands"] = (
+        {"AC1": mapping} if mapping else {}
+    )
+    selection = selection_for_paths(
+        mapped, sha, ["src/a/model.py"], plan=[{"command_id": "a", "reason": "coverage"}]
+    )
+    assert "integration" in selection["included"]  # A configured dependent of a.
+    config = Config.model_validate(mapped["config"])
+    result = AgentResult(
+        summary="tests",
+        command_ids=selection["included"],
+        coverage=[Coverage(criterion_id="AC1", command_ids=covered)],
+    )
+    payload = result.model_dump() | {
+        "sha": sha,
+        "test_selection": selection,
+        "execution": {
+            "commands": [
+                dict(command_id=key, **command)
+                for key, command in selection["resolved_commands"].items()
+            ]
+        },
+    }
+    if valid:
+        Runner.validate_test_result(mapped, result, config, selection)
+        verify_selection(mapped, payload)
+    else:
+        with pytest.raises(ResponseError, match="coverage"):
+            Runner.validate_test_result(mapped, result, config, selection)
+        with pytest.raises(PipelineError, match="coverage"):
+            verify_selection(mapped, payload)
+
+
 def test_test_runner_setup_error_is_retained_as_unavailable(setup):
     session, _ = start_session(setup, "tester")
 

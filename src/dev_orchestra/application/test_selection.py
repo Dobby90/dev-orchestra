@@ -2,15 +2,18 @@
 
 from fnmatch import fnmatchcase
 
+from pydantic import ValidationError
+
 from dev_orchestra.application.automatic_tests import (
     AUTOMATIC_TEST_CONTRACTS,
+    CRITERION_TEST_CONTRACT,
     GRADLE_TEST_CONTRACTS,
     automatic,
     model_selection,
 )
 from dev_orchestra.application.test_changes import checksum
 from dev_orchestra.application.validation import run_test_policy, run_test_policy_hash
-from dev_orchestra.domain.models import PipelineError
+from dev_orchestra.domain.models import Coverage, PipelineError
 from dev_orchestra.infrastructure.git import Git
 
 SELECTOR_VERSION = 1
@@ -154,7 +157,37 @@ def selected_config(run, selection):
     )
 
 
-def verify_selection(run, payload):
+def verify_coverage(run, coverage, ids, test_ids, required_criterion_tests):
+    criteria = {criterion["id"] for criterion in run["criteria"]}
+    covered = {item.criterion_id: item.command_ids for item in coverage}
+    if (
+        len(coverage) != len(criteria)
+        or set(covered) != criteria
+        or any(
+            not ids.issuperset(commands) or test_ids.isdisjoint(commands)
+            for commands in covered.values()
+        )
+    ):
+        raise PipelineError(
+            "missing acceptance criterion test coverage: "
+            f"missing={sorted(criteria - set(covered))}, unexpected={sorted(set(covered) - criteria)}, "
+            f"expected={sorted(criteria)}, received={[item.criterion_id for item in coverage]}, "
+            f"allowed_commands={sorted(ids)}, received_commands={covered}; "
+            "include each criterion exactly once with at least one configured test command"
+        )
+    missing = {
+        key: sorted(test_ids.intersection(alternatives))
+        for key, alternatives in required_criterion_tests.items()
+        if set(covered[key]).isdisjoint(alternatives)
+    }
+    if missing:
+        raise PipelineError(
+            f"coverage must reference an executed mapped test per criterion: {missing}"
+        )
+
+
+def verify_selection(run, payload, *, execution_only=False):
+    """Verify host execution and the Tester coverage recorded in a stage result."""
     selection = payload.get("test_selection")
     if not selection:
         if run.get("test_selection_contract"):
@@ -180,6 +213,21 @@ def verify_selection(run, payload):
         policy = commands[command["command_id"]]
         if command.get("argv") != policy.argv or command.get("kind", "test") != policy.kind:
             raise PipelineError("test execution command differs from immutable policy")
+    if not execution_only and run.get("test_selection_contract") == CRITERION_TEST_CONTRACT:
+        try:
+            coverage = [Coverage.model_validate(item) for item in payload.get("coverage", [])]
+        except (TypeError, ValidationError) as error:
+            raise PipelineError("invalid acceptance criterion test coverage") from error
+        verify_coverage(
+            run,
+            coverage,
+            set(actual),
+            {key for key, command in commands.items() if command.kind == "test"},
+            {
+                item["criterion_id"]: item["command_ids"]
+                for item in selection.get("required_criterion_test_commands", [])
+            },
+        )
 
 
 def verify_tool_evidence(run, step, payload):

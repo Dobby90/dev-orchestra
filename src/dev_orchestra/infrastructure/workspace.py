@@ -782,6 +782,7 @@ class WorkspaceSession:
                 "test_selection": value["selection"],
                 "execution": value["execution"],
             },
+            execution_only=True,
         )
         for command in value["execution"].get("commands", []):
             if (

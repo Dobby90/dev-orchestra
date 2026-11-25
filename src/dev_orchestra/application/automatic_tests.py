@@ -22,8 +22,10 @@ from dev_orchestra.domain.models import PipelineError, TestTarget
 from dev_orchestra.infrastructure.git import Git
 from dev_orchestra.infrastructure.java import java_tool
 
-AUTOMATIC_TEST_CONTRACT = 7
-BUNDLE_SCOPE_CONTRACTS = {6, AUTOMATIC_TEST_CONTRACT}
+CRITERION_TEST_CONTRACT = 8
+AUTOMATIC_TEST_CONTRACT = CRITERION_TEST_CONTRACT
+PROJECT_SCOPE_CONTRACTS = {7, CRITERION_TEST_CONTRACT}
+BUNDLE_SCOPE_CONTRACTS = {6, *PROJECT_SCOPE_CONTRACTS}
 FRONTEND_PACKAGE_CONTRACTS = {5, *BUNDLE_SCOPE_CONTRACTS}
 JEST_TEST_CONTRACTS = {4, *FRONTEND_PACKAGE_CONTRACTS}
 GRADLE_TEST_CONTRACTS = {3, *JEST_TEST_CONTRACTS}
@@ -39,7 +41,19 @@ def automatic(run):
 
 
 def prepare_selected_only(run):
-    return automatic(run) and run["test_selection_contract"] == AUTOMATIC_TEST_CONTRACT
+    return automatic(run) and run["test_selection_contract"] in PROJECT_SCOPE_CONTRACTS
+
+
+def criterion_test_commands(run, tests):
+    if run.get("test_selection_contract") != CRITERION_TEST_CONTRACT or not tests.affected:
+        return {}
+    mapping = tests.affected.criterion_commands
+    test_ids = {key for key, command in tests.commands.items() if command.kind == "test"}
+    return {
+        criterion["id"]: sorted(mapped_tests)
+        for criterion in run.get("criteria", [])
+        if (mapped_tests := test_ids.intersection(mapping.get(criterion["id"], [])))
+    }
 
 
 def candidate_file(run, candidate, name):
@@ -86,7 +100,7 @@ def deferred_builds(run, candidate, tests):
             and version not in BUNDLE_SCOPE_CONTRACTS
             or not lockfile
             or script != "build"
-            and not (version == AUTOMATIC_TEST_CONTRACT and script == "build:production")
+            and not (version in PROJECT_SCOPE_CONTRACTS and script == "build:production")
         ):
             continue
         try:
@@ -339,7 +353,7 @@ def mandatory_checks(run, candidate, tests, paths, gradle, deferred):
     scoped_frontend = version in FRONTEND_PACKAGE_CONTRACTS
     directories = {key: PurePosixPath(tests.commands[key].working_directory) for key in deferred}
     nested = set(directories.values()) - {PurePosixPath(".")}
-    root_bundle = version == AUTOMATIC_TEST_CONTRACT and any(
+    root_bundle = version in PROJECT_SCOPE_CONTRACTS and any(
         directories[key] == PurePosixPath(".") and kind == "bundle"
         for key, kind in deferred.items()
     )
@@ -400,7 +414,7 @@ def model_selection(run, candidate, paths, plan=None, input_error=None):
         )
     version = run.get("test_selection_contract", 2)
     gradle = (
-        GradleSelection(run, candidate, project_graph=version == AUTOMATIC_TEST_CONTRACT)
+        GradleSelection(run, candidate, project_graph=version in PROJECT_SCOPE_CONTRACTS)
         if version in GRADLE_TEST_CONTRACTS
         and any(java_tool(c) == "gradle" for c in tests.commands.values())
         else None
@@ -411,7 +425,7 @@ def model_selection(run, candidate, paths, plan=None, input_error=None):
     if policy:
         eligible = (
             {key for key, command in tests.commands.items() if command.kind == "check"}
-            if version == AUTOMATIC_TEST_CONTRACT
+            if version in PROJECT_SCOPE_CONTRACTS
             else deferred.keys()
         )
         checks.update(
@@ -422,6 +436,11 @@ def model_selection(run, candidate, paths, plan=None, input_error=None):
                 for key in policy.criterion_commands.get(criterion["id"], [])
             }
         )
+    required_criterion_tests = criterion_test_commands(run, tests)
+    required_coverage = [
+        {"criterion_id": key, "command_ids": alternatives}
+        for key, alternatives in required_criterion_tests.items()
+    ]
     if plan is None:
         pending = {
             "selector_version": version,
@@ -452,6 +471,12 @@ def model_selection(run, candidate, paths, plan=None, input_error=None):
                 else " Jest supports exact test files. Include documentation builds whenever the change "
                 "or acceptance criteria affect the generated documentation."
             )
+        if required_criterion_tests:
+            pending["required_criterion_test_commands"] = required_coverage
+            pending["instructions"] += (
+                " For each criterion in required_criterion_test_commands, execute at least one "
+                "listed test command and cite an executed listed command in that criterion's coverage."
+            )
         return pending
     targets = [TestTarget.model_validate(item) for item in plan]
     if any(not item.reason.strip() or len(item.files) != len(set(item.files)) for item in targets):
@@ -462,6 +487,15 @@ def model_selection(run, candidate, paths, plan=None, input_error=None):
     if not any(tests.commands[key].kind == "test" for key in ids):
         raise PipelineError("automatic test plan must execute real tests")
     chosen = command_dependencies(set(ids) | checks, policy)
+    missing = {
+        key: alternatives
+        for key, alternatives in required_criterion_tests.items()
+        if chosen.isdisjoint(alternatives)
+    }
+    if missing:
+        raise PipelineError(
+            f"test plan must execute at least one mapped test per acceptance criterion: {missing}"
+        )
     commands, decisions = {}, {}
     by_id = {item.command_id: item for item in targets}
     for key in sorted(chosen):
@@ -528,4 +562,6 @@ def model_selection(run, candidate, paths, plan=None, input_error=None):
         "test_plan": [item.model_dump() for item in targets],
         "resolved_commands": commands,
     }
+    if required_criterion_tests:
+        value["required_criterion_test_commands"] = required_coverage
     return value | {"selection_hash": checksum(value)}

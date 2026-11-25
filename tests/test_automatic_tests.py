@@ -87,6 +87,35 @@ def test_no_mapping_selects_only_related_files_and_retains_required_checks(candi
     assert "tests/test_selected.py" in selection["command_reasons"]["unit"]
 
 
+@pytest.mark.parametrize("version", [7, 8])
+def test_mapped_test_is_required_in_finalized_selection(candidate, version):
+    svc, rid, repo = candidate
+    run = svc.store.get(rid)
+    run.update(test_selection_contract=version, criteria=[{"id": "AC1"}])
+    tests = run["config"]["tests"]
+    tests["commands"]["integration"] = tests["commands"].pop("unrelated")
+    tests["affected"] = {"criterion_commands": {"AC1": ["integration", "static"]}}
+    sha = run["base_sha"]
+
+    pending = select_tests(run, repo, sha)
+    if version == 8:
+        assert pending.get("required_criterion_test_commands") == [
+            {"criterion_id": "AC1", "command_ids": ["integration"]}
+        ]
+        with pytest.raises(PipelineError, match="AC1.*integration"):
+            select_tests(run, repo, sha, plan=plan())
+    else:
+        assert "required_criterion_test_commands" not in pending
+        assert select_tests(run, repo, sha, plan=plan())["included"] == ["static", "unit"]
+
+    tests["affected"]["dependencies"] = {"integration": ["unit"]}
+    selection = select_tests(run, repo, sha, plan=plan())
+    assert selection["included"] == ["integration", "static", "unit"]
+
+    tests["affected"] = {"criterion_commands": {"AC1": ["integration", "unit"]}}
+    assert select_tests(run, repo, sha, plan=plan())["included"] == ["static", "unit"]
+
+
 @pytest.mark.parametrize(
     "target", ["../secret.py", "/tmp/test.py", "--help", "tests/*.py", "tests/missing.py"]
 )
@@ -185,7 +214,8 @@ def test_jest_exact_file_selection_preserves_package_invocation_and_evidence(can
         select_tests(run, repo, git.sha(), plan=target)
 
 
-def test_jest_keeps_frontend_builds_scoped_to_affected_packages(candidate):
+@pytest.mark.parametrize("version", [7, 8])
+def test_jest_keeps_frontend_builds_scoped_to_affected_packages(candidate, version):
     svc, rid, repo = candidate
     manifests = {
         ".": {
@@ -215,7 +245,7 @@ def test_jest_keeps_frontend_builds_scoped_to_affected_packages(candidate):
     git = Git(repo)
     git.commit("독립 패키지 빌드 준비")
     run = svc.store.get(rid)
-    run.update(base_sha=git.sha(), test_selection_contract=AUTOMATIC_TEST_CONTRACT)
+    run.update(base_sha=git.sha(), test_selection_contract=version)
     tests = run["config"]["tests"]
     tests["commands"]["unit"]["argv"] = [
         "yarn",
@@ -286,7 +316,7 @@ def test_jest_keeps_frontend_builds_scoped_to_affected_packages(candidate):
     assert select_tests(run, repo, sha, plan=check_plan)["included"] == ["app", "static", "unit"]
     run["test_selection_contract"] = 4
     assert model_selection(run, sha, app_change, check_plan)["excluded"] == ["manual", "unrelated"]
-    run["test_selection_contract"] = AUTOMATIC_TEST_CONTRACT
+    run["test_selection_contract"] = version
     popup.write_text(popup.read_text().replace("<p>changed</p>", '<img src="./alarm.svg">'))
     git.commit("번들 자산 참조 변경")
     assert select_tests(run, repo, git.sha(), plan=check_plan)["included"] == [
@@ -417,7 +447,10 @@ def test_gradle_respects_qualified_tasks_from_build_root(gradle_candidate):
         select_tests(run, repo, sha, plan=targets)
 
 
-def test_gradle_common_changes_retain_transitive_consumers_and_settings_inputs(gradle_candidate):
+@pytest.mark.parametrize("version", [7, 8])
+def test_gradle_common_changes_retain_transitive_consumers_and_settings_inputs(
+    gradle_candidate, version
+):
     run, repo, _ = gradle_candidate
     (repo / "settings.gradle").write_text(
         "include 'api', 'api:remapped', 'core'\n"
@@ -432,7 +465,7 @@ def test_gradle_common_changes_retain_transitive_consumers_and_settings_inputs(g
     git = Git(repo)
     git.commit("Gradle 논리 경로와 의존 관계 준비")
     sha = git.sha()
-    run.update(base_sha=sha, test_selection_contract=AUTOMATIC_TEST_CONTRACT)
+    run.update(base_sha=sha, test_selection_contract=version)
 
     expected = ["api_build", "api_child_build", "core_build"]
     assert (
@@ -461,9 +494,15 @@ def test_gradle_common_changes_retain_transitive_consumers_and_settings_inputs(g
     assert model_selection(run, sha, ["api/src/main/java/example/Api.java"])[
         "mandatory_command_ids"
     ] == ["api_build", "api_child_build"]
+    build_only = model_selection(run, sha, ["api/src/main/java/example/Api.java"], gradle_plan())
+    assert "api_child_build" in build_only["included"]
+    assert "required_criterion_test_commands" not in build_only
 
 
-def test_selected_preparation_groups_jest_and_production_build_once(candidate, monkeypatch):
+@pytest.mark.parametrize("version", [7, 8])
+def test_selected_preparation_groups_jest_and_production_build_once(
+    candidate, monkeypatch, version
+):
     from test_validation_policy import commit_files, detect
 
     from dev_orchestra.infrastructure import dependencies
@@ -509,9 +548,7 @@ def test_selected_preparation_groups_jest_and_production_build_once(candidate, m
     tests["output_paths"] += sorted(
         {p for item in detected.values() for p in item.output_paths} - set(tests["output_paths"])
     )
-    svc.store.update(
-        rid, config=config, base_sha=git.sha(), test_selection_contract=AUTOMATIC_TEST_CONTRACT
-    )
+    svc.store.update(rid, config=config, base_sha=git.sha(), test_selection_contract=version)
     run = svc.store.get(rid)
     target = plan(["tests/demo.spec.js"])
     assert model_selection(run, git.sha(), ["tests/demo.spec.js"], target)["included"] == ["unit"]

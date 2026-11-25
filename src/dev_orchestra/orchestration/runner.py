@@ -13,6 +13,7 @@ from dev_orchestra.application.automatic_tests import (
     AUTOMATIC_TEST_CONTRACTS,
     automatic,
     command_dependencies,
+    criterion_test_commands,
     deferred_builds,
     prepare_selected_only,
 )
@@ -898,6 +899,8 @@ class Runner:
 
     @staticmethod
     def validate_test_result(run, result, config, selection=None):
+        from dev_orchestra.application.test_selection import verify_coverage
+
         if run.get("test_selection_contract") == 2 and not (selection or {}).get("selection_hash"):
             plan_ids = {item.command_id for item in result.test_plan}
             if (
@@ -920,21 +923,13 @@ class Runner:
             raise ResponseError(
                 f"tester command_ids mismatch: expected={sorted(reported_ids)}, received={result.command_ids}"
             )
-        criteria = {c["id"] for c in run["criteria"]}
         test_ids = {k for k, v in config.tests.commands.items() if v.kind == "test" and k in ids}
-        coverage = {c.criterion_id: c.command_ids for c in result.coverage}
-        if (
-            len(result.coverage) != len(criteria)
-            or set(coverage) != criteria
-            or any(not v or not set(v) <= ids or not set(v) & test_ids for v in coverage.values())
-        ):
-            raise ResponseError(
-                "missing acceptance criterion test coverage: "
-                f"missing={sorted(criteria - set(coverage))}, unexpected={sorted(set(coverage) - criteria)}, "
-                f"expected={sorted(criteria)}, received={[c.criterion_id for c in result.coverage]}, "
-                f"allowed_commands={sorted(ids)}, received_commands={coverage}; "
-                "include each criterion exactly once with at least one configured test command"
+        try:
+            verify_coverage(
+                run, result.coverage, ids, test_ids, criterion_test_commands(run, config.tests)
             )
+        except PipelineError as error:
+            raise ResponseError(str(error)) from error
         if (
             selection
             and selection.get("selector_version") == 1
@@ -942,8 +937,8 @@ class Runner:
         ):
             mapping = config.tests.affected.criterion_commands
             if any(
-                not set(commands) & set(mapping[key]) & test_ids
-                for key, commands in coverage.items()
+                not set(item.command_ids) & set(mapping[item.criterion_id]) & test_ids
+                for item in result.coverage
             ):
                 raise ResponseError("coverage must reference the host criterion-to-test mapping")
 
