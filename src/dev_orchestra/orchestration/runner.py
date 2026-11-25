@@ -337,9 +337,10 @@ class Runner:
                 if step["output_sha"] != sha:
                     raise PipelineError("completed checkpoint SHA changed")
                 artifact = Path(step["data"]["artifact"])
-                if not artifact.exists() or digest(artifact.read_bytes()) != step["data"]["hash"]:
+                raw = artifact.read_bytes() if artifact.exists() else b""
+                if not raw or digest(raw) != step["data"]["hash"]:
                     raise PipelineError("checkpoint artifact checksum mismatch")
-                payload = json.loads(artifact.read_text())
+                payload = json.loads(raw)
             else:
                 if (
                     role == "developer"
@@ -469,15 +470,6 @@ class Runner:
                     context=context,
                     design_image_paths=image_paths,
                 )
-                from dev_orchestra.application.test_selection import select_tests
-
-                selection = (
-                    select_tests(run, worktree, git.sha())
-                    if role == "tester" and run.get("test_selection_contract")
-                    else None
-                )
-                if selection:
-                    request.context["test_selection"] = selection
                 if role == "fixer" and run.get("review_contract") == 2:
                     request.context.update(Reviews(self.store).fixer_context(run, sha))
                 from dev_orchestra.agents.context import role_context
@@ -521,9 +513,6 @@ class Runner:
                         request.context["response_contract"]["run_tests_tool"] = (
                             "workspace.run_tests"
                         )
-                        request.context["response_contract"]["command_ids"] = (
-                            selection["included"] if selection else list(config.tests.commands)
-                        )
                     else:
                         request.context["response_contract"]["checkpoint_tool"] = (
                             "workspace.checkpoint_commit"
@@ -534,6 +523,7 @@ class Runner:
                         config.tests.commands
                     )
                 result = None
+                selection = None
                 try:
                     if workspace:
                         result, workspace_sha, workspace_commits, workspace_execution = (
@@ -808,6 +798,7 @@ class Runner:
                     test_evidence = None
                     if request.role == "tester":
                         policy, test_evidence = session.test_policy_and_evidence()
+                        data = session.data
                         request.context["test_selection"] = policy
                         if (
                             policy.get("selection_hash")
@@ -824,7 +815,7 @@ class Runner:
                         "continuing": data.get("continuing", False),
                         "metadata_only": data.get("metadata_only", False),
                         "has_edits": session.has_edits(),
-                        "candidate_sha": session.git.sha(),
+                        "candidate_sha": data["current_sha"],
                         "completed_units": [c["summary"][:1000] for c in data["commits"][-5:]],
                         "preserved_files": {
                             name: value
@@ -884,7 +875,7 @@ class Runner:
                             request.role != "tester"
                             or bool(session.data.get("test_evidence"))
                             and not session.changed_files()
-                            and session.read_test_payload()["sha"] == session.git.sha()
+                            and session.read_test_payload()["sha"] == session.data["current_sha"]
                         )
                     ),
                     repair_pending=True,

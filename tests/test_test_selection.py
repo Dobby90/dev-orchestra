@@ -257,9 +257,74 @@ def test_tester_workspace_state_returns_only_requested_hashes(setup):
     for name in ("../outside", ".git/config", "build/results.xml", ".env", "node_modules/index.js"):
         with pytest.raises(PipelineError):
             session.workspace_state([name])
-    (session.root / "main.py").write_text("external edit\n")
+    import os
+
+    outside_lookup = session.root / "main.py"
+    original = outside_lookup.stat()
+    outside_lookup.write_bytes(b"external\n")
+    os.utime(outside_lookup, ns=(original.st_atime_ns, original.st_mtime_ns))
+    assert outside_lookup.stat().st_size == original.st_size
     with pytest.raises(PipelineError, match="unrecognized workspace changes"):
         session.workspace_state(paths)
+
+
+def test_tester_revalidates_evidence_at_each_boundary_with_single_reads(setup, monkeypatch):
+    from collections import Counter
+
+    from test_workflow import FakeTests
+
+    class Tests(FakeTests):
+        def run(self, worktree, config, directory, stop):
+            value = super().run(worktree, config, directory, stop)
+            directory.mkdir()
+            junit = directory / "unit.junit.xml"
+            raw = b'<testsuite><testcase name="one"/></testsuite>'
+            junit.write_bytes(raw)
+            value["commands"][0].update(
+                junit_path=str(junit), junit_hash=digest(raw), failed=0, skipped=0
+            )
+            return value
+
+    session, _ = start_session(setup, "tester")
+    session._test_runner = Tests()
+    reads = Counter()
+    original_open = Path.open
+
+    def count_open(path, mode="r", *args, **kwargs):
+        if mode.startswith("r") and path.name in {"evidence.json", "unit.junit.xml"}:
+            reads[path.name] += 1
+        return original_open(path, mode, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "open", count_open)
+    expected = {"evidence.json": 1, "unit.junit.xml": 1}
+    value = session.run_tests(["unit"])
+    assert reads == expected
+    reads.clear()
+    response = WorkspaceTestResult(
+        summary="실행 근거 확인", command_ids=["unit"], test_evidence_id=value["evidence_id"]
+    )
+    session.finish(response)
+    assert reads == expected
+    reads.clear()
+    session.load_test_result(response)
+    assert reads == expected
+
+    directory = session.path.parent / value["evidence_id"]
+    junit = directory / "unit.junit.xml"
+    raw = junit.read_bytes()
+    junit.write_bytes(raw.replace(b"one", b"two"))
+    with pytest.raises(PipelineError, match="JUnit evidence checksum mismatch"):
+        session.load_test_result(response)
+    junit.write_bytes(raw)
+    evidence = directory / "evidence.json"
+    raw = evidence.read_bytes()
+    evidence.write_bytes(raw + b" ")
+    with pytest.raises(PipelineError, match="test tool evidence checksum mismatch"):
+        session.load_test_result(response)
+    evidence.write_bytes(raw)
+    session.git.call("commit", "--allow-empty", "-m", "외부 변경")
+    with pytest.raises(PipelineError, match="HEAD changed"):
+        session.load_test_result(response)
 
 
 @pytest.mark.parametrize("kind", ["passed", "failed", "parse_error", "timeout"])

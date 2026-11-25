@@ -76,9 +76,10 @@ class Results:
         try:
             root = Path(run["directory"])
             path = contained(root, str(Path(step["data"]["artifact"]).relative_to(root)))
-            if digest(path.read_bytes()) != step["data"]["hash"]:
+            raw = path.read_bytes()
+            if digest(raw) != step["data"]["hash"]:
                 raise PipelineError("result evidence modified")
-            value = json.loads(path.read_text())
+            value = json.loads(raw)
             if value["sha"] != step["output_sha"]:
                 raise PipelineError("result SHA mismatch")
             return sanitize(value)

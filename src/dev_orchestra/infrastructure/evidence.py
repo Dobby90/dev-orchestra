@@ -19,9 +19,10 @@ def checkpoints(store, run):
                 continue
             data = step["data"]
             artifact = Path(data["artifact"])
-            if digest(artifact.read_bytes()) != data["hash"]:
+            raw = artifact.read_bytes()
+            if digest(raw) != data["hash"]:
                 raise PipelineError("checkpoint artifact modified (checksum mismatch)")
-            payload = json.loads(artifact.read_text())
+            payload = json.loads(raw)
             if payload["sha"] != step["output_sha"]:
                 raise PipelineError("checkpoint SHA mismatch")
             if payload.get("design_image_hash") != design.get("design_image_hash"):

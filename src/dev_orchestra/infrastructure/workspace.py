@@ -125,14 +125,15 @@ class WorkspaceSession:
         tracked = list(filter(None, git.call("ls-files", "-z").split("\0")))
         if any(in_paths(name, outputs) or dependency_path(name) for name in tracked):
             raise PipelineError("output paths hide tracked source files")
+        common = git.common().resolve()
         data = {
             "run_id": run["id"],
             "worktree": run["worktree"],
             "repo": run["repo"],
             "branch": run["branch"],
-            "common": str(git.common().resolve()),
+            "common": str(common),
             "worktree_identity": directory_identity(run["worktree"]),
-            "common_identity": directory_identity(git.common()),
+            "common_identity": directory_identity(common),
             "git_link_hash": digest((Path(run["worktree"]) / ".git").read_bytes()),
             "role": request.role,
             "iteration": request.iteration,
@@ -221,7 +222,7 @@ class WorkspaceSession:
             return {"candidate_sha": self.data["current_sha"], "files": hashes}
         return {
             "input_sha": self.data["input_sha"],
-            "candidate_sha": self.git.sha(),
+            "candidate_sha": self.data["current_sha"],
             "files": self.data["files"],
             "checkpoint_count": len(self.data["commits"]),
             "completed_units": [c["summary"][:1000] for c in self.data["commits"][-5:]],
@@ -326,8 +327,8 @@ class WorkspaceSession:
             raise PipelineError("workspace Run stopped")
         if (
             self.git.call("branch", "--show-current") != self.data["branch"]
-            or str(self.git.common().resolve()) != self.data["common"]
-            or Git(Path(run["repo"])).common().resolve() != self.git.common().resolve()
+            or str(common := self.git.common().resolve()) != self.data["common"]
+            or Git(Path(run["repo"])).common().resolve() != common
             or self.git.sha()
             != (acknowledging["sha"] if acknowledging else self.data["current_sha"])
         ):
@@ -632,15 +633,16 @@ class WorkspaceSession:
         from dev_orchestra.application.test_selection import select_tests
 
         self.reload()
-        self.guard()
+        run = self.guard()
         if self.data["role"] != "tester":
             raise PipelineError("test tools are restricted to tester")
+        candidate = self.data["current_sha"]
         if self.data.get("test_evidence") and not self.changed_files():
             value = self.read_test_payload()
-            if value["sha"] == self.git.sha():
-                self.validate_test_payload(value)
+            if value["sha"] == candidate:
+                self._validate_test_payload(value, run, changed=[])
                 return value["selection"], self.data["test_evidence"]
-        return select_tests(self.store.get(self.run_id), self.root, self.git.sha()), None
+        return select_tests(run, self.root, candidate), None
 
     def run_tests(self, command_ids, test_plan=None, commit_message=""):
         from dev_orchestra.application.automatic_tests import (
@@ -656,7 +658,7 @@ class WorkspaceSession:
         from dev_orchestra.infrastructure.test_runner import TestRunner
 
         self.reload()
-        self.guard()
+        run = self.guard()
         if self.data.get("metadata_only"):
             raise PipelineError("metadata repair must reuse host test evidence")
         if self.data.get("testing"):
@@ -667,16 +669,17 @@ class WorkspaceSession:
         if pending:
             self.checkpoint_commit(
                 "tests-" + str(len(self.data["commits"])),
-                self.git.sha(),
+                self.data["current_sha"],
                 {name: self.data["files"][name]["hash"] for name in pending},
                 describe_commit(commit_message, "", pending),
                 "테스트 변경 파일: " + ", ".join(pending),
             )
-        run = self.store.get(self.run_id)
+            run = self.store.get(self.run_id)
+        candidate = self.data["current_sha"]
         selection = select_tests(
             run,
             self.root,
-            self.git.sha(),
+            candidate,
             plan=[item.model_dump() if hasattr(item, "model_dump") else item for item in test_plan]
             if test_plan is not None
             else None,
@@ -690,7 +693,12 @@ class WorkspaceSession:
         if self.data.get("test_evidence"):
             previous = self.read_test_payload()
             if previous["selection"] == selection:
-                self.validate_test_payload(previous)
+                self._validate_test_payload(
+                    previous,
+                    run,
+                    changed=self.changed_files() if pending else pending,
+                    selection=selection,
+                )
                 return self.test_summary(previous)
         import uuid
 
@@ -714,7 +722,7 @@ class WorkspaceSession:
                 if action := stop():
                     raise StopRequested(action)
                 self.guard()
-            elif deferred := deferred_builds(run, self.git.sha(), tests):
+            elif deferred := deferred_builds(run, candidate, tests):
                 runner.prepare(
                     self.root,
                     tests.model_copy(
@@ -747,10 +755,10 @@ class WorkspaceSession:
             self.reload()
             self.data["testing"] = False
             self.save()
-        self.guard()
+        run = self.guard()
         value = {
             "evidence_id": evidence_id,
-            "sha": self.git.sha(),
+            "sha": self.data["current_sha"],
             "revision": run.get("revision", 0),
             "selection": selection,
             "execution": execution,
@@ -759,71 +767,53 @@ class WorkspaceSession:
         evidence_hash = write(path, value)
         self.data["test_evidence"] = {"id": evidence_id, "hash": evidence_hash}
         self.save()
-        self.validate_test_payload(value)
+        value = self.read_test_payload()
+        self._validate_test_payload(value, run, changed=self.changed_files())
         return self.test_summary(value)
 
     def read_test_payload(self):
+        from dev_orchestra.application.test_selection import read_tool_evidence
+
         evidence = self.data.get("test_evidence")
         if not evidence:
             raise PipelineError("tester must run host tests and inspect actual results")
-        raw = contained(self.path.parent, evidence["id"] + "/evidence.json").read_bytes()
-        if digest(raw) != evidence["hash"]:
-            raise PipelineError("test evidence checksum mismatch")
-        return json.loads(raw)
+        path = contained(self.path.parent, evidence["id"] + "/evidence.json")
+        return read_tool_evidence(path, evidence["hash"])
 
-    def validate_test_payload(self, value):
-        from dev_orchestra.application.test_selection import select_tests, verify_selection
+    def _validate_test_payload(self, value, run, *, changed, selection=None):
+        from dev_orchestra.application.automatic_tests import automatic
+        from dev_orchestra.application.test_selection import (
+            select_tests,
+            verify_selected_execution,
+            verify_tool_artifacts,
+        )
 
-        if (
-            value["sha"] != self.git.sha()
-            or self.changed_files()
-            or value["selection"]
-            != select_tests(
-                self.store.get(self.run_id),
-                self.root,
-                self.git.sha(),
-                plan=value["selection"].get("test_plan"),
-            )
-        ):
+        candidate = self.data["current_sha"]
+        if value["sha"] != candidate or changed:
             raise PipelineError("test evidence is stale; run tests on the final candidate")
-        verify_selection(
-            self.store.get(self.run_id),
-            {
-                "sha": value["sha"],
-                "revision": value["revision"],
-                "test_selection": value["selection"],
-                "execution": value["execution"],
-            },
-            execution_only=True,
-        )
-        for command in value["execution"].get("commands", []):
-            if (
-                command.get("junit_path")
-                and digest(Path(command["junit_path"]).read_bytes()) != command["junit_hash"]
-            ):
-                raise PipelineError("JUnit evidence checksum mismatch")
-
-        from dev_orchestra.application.test_selection import verify_tool_evidence
-
-        verify_tool_evidence(
-            self.store.get(self.run_id),
-            {"data": {"artifact": str(self.path.parent / "result.json")}},
-            {
-                "sha": value["sha"],
-                "revision": value["revision"],
-                "test_selection": value["selection"],
-                "execution": value["execution"],
-                "test_evidence_reference": self.data["test_evidence"],
-            },
-        )
+        if selection is None:
+            selection = select_tests(
+                run, self.root, candidate, plan=value["selection"].get("test_plan")
+            )
+        if value["selection"] != selection:
+            raise PipelineError("test evidence is stale; run tests on the final candidate")
+        if value["revision"] != run.get("revision", 0):
+            raise PipelineError("test selection SHA, scope, revision or policy mismatch")
+        if automatic(run) and not selection.get("selection_hash"):
+            raise PipelineError("automatic test selection is not finalized")
+        verify_selected_execution(run, selection, value["execution"])
+        directory = contained(self.path.parent, self.data["test_evidence"]["id"])
+        verify_tool_artifacts(directory, value)
 
     def load_test_result(self, response):
         self.reload()
-        self.guard()
+        return self._load_test_result(response, self.guard())
+
+    def _load_test_result(self, response, run):
         value = self.read_test_payload()
         if response.test_evidence_id != value["evidence_id"]:
             raise ResponseError("tester must reference the actual host test evidence")
-        self.validate_test_payload(value)
+        self._validate_test_payload(value, run, changed=self.changed_files())
         return value
 
     @staticmethod
@@ -839,7 +829,7 @@ class WorkspaceSession:
 
     def read_test_evidence(self, evidence_id, offset=0, limit=8000, command_id=None):
         self.reload()
-        self.guard()
+        run = self.guard()
         if (
             self.data["role"] != "tester"
             or not self.data.get("test_evidence")
@@ -853,7 +843,7 @@ class WorkspaceSession:
         if command_id is not None:
             if value["evidence_id"] != evidence_id:
                 raise PipelineError("test evidence identity mismatch")
-            self.validate_test_payload(value)
+            self._validate_test_payload(value, run, changed=self.changed_files())
             command = next(
                 (
                     item
@@ -896,7 +886,7 @@ class WorkspaceSession:
         role = self.data["role"]
         model = workspace_response_model(role)
         response = model.model_validate(response.model_dump(), strict=True)
-        self.guard()
+        run = self.guard()
         if response.questions:
             if self.data.get("metadata_only"):
                 raise ResponseError(
@@ -919,9 +909,8 @@ class WorkspaceSession:
                 self.data["commits"],
             )
         if role == "tester":
-            self.load_test_result(response)
-        files = self.changed_files()
-        if files:
+            self._load_test_result(response, run)
+        elif files := self.changed_files():
             self.checkpoint_commit(
                 "host-final",
                 self.data["current_sha"],

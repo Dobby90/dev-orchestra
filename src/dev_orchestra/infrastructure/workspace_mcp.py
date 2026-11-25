@@ -108,7 +108,7 @@ def workspace_tools(role, metadata_only=False):
         "workspace_state": (
             (
                 TesterWorkspaceState,
-                "Pass paths to get candidate SHA and requested source hashes (null for missing files). Omit paths for full state.",
+                f"Batch needed paths in one call (up to {MAX_HASH_PATHS}) to get candidate SHA and requested source hashes (null for missing files). Omit paths for full state.",
             )
             if tester
             else (Empty, "Read current source hashes and confirmed commits.")

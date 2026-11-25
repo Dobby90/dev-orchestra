@@ -195,11 +195,15 @@ def design_guidance(request):
 
 
 def tester_instructions(request, state):
+    hashes = (
+        " If you need file hashes, pass all needed paths together to "
+        "workspace.workspace_state(paths=[...]) in batches of up to 64. "
+    )
     if state.get("metadata_only"):
         return (
-            " Read workspace.workspace_state for hashes and workspace.test_policy for the recorded "
-            "selection. Reuse the test_evidence ID in recovery without rerunning tests. "
-            + TEST_REPORT
+            hashes
+            + " Read workspace.test_policy for the recorded selection. Reuse the test_evidence ID "
+            "in recovery without rerunning tests. " + TEST_REPORT
         )
     execution = (
         AUTOMATIC_TEST_EXECUTION
@@ -216,7 +220,7 @@ def tester_instructions(request, state):
         " Edit only test_paths to add missing behavior coverage. Production code and validation policy "
         "are read-only. "
         + EDIT_WORKSPACE
-        + " For a bounded hash lookup use workspace.workspace_state(paths=[...]). "
+        + hashes
         + TEST_PROTECTION
         + execution
         + " The host commits pending test edits and runs allowlisted commands. Supply the test "
