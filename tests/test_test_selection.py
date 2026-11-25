@@ -124,7 +124,16 @@ def test_tool_evidence_validates_junit_and_runtime_adapter_files(tmp_path, conta
     evidence.mkdir()
     junit = evidence / "unit.junit.xml"
     junit.write_text('<testsuite><testcase name="one"/></testsuite>')
-    command = {"junit_path": str(junit), "junit_hash": digest(junit.read_bytes())}
+    command = {
+        "junit_path": str(junit),
+        "junit_hash": digest(junit.read_bytes()),
+        "total": 1,
+        "failed": 0,
+        "skipped": 0,
+        "exit_code": 0,
+        "passed": True,
+        "status": "passed",
+    }
     if container:
         command["runtime_adapters"] = ["docker"]
         command["container_environment"] = {"image_id": "sha256:" + "b" * 64}

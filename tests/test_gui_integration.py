@@ -28,7 +28,7 @@ class ReportTests(FakeTests):
         retained.parent.mkdir(parents=True, exist_ok=True)
         retained.write_text(junit_bundle([report]))
         result["commands"][0].update(
-            junit_path=str(retained), junit_hash=digest(retained.read_bytes())
+            junit_path=str(retained), junit_hash=digest(retained.read_bytes()), failed=0, skipped=0
         )
         return result
 

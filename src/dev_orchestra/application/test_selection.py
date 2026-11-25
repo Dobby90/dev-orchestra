@@ -236,6 +236,7 @@ def verify_tool_evidence(run, step, payload):
     from pathlib import Path
 
     from dev_orchestra.infrastructure.files import contained, digest
+    from dev_orchestra.infrastructure.test_runner import verify_junit_artifact
 
     reference = payload.get("test_evidence_reference")
     if not reference:
@@ -267,8 +268,7 @@ def verify_tool_evidence(run, step, payload):
             junit = contained(
                 path.parent, str(Path(command["junit_path"]).relative_to(path.parent))
             )
-            if digest(junit.read_bytes()) != command["junit_hash"]:
-                raise PipelineError("JUnit evidence checksum mismatch")
+            verify_junit_artifact(junit, command)
         for adapter in command.get("runtime_adapters", []):
             if adapter == "docker":
                 # Container metadata is already bound to the checksummed execution record.
