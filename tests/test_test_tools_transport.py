@@ -37,10 +37,17 @@ call('initialize')
 tools={{tool['name'] for tool in call('tools/list')['tools']}}
 if {role!r} == 'tester':
     assert tools == {{'edit_file','run_tests','test_policy','read_test_evidence','workspace_state'}}
+    state=call('tools/call',{{'name':'workspace_state','arguments':{{'paths':['tests/test_main.py']}}}})
+    files=json.loads(state['content'][0]['text'])
+    assert set(files) == {{'candidate_sha','files'}} and set(files['files']) == {{'tests/test_main.py'}}
     result=call('tools/call',{{'name':'run_tests','arguments':{{'command_ids':['unit']}}}})
     assert not result.get('isError'),result
     value=json.loads(result['content'][0]['text'])
     assert value['execution']['status']=='passed'
+    result=call('tools/call',{{'name':'read_test_evidence','arguments':{{'evidence_id':value['evidence_id'],'command_id':'unit'}}}})
+    command=json.loads(result['content'][0]['text'])
+    assert command['command']['status']=='passed' and command['sha']==files['candidate_sha']
+    assert command['command']['junit_hash'] and json.loads(command['text'])['failure_details']==[]
     response={{'summary':'실제 테스트 결과 확인','questions':[],'no_change_reason':'',
                'command_ids':['unit'],'coverage':[{{'criterion_id':'AC1','command_ids':['unit']}}],
                'test_evidence_id':value['evidence_id']}}

@@ -29,12 +29,17 @@ from dev_orchestra.infrastructure.files import contained, digest, write
 from dev_orchestra.infrastructure.filesystem_identity import directory_identity
 from dev_orchestra.infrastructure.git import Git
 from dev_orchestra.infrastructure.process import redact, sanitize
-from dev_orchestra.infrastructure.secret_files import public_environment_example, secret_path
+from dev_orchestra.infrastructure.secret_files import (
+    public_environment_example,
+    readable_environment_example,
+    secret_path,
+)
 from dev_orchestra.infrastructure.store import Store
 
 DEPENDENCIES = {"node_modules", ".venv", "__pycache__", ".mypy_cache", ".ruff_cache"}
 JEST_CONFIG = re.compile(r"jest\.config\.(?:[cm]?[jt]s|json)")
 JEST_JUNIT = re.compile(r"""(['"])jest-junit\1""")
+MAX_HASH_PATHS = 64
 
 
 def jest_junit_references(name, content):
@@ -190,9 +195,25 @@ class WorkspaceSession:
         else:
             self.data = json.loads(self.path.read_text())
 
-    def workspace_state(self):
+    def workspace_state(self, paths=None):
         self.reload()
         self.guard()
+        if paths is not None:
+            if self.data["role"] != "tester" or not 1 <= len(paths) <= MAX_HASH_PATHS:
+                raise PipelineError("workspace hash lookup range or role denied")
+            hashes = {}
+            for name in paths:
+                path = contained(self.root, name)
+                if (
+                    str(path.relative_to(self.root)) != name
+                    or in_paths(name, self.data["outputs"])
+                    or dependency_path(name)
+                    or secret_path(name)
+                    and not readable_environment_example(path, name)
+                ):
+                    raise PipelineError("workspace hash lookup path denied")
+                hashes[name] = self.data["files"].get(name, {}).get("hash")
+            return {"candidate_sha": self.data["current_sha"], "files": hashes}
         return {
             "input_sha": self.data["input_sha"],
             "candidate_sha": self.git.sha(),
@@ -740,10 +761,10 @@ class WorkspaceSession:
         evidence = self.data.get("test_evidence")
         if not evidence:
             raise PipelineError("tester must run host tests and inspect actual results")
-        path = self.path.parent / evidence["id"] / "evidence.json"
-        if digest(path.read_bytes()) != evidence["hash"]:
+        raw = contained(self.path.parent, evidence["id"] + "/evidence.json").read_bytes()
+        if digest(raw) != evidence["hash"]:
             raise PipelineError("test evidence checksum mismatch")
-        return json.loads(path.read_text())
+        return json.loads(raw)
 
     def validate_test_payload(self, value):
         from dev_orchestra.application.test_selection import select_tests, verify_selection
@@ -812,7 +833,7 @@ class WorkspaceSession:
             "execution": execution_summary(value["execution"]),
         }
 
-    def read_test_evidence(self, evidence_id, offset=0, limit=8000):
+    def read_test_evidence(self, evidence_id, offset=0, limit=8000, command_id=None):
         self.reload()
         self.guard()
         if (
@@ -823,9 +844,43 @@ class WorkspaceSession:
             or not 1 <= limit <= 8000
         ):
             raise PipelineError("test evidence range or ownership denied")
-        text = json.dumps(sanitize(self.read_test_payload()), ensure_ascii=False)
-        return {
-            "evidence_id": evidence_id,
+        value = self.read_test_payload()
+        result = {"evidence_id": evidence_id}
+        if command_id is not None:
+            if value["evidence_id"] != evidence_id:
+                raise PipelineError("test evidence identity mismatch")
+            self.validate_test_payload(value)
+            command = next(
+                (
+                    item
+                    for item in value["execution"]["commands"]
+                    if item["command_id"] == command_id
+                ),
+                None,
+            )
+            if command is None:
+                raise PipelineError("command was not executed for this test evidence")
+            result.update(
+                sha=value["sha"],
+                revision=value["revision"],
+                command={
+                    key: command.get(key)
+                    for key in (
+                        "command_id",
+                        "kind",
+                        "status",
+                        "passed",
+                        "exit_code",
+                        "total",
+                        "failed",
+                        "skipped",
+                        "junit_hash",
+                    )
+                },
+            )
+            value = {key: command.get(key) for key in ("error", "failures", "failure_details")}
+        text = json.dumps(sanitize(value), ensure_ascii=False)
+        return result | {
             "offset": offset,
             "text": text[offset : offset + limit],
             "truncated": offset + limit < len(text),

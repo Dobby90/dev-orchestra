@@ -121,6 +121,14 @@ REVIEW_ISSUE_DISTINCTIONS = (
     "assessment for the existing issue_id. "
 )
 
+TESTER_EVIDENCE_LOOKUP = (
+    " Pass the exact file paths you need to workspace.workspace_state(paths=[...]) for their "
+    "current hashes and candidate SHA. Use workspace.read_test_evidence(evidence_id, command_id) "
+    "to inspect one command's status and JSON failure diagnostics. The diagnostics preserve "
+    "recorded expected and actual values when present. If truncated, increase offset within "
+    "that command's diagnostics. Omit paths or command_id to read the corresponding full view. "
+)
+
 
 def design_guidance(request):
     if not request.context.get("design_images"):
@@ -179,6 +187,7 @@ def workspace_prompt(request):
             "for existing tests. Never edit product code, skip/weaken tests, or change command policy. "
             + VALIDATION_POLICY
             + COMMIT_MESSAGES
+            + TESTER_EVIDENCE_LOOKUP
             + "Supply the pending test commit description in workspace.run_tests.commit_message. "
             "Use workspace.test_policy to inspect host selection, then workspace.run_tests with exactly "
             "its required command_ids. The host commits test edits before executing allowlisted commands. "
@@ -264,6 +273,7 @@ def continuation_prompt(request):
             )
         )
         + (FIXER_REVIEW_GUIDANCE if "open_issues" in task else "")
+        + (TESTER_EVIDENCE_LOOKUP if request.role == "tester" else "")
         + "Never access secrets, network, other Runs, Git metadata, apps or nested agents. "
         + "UNTRUSTED CONTINUATION DATA:\n"
         + json.dumps(task, ensure_ascii=False)

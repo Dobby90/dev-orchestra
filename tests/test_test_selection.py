@@ -225,6 +225,30 @@ def test_tester_cannot_edit_product_or_invoke_commit(setup):
         dispatch(session, {"method": "tools/call", "params": {"name": "checkpoint_commit"}})
 
 
+def test_tester_workspace_state_returns_only_requested_hashes(setup):
+    session, request = start_session(setup, "tester")
+    full = session.workspace_state()
+    paths = ["tests/test_main.py", "tests/new_test.py"]
+    response = dispatch(
+        session,
+        {
+            "method": "tools/call",
+            "params": {"name": "workspace_state", "arguments": {"paths": paths}},
+        },
+    )
+    assert not response.get("isError")
+    assert json.loads(response["content"][0]["text"]) == {
+        "candidate_sha": request.input_sha,
+        "files": {paths[0]: full["files"][paths[0]]["hash"], paths[1]: None},
+    }
+    for name in ("../outside", ".git/config", "build/results.xml", ".env", "node_modules/index.js"):
+        with pytest.raises(PipelineError):
+            session.workspace_state([name])
+    (session.root / "main.py").write_text("external edit\n")
+    with pytest.raises(PipelineError, match="unrecognized workspace changes"):
+        session.workspace_state(paths)
+
+
 @pytest.mark.parametrize("kind", ["passed", "failed", "parse_error", "timeout"])
 def test_tester_observes_real_host_outcomes_and_reuses_same_candidate(setup, kind):
     svc, rid, _ = setup
@@ -232,7 +256,11 @@ def test_tester_observes_real_host_outcomes_and_reuses_same_candidate(setup, kin
     config = copy.deepcopy(run["config"])
     xml = (
         '<testsuite><testcase name="one">'
-        + ("<failure>actual failure</failure>" if kind == "failed" else "")
+        + (
+            '<failure message="expected 2; actual 1">assertion details</failure>'
+            if kind == "failed"
+            else ""
+        )
         + "</testcase></testsuite>"
     )
     script = (
@@ -259,10 +287,33 @@ def test_tester_observes_real_host_outcomes_and_reuses_same_candidate(setup, kin
     )
     session.finish(response)
     assert session.read_test_evidence(value["evidence_id"], limit=100)["truncated"]
+    command = session.read_test_evidence(value["evidence_id"], command_id="unit")
+    payload = session.read_test_payload()
+    assert (command["sha"], command["revision"]) == (value["sha"], payload["revision"])
+    assert command["command"]["status"] == kind
+    assert command["command"]["junit_hash"] == payload["execution"]["commands"][0].get("junit_hash")
+    with pytest.raises(PipelineError, match="command was not executed"):
+        session.read_test_evidence(value["evidence_id"], command_id="other")
     with pytest.raises(PipelineError):
         session.read_test_evidence("another-run")
+    if kind == "failed":
+        raw_command = payload["execution"]["commands"][0]
+        assert json.loads(command["text"]) == {
+            key: raw_command[key] for key in ("error", "failures", "failure_details")
+        }
+        assert (
+            json.loads(command["text"])["failure_details"][0]["message"] == "expected 2; actual 1"
+        )
+        first = session.read_test_evidence(value["evidence_id"], limit=48, command_id="unit")
+        later = session.read_test_evidence(value["evidence_id"], offset=48, command_id="unit")
+        assert first["truncated"] and first["text"] + later["text"] == command["text"]
+        Path(raw_command["junit_path"]).write_text("tampered")
+        with pytest.raises(PipelineError, match="JUnit evidence checksum mismatch"):
+            session.read_test_evidence(value["evidence_id"], command_id="unit")
     if kind == "passed":
         edit(session, "tests/new_test.py", "assert True\n")
+        with pytest.raises(PipelineError, match="stale"):
+            session.read_test_evidence(value["evidence_id"], command_id="unit")
         with pytest.raises(PipelineError, match="stale"):
             session.finish(response)
         value2 = session.run_tests(["unit"])
@@ -280,6 +331,23 @@ def test_missing_host_run_is_not_model_success(setup):
         )
     with pytest.raises(PipelineError, match="required command"):
         session.run_tests([])
+
+
+def test_command_evidence_view_omits_other_command_data(setup):
+    from test_workflow import FakeTests
+
+    svc, rid, _ = setup
+    config = svc.store.get(rid)["config"]
+    config["tests"]["commands"]["check"] = {"kind": "check", "argv": ["other_command"]}
+    svc.store.update(rid, config=config)
+    session, _ = start_session(setup, "tester")
+    session._test_runner = FakeTests()
+    result = session.run_tests(["unit", "check"])
+    full = session.read_test_evidence(result["evidence_id"])
+    targeted = session.read_test_evidence(result["evidence_id"], command_id="unit")
+    assert "other_command" in full["text"]
+    assert "other_command" not in targeted["text"] and len(json.dumps(targeted)) < len(full["text"])
+    assert targeted["command"]["command_id"] == "unit"
 
 
 def test_test_edit_lock_and_summary_error_keep_valid_execution(setup):
@@ -353,6 +421,17 @@ def test_readonly_review_evidence_keeps_unresolved_issues_and_diagnostics(setup)
     assert (
         "must not resend source patch" not in evidence["text"] and "execution" in evidence["text"]
     )
+    filtered = dispatch(
+        reviewer,
+        {
+            "method": "tools/call",
+            "params": {
+                "name": "read_test_evidence",
+                "arguments": {"evidence_id": reviewer.data["evidence_id"], "command_id": "unit"},
+            },
+        },
+    )
+    assert filtered["isError"]
     with pytest.raises(PipelineError):
         reviewer.read_test_evidence("another-run")
     svc.store.finish_step(step_id, value["sha"], {})
