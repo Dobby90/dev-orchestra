@@ -5,6 +5,7 @@ import { describe, expect, it, vi } from "vitest";
 import { createQueryClient } from "../src/App";
 import { AgentSettingsForm } from "../src/components/AgentSettingsForm";
 import { AgentUsagePanel } from "../src/components/AgentUsagePanel";
+import { formatDuration } from "../src/components/formatDuration";
 import { api } from "../src/api/resources";
 import { ApiError } from "../src/api/client";
 
@@ -33,7 +34,7 @@ function wrap(node: React.ReactNode) {
     </QueryClientProvider>,
   );
 }
-describe("에이전트 모델·사용량", () => {
+describe("Codex 소요 시간", () => {
   it.each([
     [undefined, "미확인"],
     [null, "미확인"],
@@ -48,36 +49,12 @@ describe("에이전트 모델·사용량", () => {
     [3600, "1시간 0분 0초"],
     [3661.2, "1시간 1분 1.2초"],
     [90061.2, "25시간 1분 1.2초"],
-  ])("Codex 소요 시간 %s초를 %s로 표시한다", async (duration, expected) => {
-    vi.spyOn(api, "agentUsage").mockResolvedValue({
-      agents: {},
-      usage_status: "unknown",
-      measured_attempts: 0,
-      total_attempts: 1,
-      usage: null,
-      attempts: [
-        {
-          step_id: 1,
-          role: "developer",
-          revision: 0,
-          iteration: 0,
-          attempt: 1,
-          status: "completed",
-          completed_turns: 0,
-          usage: null,
-          usage_status: "unknown",
-          duration_seconds: duration,
-        },
-      ],
-    });
-    wrap(<AgentUsagePanel rid="r1" />);
-    const table = await screen.findByRole("region", {
-      name: "시도별 토큰 사용량",
-    });
-    const cells = within(table).getAllByRole("cell");
-    expect(cells[3]).toHaveTextContent(expected);
+  ])("%s초를 %s로 표시한다", (duration, expected) => {
+    expect(formatDuration(duration)).toBe(expected);
   });
+});
 
+describe("에이전트 모델·사용량", () => {
   it("공통 설정을 상속하고 모델에서 지원하는 추론 강도만 저장한다", async () => {
     vi.spyOn(api, "agentSettings").mockResolvedValue(initial);
     const catalog = vi.spyOn(api, "codexModels").mockResolvedValue(models);
@@ -230,6 +207,15 @@ describe("에이전트 모델·사용량", () => {
       2,
     );
     expect(screen.getAllByText("미확인").length).toBeGreaterThan(0);
-    expect(screen.getByText("1.2초")).toBeVisible();
+    const table = within(
+      screen.getByRole("region", { name: "시도별 토큰 사용량" }),
+    );
+    const durationColumn = table
+      .getAllByRole("columnheader")
+      .indexOf(table.getByRole("columnheader", { name: "Codex 소요 시간" }));
+    const attempt = within(table.getByRole("row", { name: /시도 2/ }));
+    expect(attempt.getAllByRole("cell")[durationColumn]).toHaveTextContent(
+      /^1\.2초$/,
+    );
   });
 });

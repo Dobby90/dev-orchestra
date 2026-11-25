@@ -130,8 +130,7 @@ def test_automatic_approval_waits_for_answers(service, monkeypatch):
     assert run.get("plan_approval") is None
 
 
-@pytest.mark.parametrize("upgrade_database", [False, True])
-def test_revision_requires_new_approval(planned, upgrade_database, monkeypatch):
+def test_revision_requires_new_approval(planned, monkeypatch):
     svc, rid, agent, runner = planned
     prior = svc.store.get(rid)
     old = binding(svc.store, prior)["plan_hash"]
@@ -163,8 +162,6 @@ def test_revision_requires_new_approval(planned, upgrade_database, monkeypatch):
     assert svc.store.get(rid)["iteration"] == 0
     new = binding(svc.store, svc.store.get(rid))["plan_hash"]
     assert new != old
-    if upgrade_database:
-        upgrade(svc.store.path)
     assert binding(svc.store, svc.store.get(rid))["plan_hash"] == new
     decide(svc, rid, new, True)
     decisions = [

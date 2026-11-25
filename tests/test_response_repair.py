@@ -7,11 +7,12 @@ from test_workflow import FakeAgent, FakeTests
 from test_workflow import service as service
 from test_workspace import edit
 
-from dev_orchestra.agents.contracts import ResponseError
+from dev_orchestra.agents.contracts import ResponseError, validate_fixer_outcomes
 from dev_orchestra.agents.prompts import continuation_prompt
 from dev_orchestra.application.results import Results
-from dev_orchestra.application.reviews import Reviews
-from dev_orchestra.domain.models import AgentResult, FixIssueOutcome
+from dev_orchestra.application.reviews import Reviews, validate_review_assessments
+from dev_orchestra.domain.models import AgentResult, FixIssueOutcome, Issue, StopRequested
+from dev_orchestra.infrastructure.files import write
 from dev_orchestra.orchestration.runner import Runner
 
 
@@ -60,11 +61,15 @@ def test_retry_budget_survives_resume(service):
     assert svc.store.get(rid)["state"] == "needs_input"
 
 
-@pytest.mark.parametrize(
-    ("invalid_id", "correct_on_retry"),
-    [("unknown", True), ("duplicate", True), ("unknown", False)],
-)
-def test_review_assessment_id_repair(service, invalid_id, correct_on_retry):
+def test_duplicate_review_assessment_rejected():
+    sha = "a" * 40
+    assessment = {"issue_id": "issue-current", "candidate_sha": sha, "evidence": "재검토 완료"}
+    with pytest.raises(ResponseError, match="unknown or duplicate review assessment"):
+        validate_review_assessments([assessment, assessment], ["issue-current"], sha)
+
+
+@pytest.mark.parametrize("correct_on_retry", [True, False])
+def test_review_assessment_id_repair(service, correct_on_retry):
     svc, rid, _ = service
 
     class Agent(FakeAgent):
@@ -80,11 +85,8 @@ def test_review_assessment_id_repair(service, invalid_id, correct_on_retry):
                 assert "open_issues" in feedback["error"]
                 if correct_on_retry:
                     return result
-            if invalid_id == "unknown":
-                invalid = assessment.model_copy(update={"issue_id": "issue-unregistered"})
-                result.assessments.append(invalid)
-            else:
-                result.assessments.append(assessment)
+            invalid = assessment.model_copy(update={"issue_id": "issue-unregistered"})
+            result.assessments.append(invalid)
             return result
 
     agent = Agent(block=1)
@@ -111,6 +113,7 @@ def test_review_assessment_id_repair(service, invalid_id, correct_on_retry):
         "completed" if correct_on_retry else "failed",
     ]
     assert {step["input_sha"] for step in steps} == {run["current_sha"]}
+    assert "artifact" not in steps[0]["data"]
     with svc.store.connection() as db:
         saved = [row["step_id"] for row in db.execute("SELECT step_id FROM issue_assessments")]
     assert saved == ([steps[-1]["id"]] if correct_on_retry else [])
@@ -130,15 +133,74 @@ def test_unexpected_role_fields_rejected():
 
 
 @pytest.mark.parametrize(
-    "problem,status,recovers",
-    [
-        ("missing", "implemented", True),
-        ("duplicate", "partial", True),
-        ("unknown", "blocked", True),
-        ("missing", "implemented", False),
-    ],
+    "invalid_id,status,error",
+    [("issue-current", "partial", "duplicate"), ("issue-unregistered", "blocked", "unknown")],
 )
-def test_fixer_outcomes_are_validated_before_testing(service, problem, status, recovers):
+def test_fixer_outcome_ids_must_match_requested_issues(invalid_id, status, error):
+    outcome = FixIssueOutcome(issue_id="issue-current", status=status, evidence="확인한 수정 근거")
+    invalid = outcome.model_copy(update={"issue_id": invalid_id})
+    with pytest.raises(ResponseError, match=f"{error} IDs: .*{invalid_id}"):
+        validate_fixer_outcomes([outcome, invalid], [outcome.issue_id])
+
+
+@pytest.mark.parametrize("status", ["partial", "blocked"])
+def test_fixer_outcome_is_saved_and_read_back(service, monkeypatch, status):
+    svc, rid, _ = service
+    run = svc.store.get(rid)
+    sha = run["base_sha"]
+    reviewer, _ = svc.store.start_step(rid, "reviewer", 0, sha)
+    finding = Issue(
+        id="I1",
+        severity="high",
+        file="main.py",
+        line=1,
+        description="반환값 불일치",
+        evidence="예상 값과 다릅니다.",
+        suggestion="반환값을 확인하세요.",
+    )
+    review = {"sha": sha, "revision": 0, "issues": [finding.model_dump()], "assessments": []}
+    (issue,) = Reviews(svc.store).apply(run, reviewer, review)
+    artifact = Path(run["directory"]) / "iterations/000/reviewer/attempt-001/result.json"
+    svc.store.finish_step(
+        reviewer, sha, {"artifact": str(artifact), "hash": write(artifact, review)}
+    )
+    svc.store.update(rid, next_role="fixer", iteration=1)
+    outcome = FixIssueOutcome(
+        issue_id=issue["issue_id"], status=status, evidence="남은 동작을 기록"
+    )
+
+    class Agent(FakeAgent):
+        def run_workspace(self, request, directory, session, stop):
+            assert request.role == "fixer"
+            assert request.context["response_contract"]["issue_ids"] == [outcome.issue_id]
+            result = super().run_workspace(request, directory, session, stop)
+            edit(session, "main.py", "fixed\n")
+            result.issue_outcomes = [outcome]
+            return result
+
+    agent = Agent()
+    runner = Runner(svc.store, agent, FakeTests())
+
+    def stop_after_result(run_id, role, payload, config):
+        assert role == "fixer"
+        raise StopRequested("pause")
+
+    monkeypatch.setattr(runner, "advance", stop_after_result)
+    with pytest.raises(StopRequested, match="pause"):
+        runner._execute(rid)
+    run = svc.store.get(rid)
+    assert agent.calls == ["fixer"]
+    (step,) = [step for step in svc.store.steps(rid) if step["role"] == "fixer"]
+    assert step["status"] == "completed" and step["output_sha"] == run["current_sha"]
+    payload = Results(svc.store).payload(run, step)
+    assert payload["issue_outcomes"] == [outcome.model_dump()]
+    assert len(payload["workspace_commits"]) == 1
+    (open_issue,) = Reviews(svc.store).open(rid)
+    assert open_issue["issue_id"] == outcome.issue_id
+
+
+@pytest.mark.parametrize("recovers", [True, False])
+def test_fixer_outcomes_are_validated_before_testing(service, recovers):
     svc, rid, _ = service
 
     class Agent(FakeAgent):
@@ -154,7 +216,7 @@ def test_fixer_outcomes_are_validated_before_testing(service, problem, status, r
             assert request.context["response_contract"]["issue_ids"] == [issue_id]
             self.outcome = FixIssueOutcome(
                 issue_id=issue_id,
-                status=status,
+                status="implemented",
                 evidence="main.py의 반환값을 변경했습니다. 남은 조건은 검증이 필요합니다.",
             )
             state = request.context["workspace_resume"]
@@ -162,7 +224,7 @@ def test_fixer_outcomes_are_validated_before_testing(service, problem, status, r
                 edit(session, "main.py", "fixed\n")
             else:
                 assert state["metadata_only"]
-                assert f"{problem} IDs" in state["remaining"]
+                assert "missing IDs" in state["remaining"]
                 assert issue_id in continuation_prompt(request)
                 assert (session.root / "main.py").read_text() == "fixed\n"
                 assert session.git.sha() == request.input_sha
@@ -170,14 +232,7 @@ def test_fixer_outcomes_are_validated_before_testing(service, problem, status, r
                     result.issue_outcomes = [self.outcome]
                     return result
 
-            result.issue_outcomes = {
-                "missing": [],
-                "duplicate": [self.outcome, self.outcome],
-                "unknown": [
-                    self.outcome,
-                    self.outcome.model_copy(update={"issue_id": "issue-not-requested"}),
-                ],
-            }[problem]
+            result.issue_outcomes = []
             return result
 
     agent = Agent(block=1)

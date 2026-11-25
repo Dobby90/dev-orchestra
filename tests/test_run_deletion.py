@@ -9,12 +9,14 @@ import pytest
 from test_backend_api import project
 from test_backend_api import web as web
 from test_gui_integration import completed as completed
+from test_workflow import legacy_service as legacy_service
 from test_workflow import service as service
 from typer.testing import CliRunner
 
 from dev_orchestra.application.commands import Commands
 from dev_orchestra.application.deletion import RunDeletionService
 from dev_orchestra.application.queue import QueueService
+from dev_orchestra.application.service import RunService
 from dev_orchestra.cli import app
 from dev_orchestra.domain.models import PipelineError
 from dev_orchestra.infrastructure.files import write
@@ -36,27 +38,51 @@ def simulate_worker_exit(run):
     write(path, owner | {"create_time": owner["create_time"] - 1})
 
 
-@pytest.mark.parametrize("schema", [2, 5])
-def test_cancelled_deletion_preserves_other_runs_and_repository(service, schema):
-    svc, rid, repo = service
-    if schema == 5:
-        upgrade(svc.store.path)
-    other = svc.create(repo, Path(svc.store.get(rid)["directory"]) / "spec.md")
+def assert_cancelled_deletion(svc, rid, other, repo, schema):
+    sibling = svc.store.get(other)
+    sibling_spec = Path(sibling["directory"]) / "spec.md"
+    spec = sibling_spec.read_bytes()
     before = (repo / "main.py").read_bytes()
     svc.cancel(rid)
     run = svc.store.get(rid)
     cursor = svc.events.high_water()
     delete(svc, rid)
     assert not Path(run["directory"]).exists()
-    assert svc.store.get(other)["state"] == "queued"
+    assert svc.store.get(other) == sibling
+    assert sibling_spec.read_bytes() == spec
     assert (repo / "main.py").read_bytes() == before
     assert svc.events.high_water() >= cursor
-    if schema == 5:
+    if schema >= 5:
         assert svc.queries.snapshot(other)["event_cursor"] == svc.events.high_water()
     with pytest.raises(PipelineError, match="unknown run"):
         svc.store.get(rid)
     with svc.store.connection() as db:
+        assert db.execute("SELECT version FROM schema_version").fetchone()[0] == schema
         assert not db.execute("PRAGMA foreign_key_check").fetchall()
+
+
+def test_cancelled_deletion_preserves_other_runs_and_repository(service):
+    svc, rid, repo = service
+    with svc.store.connection() as db:
+        assert db.execute("SELECT version FROM schema_version").fetchone()[0] == 6
+    other = svc.create(repo, Path(svc.store.get(rid)["directory"]) / "spec.md")
+    assert_cancelled_deletion(svc, rid, other, repo, 6)
+
+
+@pytest.mark.parametrize("schema", [2, 5])
+def test_cancelled_deletion_preserves_legacy_sibling(legacy_service, monkeypatch, schema):
+    svc, rid, repo = legacy_service
+    with monkeypatch.context() as patch:
+        # Seed a second historical Run using the same fixture path as the first.
+        patch.setattr(RunService, "default_execution_contract", lambda self: "patch-v1")
+        other = svc.create(repo, Path(svc.store.get(rid)["directory"]) / "spec.md")
+    if schema == 5:
+        upgrade(svc.store.path)
+    with svc.store.connection() as db:
+        assert db.execute("SELECT version FROM schema_version").fetchone()[0] == schema
+    assert svc.store.get(rid)["execution_contract"] == "patch-v1"
+    assert svc.store.get(other)["execution_contract"] == "patch-v1"
+    assert_cancelled_deletion(svc, rid, other, repo, schema)
 
 
 def test_completed_deletion_removes_evidence_and_branch(completed):

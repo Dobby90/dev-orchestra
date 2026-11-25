@@ -13,6 +13,7 @@ import tempfile
 import time
 import urllib.error
 import urllib.request
+from importlib.metadata import version
 from pathlib import Path
 
 
@@ -20,6 +21,10 @@ def probe(kind):
     import dev_orchestra
 
     assert Path(dev_orchestra.__file__).resolve().is_relative_to(Path(sys.prefix).resolve())
+    installed_version = version("dev-orchestra")
+    assert dev_orchestra.__version__ == installed_version, (
+        f"모듈 버전 {dev_orchestra.__version__}과 설치된 배포 버전 {installed_version}이 다릅니다."
+    )
     assert shutil.which("node") is None
     root = Path(tempfile.mkdtemp(prefix="devorchestra-installed-gate-")).resolve()
     config = root / "config.yaml"

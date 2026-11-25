@@ -14,19 +14,16 @@ from dev_orchestra.infrastructure.migrations import upgrade
 from dev_orchestra.orchestration.runner import Runner
 
 
-def ready(service, web=False):
+def ready(service):
     svc, rid, repo = service
-    if web:
-        upgrade(svc.store.path)
     Runner(svc.store, FakeAgent(), FakeTests()).execute(rid)
     assert svc.store.get(rid)["state"] == "waiting_approval"
     return svc, rid, repo
 
 
-@pytest.mark.parametrize("web", [False, True])
-def test_local_handoff_cleanup_preserves_branch_history_and_original(service, tmp_path, web):
+def test_local_handoff_cleanup_preserves_branch_history_and_original(service, tmp_path):
     service[0].store.update(service[1], branch="custom/local-handoff")
-    svc, rid, repo = ready(service, web)
+    svc, rid, repo = ready(service)
     original = Git(repo)
     before = original.sha(), original.call("branch", "--show-current"), original.dirty()
     assert original.call("remote") == ""
@@ -41,18 +38,17 @@ def test_local_handoff_cleanup_preserves_branch_history_and_original(service, tm
     assert "로컬 브랜치 인계" in report.read_text()
     assert run["final_sha"] in report.read_text()
     steps = svc.store.steps(rid)
-    if web:
-        saved_report = Results(svc.store).report(rid)
-        tests = Results(svc.store).tests(rid)
+    results = Results(svc.store)
+    saved_report = results.report(rid)
+    tests = results.tests(rid)
     svc.cleanup(rid)
     assert not Path(run["worktree"]).exists()
     assert original.baseline(run["branch"]) == run["final_sha"]
     assert svc.store.steps(rid) == steps
     assert report.is_file()
     assert handoff(svc.store.get(rid))["status"] == "matching"
-    if web:
-        assert Results(svc.store).report(rid)["markdown"] == saved_report["markdown"]
-        assert Results(svc.store).tests(rid) == tests
+    assert results.report(rid)["markdown"] == saved_report["markdown"]
+    assert results.tests(rid) == tests
     checkout = tmp_path / "inspection"
     original.call("worktree", "add", str(checkout), run["branch"])
     assert Git(checkout).sha() == run["final_sha"]
@@ -100,7 +96,7 @@ def test_approval_rejects_branch_or_repository_tampering_preserving_files(
 
 
 def test_post_approval_drift_is_visible_and_cleanup_does_not_repair_it(service):
-    svc, rid, repo = ready(service, True)
+    svc, rid, repo = ready(service)
     svc.approve(rid)
     run = svc.store.get(rid)
     git = Git(Path(run["worktree"]))

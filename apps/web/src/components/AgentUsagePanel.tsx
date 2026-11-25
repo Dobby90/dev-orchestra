@@ -3,23 +3,13 @@ import { api } from "../api/resources";
 import type { Schema } from "../api/types";
 import { agentSpeedLabel } from "./AgentSpeedSelect";
 import { ErrorNotice, Loading, roles } from "./common";
+import { formatDuration } from "./formatDuration";
 
 const labels = {
   reported: "집계 완료",
   partial: "일부 집계",
   unknown: "미확인",
 };
-
-function formatDuration(seconds: number | null | undefined) {
-  if (seconds == null) return "미확인";
-  const tenths = Math.round(seconds * 10);
-  const hours = Math.floor(tenths / 36000);
-  const minutes = Math.floor((tenths % 36000) / 600);
-  const remainingSeconds = (tenths % 600) / 10;
-  if (hours) return `${hours}시간 ${minutes}분 ${remainingSeconds}초`;
-  if (minutes) return `${minutes}분 ${remainingSeconds}초`;
-  return `${remainingSeconds}초`;
-}
 
 export function TokenCounts({
   usage,
