@@ -1172,6 +1172,28 @@
               ],
               "title": "Project Id"
             }
+          },
+          {
+            "name": "states",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/State"
+                  },
+                  "maxItems": 15
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Repeat to match any listed state. Other filters also apply.",
+              "title": "States"
+            },
+            "description": "Repeat to match any listed state. Other filters also apply."
           }
         ],
         "responses": {

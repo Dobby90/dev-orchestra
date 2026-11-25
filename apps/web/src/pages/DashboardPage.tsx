@@ -20,21 +20,25 @@ import {
   states,
 } from "../components/common";
 import { Button } from "../components/ui/button";
+
+const groups: Partial<Record<string, State[]>> = {
+  running: Object.keys(states).filter(
+    (key) => active(key as State) && key !== "queued",
+  ) as State[],
+  approvals: ["waiting_approval", "waiting_plan_approval"],
+  attention: ["failed", "needs_input"],
+};
+
 export function DashboardPage() {
   const [params, setParams] = useSearchParams();
   const selected = params.get("state") ?? "",
     cursor = params.get("cursor") ?? "";
-  const groups: Record<string, State[]> = {
-    running: Object.keys(states).filter(
-      (key) => active(key as State) && key !== "queued",
-    ) as State[],
-    approvals: ["waiting_approval", "waiting_plan_approval"],
-    attention: ["failed", "needs_input"],
-  };
-  const state = selected in states ? (selected as State) : "";
-  const group = groups[selected];
   const query = new URLSearchParams({ limit: "30", cursor });
-  if (state) query.set("state", state);
+  if (Object.hasOwn(groups, selected)) {
+    groups[selected]?.forEach((state) => query.append("states", state));
+  } else if (Object.hasOwn(states, selected)) {
+    query.set("state", selected);
+  }
   const dashboard = useQuery({
     queryKey: ["dashboard"],
     queryFn: api.dashboard,
@@ -42,35 +46,19 @@ export function DashboardPage() {
   });
   const runs = useQuery({
     queryKey: ["runs", selected, cursor],
-    queryFn: async () => {
-      if (!group) return api.runs(query);
-      const pages = await Promise.all(
-        group.map(async (state) => {
-          const items = [];
-          let cursor = "";
-          do {
-            const page = await api.runs(
-              new URLSearchParams({ limit: "100", state, cursor }),
-            );
-            items.push(...page.items);
-            cursor = page.has_more ? (page.next_cursor ?? "") : "";
-          } while (cursor);
-          return { items };
-        }),
-      );
-      return {
-        items: pages
-          .flatMap((page) => page.items)
-          .sort((a, b) =>
-            (b.created_at ?? "").localeCompare(a.created_at ?? ""),
-          ),
-        has_more: false,
-        next_cursor: null,
-      };
-    },
+    queryFn: () => api.runs(query),
     refetchInterval: 5000,
   });
   const counts = dashboard.data?.counts_by_state;
+  const nextCursor = runs.data?.next_cursor;
+  function showPage(cursor?: string) {
+    setParams((current) => {
+      const next = new URLSearchParams(current);
+      if (cursor) next.set("cursor", cursor);
+      else next.delete("cursor");
+      return next;
+    });
+  }
   const running = counts
     ? Object.entries(counts).reduce(
         (sum, [key, value]) =>
@@ -191,23 +179,12 @@ export function DashboardPage() {
           </span>
           <div className="inline-actions">
             {cursor && (
-              <Button
-                variant="ghost"
-                onClick={() => setParams(state ? { state } : {})}
-              >
+              <Button variant="ghost" onClick={() => showPage()}>
                 처음으로
               </Button>
             )}
-            {runs.data?.has_more && (
-              <Button
-                variant="secondary"
-                onClick={() =>
-                  setParams({
-                    ...Object.fromEntries(params),
-                    cursor: runs.data.next_cursor!,
-                  })
-                }
-              >
+            {runs.data?.has_more && nextCursor && (
+              <Button variant="secondary" onClick={() => showPage(nextCursor)}>
                 다음 작업
                 <ArrowUpRight size={14} />
               </Button>

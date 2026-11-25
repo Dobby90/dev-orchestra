@@ -1,5 +1,7 @@
 """Request ordering and display timestamps without model execution."""
 
+from contextlib import contextmanager
+
 import pytest
 
 from dev_orchestra.application.queries import RunQueryService
@@ -35,6 +37,56 @@ def test_run_pages_sort_by_request_time_with_stable_ties_and_missing_dates(queri
     assert [item["id"] for item in queries.page(state="planning")["items"]] == ["b-new"]
     with pytest.raises(PipelineError, match="invalid run cursor"):
         queries.page(cursor="unknown")
+
+
+def test_grouped_run_pages_keep_all_mixed_status_ties_across_cursor(queries):
+    states = ["waiting_approval", "waiting_plan_approval"]
+    for rid, state, created_at in [
+        ("tie-a", states[0], "2026-11-05T01:00:00Z"),
+        ("tie-b", states[1], "2026-11-05T10:00:00+09:00"),
+        ("tie-c", states[0], "2026-11-05T01:00:00+00:00"),
+        ("excluded", "queued", "2026-11-06T00:00:00Z"),
+        ("older", states[1], "2026-11-03T00:00:00Z"),
+    ]:
+        queries.store.create({"id": rid, "created_at": created_at})
+        with queries.store.connection() as db:
+            db.execute("UPDATE runs SET state=? WHERE id=?", (state, rid))
+
+    first = queries.page(limit=2, states=states)
+    second = queries.page(limit=2, cursor=first["next_cursor"], states=list(reversed(states)))
+    assert [item["id"] for item in first["items"]] == ["tie-c", "tie-b"]
+    assert first["has_more"] and first["next_cursor"] == "tie-b"
+    assert [item["id"] for item in second["items"]] == ["tie-a", "older"]
+    assert not second["has_more"] and second["next_cursor"] is None
+
+
+def test_run_page_connection_count_is_independent_of_page_size(queries, monkeypatch):
+    states = ["failed", "needs_input"]
+    for index in range(40):
+        queries.store.create({"id": f"run-{index:03}"})
+    with queries.store.connection() as db:
+        db.executemany(
+            "UPDATE runs SET state=? WHERE id=?",
+            ((states[index % 2], f"run-{index:03}") for index in range(40)),
+        )
+    connection = queries.store.connection
+    opened = 0
+
+    @contextmanager
+    def count_connections():
+        nonlocal opened
+        opened += 1
+        with connection() as db:
+            yield db
+
+    monkeypatch.setattr(queries.store, "connection", count_connections)
+    for limit in (1, 30):
+        opened = 0
+        page = queries.page(limit=limit, states=states)
+        assert len(page["items"]) == limit and opened == 1
+    opened = 0
+    assert len(queries.page(limit=30, cursor=page["next_cursor"], states=states)["items"]) == 10
+    assert opened == 1
 
 
 def test_completion_time_uses_approval_event_and_queries_are_read_only(queries):

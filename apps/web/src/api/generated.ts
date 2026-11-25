@@ -3570,6 +3570,8 @@ export interface operations {
                 cursor?: string;
                 state?: string | null;
                 project_id?: string | null;
+                /** @description Repeat to match any listed state. Other filters also apply. */
+                states?: components["schemas"]["State"][] | null;
             };
             header?: never;
             path?: never;
