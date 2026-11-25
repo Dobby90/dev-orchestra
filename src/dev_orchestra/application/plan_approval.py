@@ -64,6 +64,32 @@ def verify_development(store, run):
         raise PipelineError("plan approval required for current plan")
 
 
+def previous_plan(store, run):
+    reference = run.get("previous_plan_binding")
+    if not reference:
+        return None
+    for step in store.steps(run["id"]):
+        if step["id"] == reference["step_id"]:
+            revision = step.get("revision", 0)
+            if (
+                step["role"] != "planner"
+                or step["status"] != "completed"
+                or revision != reference["revision"]
+                or revision >= run.get("revision", 0)
+                or step["data"]["hash"] != reference["artifact_hash"]
+                or step["output_sha"] != reference["input_sha"]
+            ):
+                break
+            payload = Results(store).payload(run, step)
+            return {
+                "plan": payload["plan"],
+                "criteria": payload["criteria"],
+                "plan_hash": reference["plan_hash"],
+                "revision": revision,
+            }
+    raise PipelineError("previous plan checkpoint differs from revision reference")
+
+
 def verify_worktree(run, evidence):
     verified_run_images(run)
     git = Git(Path(run["worktree"]), Config.model_validate(run["config"]).tests.output_paths)
@@ -109,6 +135,7 @@ def decision_changes(store, run, plan_hash, approve, reason=""):
         "next_role": "planner",
         "plan": None,
         "criteria": [],
+        "previous_plan_binding": evidence,
         "directives": [*run.get("directives", []), sanitize(reason)],
     }
 

@@ -114,6 +114,83 @@ function setupDetail() {
   vi.spyOn(api, "steps").mockResolvedValue({ items: [] });
 }
 
+it("승인 화면에서 선택한 리뷰 이슈 ID로 수정 요청을 보낸다", async () => {
+  setupDetail();
+  const baseIssue: Schema["ReviewIssueView"] = {
+    id: "finding",
+    issue_id: "issue-medium",
+    severity: "medium",
+    file: "main.py",
+    line: 3,
+    description: "경계값 누락",
+    evidence: "근거",
+    suggestion: "검증",
+    status: "unresolved",
+    source_sha: detail.current_sha!,
+    resolution_evidence: null,
+    can_request_fix: true,
+  };
+  vi.spyOn(api, "reviews").mockResolvedValue({
+    status: "available",
+    step_id: 1,
+    sha: detail.current_sha ?? null,
+    revision: detail.revision,
+    summary: "리뷰",
+    issues: [
+      baseIssue,
+      {
+        ...baseIssue,
+        issue_id: "issue-low",
+        severity: "low",
+        description: "표시 오류",
+      },
+      {
+        ...baseIssue,
+        issue_id: "issue-resolved",
+        description: "이미 해결",
+        status: "resolved",
+        can_request_fix: false,
+      },
+    ],
+    history: [],
+    legacy_incomplete: false,
+    blocking_severities: ["critical", "high"],
+  });
+  const submit = vi.spyOn(api, "control").mockResolvedValue(operation);
+  wrap(
+    <Routes>
+      <Route path="/runs/:id" element={<RunDetailPage />} />
+    </Routes>,
+    "/runs/r1",
+  );
+  await userEvent.click(
+    await screen.findByRole("button", { name: /^수정 요청$/ }),
+  );
+  const medium = await screen.findByRole("checkbox", { name: /경계값 누락/ });
+  expect(screen.getByRole("checkbox", { name: /표시 오류/ })).toBeVisible();
+  expect(
+    screen.queryByRole("checkbox", { name: /이미 해결/ }),
+  ).not.toBeInTheDocument();
+  const confirm = screen.getByRole("button", { name: "수정 요청 확인" });
+  expect(confirm).toBeDisabled();
+  await userEvent.click(medium);
+  await userEvent.click(confirm);
+  await waitFor(() =>
+    expect(submit).toHaveBeenCalledWith(
+      "r1",
+      detail.version,
+      "request-changes",
+      {
+        expected_sha: detail.current_sha,
+        instructions: "",
+        issue_ids: ["issue-medium"],
+        new_max_fix_attempts: null,
+      },
+      expect.any(String),
+    ),
+  );
+});
+
 it("재진입 시 정리 실패를 표시하고 Push·정리 재시도·상태 조정을 같은 줄에 둔다", async () => {
   setupDetail();
   vi.mocked(api.run).mockResolvedValue({
@@ -781,34 +858,121 @@ it("승인 대기 결과를 인계 정보보다 먼저 표시하고 테스트 �
       Node.DOCUMENT_POSITION_FOLLOWING,
   ).toBeTruthy();
 });
-it("승인 요약 카드의 묶음 필터가 두 상태의 다음 페이지까지 조회한다", async () => {
-  vi.spyOn(api, "dashboard").mockResolvedValue({
-    project_count: 1,
-    counts_by_state: {},
-  } as Schema["DashboardView"]);
-  const get = vi.spyOn(api, "runs").mockImplementation(async (params) => ({
-    items: [
+it.each([
+  ["approvals", "waiting_approval", "waiting_plan_approval"],
+  ["attention", "failed", "needs_input"],
+] as const)(
+  "%s 묶음 필터는 현재 페이지를 조회하고 이동할 때 다음 페이지를 읽는다",
+  async (group, firstState, secondState) => {
+    vi.useFakeTimers();
+    vi.spyOn(api, "dashboard").mockResolvedValue({
+      project_count: 1,
+      counts_by_state: {},
+    } as Schema["DashboardView"]);
+    const firstPage = [
       {
         ...detail,
-        id: params.get("state")! + (params.get("cursor") ?? ""),
-        name: params.get("state")! + (params.get("cursor") ?? ""),
+        id: "run-z",
+        name: "가장 최근 작업",
+        state: firstState,
+        created_at: "2026-11-25T01:00:00Z",
       },
-    ],
-    has_more: !params.get("cursor"),
-    next_cursor: params.get("cursor") ? null : "next",
-  }));
-  wrap(<DashboardPage />, "/?state=approvals");
-  expect(
-    await screen.findByRole("link", {
-      name: "waiting_plan_approvalnext",
-    }),
-  ).toBeVisible();
-  expect(get).toHaveBeenCalledTimes(4);
-  expect(screen.getByRole("link", { name: /등록 프로젝트/ })).toHaveAttribute(
-    "href",
-    "/projects",
-  );
-});
+      {
+        ...detail,
+        id: "run-y",
+        name: "같은 시각의 다음 작업",
+        state: secondState,
+        created_at: "2026-11-25T10:00:00+09:00",
+      },
+    ];
+    const secondPage = [
+      { ...detail, id: "run-x", name: "다음 페이지 작업", state: firstState },
+    ];
+    const get = vi.spyOn(api, "runs").mockImplementation(async (params) => {
+      const next = params.get("cursor") === "run-y";
+      return {
+        items: next ? secondPage : firstPage,
+        has_more: !next,
+        next_cursor: next ? null : "run-y",
+      };
+    });
+    const tick = (ms = 1) =>
+      act(async () => {
+        await vi.advanceTimersByTimeAsync(ms);
+      });
+    const requested = () =>
+      get.mock.calls.map(([params]) => ({
+        limit: params.get("limit"),
+        state: params.get("state"),
+        states: params.getAll("states"),
+        cursor: params.get("cursor"),
+      }));
+    const firstRequest = {
+      limit: "30",
+      state: null,
+      states: [firstState, secondState],
+      cursor: "",
+    };
+    const nextRequest = { ...firstRequest, cursor: "run-y" };
+    const { unmount } = wrap(<DashboardPage />, `/?state=${group}`);
+    try {
+      await tick();
+      expect(requested()).toEqual([firstRequest]);
+      const newer = screen.getByRole("link", { name: "가장 최근 작업" });
+      const older = screen.getByRole("link", { name: "같은 시각의 다음 작업" });
+      expect(
+        newer.compareDocumentPosition(older) & Node.DOCUMENT_POSITION_FOLLOWING,
+      ).toBeTruthy();
+      expect(
+        screen.queryByRole("link", { name: "다음 페이지 작업" }),
+      ).not.toBeInTheDocument();
+      expect(
+        screen.getByRole("link", { name: /등록 프로젝트/ }),
+      ).toHaveAttribute("href", "/projects");
+
+      await tick(5000);
+      expect(requested()).toEqual([firstRequest, firstRequest]);
+
+      fireEvent.click(screen.getByRole("button", { name: "다음 작업" }));
+      await tick();
+      expect(
+        screen.getByRole("link", { name: "다음 페이지 작업" }),
+      ).toBeVisible();
+      expect(
+        screen.queryByRole("link", { name: "가장 최근 작업" }),
+      ).not.toBeInTheDocument();
+      expect(
+        screen.queryByRole("button", { name: "다음 작업" }),
+      ).not.toBeInTheDocument();
+      expect(requested()).toEqual([firstRequest, firstRequest, nextRequest]);
+
+      await tick(5000);
+      expect(requested()).toEqual([
+        firstRequest,
+        firstRequest,
+        nextRequest,
+        nextRequest,
+      ]);
+
+      fireEvent.click(screen.getByRole("button", { name: "처음으로" }));
+      await tick();
+      expect(screen.getByLabelText("작업 상태 필터")).toHaveValue(group);
+      expect(
+        screen.getByRole("link", { name: "가장 최근 작업" }),
+      ).toBeVisible();
+      expect(requested()).toEqual([
+        firstRequest,
+        firstRequest,
+        nextRequest,
+        nextRequest,
+        firstRequest,
+      ]);
+    } finally {
+      unmount();
+      vi.useRealTimers();
+    }
+  },
+);
 
 it("프로젝트 설정 탭을 이동해도 편집 중인 정책을 유지한다", async () => {
   vi.spyOn(api, "project").mockResolvedValue(p);

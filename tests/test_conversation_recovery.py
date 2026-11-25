@@ -37,6 +37,8 @@ assert [arg for arg in sys.argv if arg.startswith('service_tier=')] == {([f'serv
 result=Path(sys.argv[sys.argv.index('--output-last-message')+1])
 prompt=sys.stdin.read()
 result.with_name('received-prompt.txt').write_text(prompt)
+tools=next(arg.split('=',1)[1] for arg in sys.argv if arg.startswith('mcp_servers.workspace.enabled_tools='))
+result.with_name('enabled-tools.json').write_text(tools)
 if 'resume' in sys.argv:
     assert sys.argv[-2]=={THREAD!r}
     if Path({str(mode)!r}).read_text()=='missing':
@@ -60,14 +62,12 @@ result.write_text(json.dumps({{'summary':'done','questions':[],'no_change_reason
         "candidate_sha": session.git.sha(),
     }
     client.run_workspace(request, session.path.parent, session)
-    assert (
-        "FULL_REQUIREMENTS_MARKER"
-        not in (session.path.parent / "calls/call-002/received-prompt.txt").read_text()
-    )
-    assert (
-        "Repair only final response metadata"
-        in (session.path.parent / "calls/call-002/received-prompt.txt").read_text()
-    )
+    call = session.path.parent / "calls/call-002"
+    prompt = (call / "received-prompt.txt").read_text()
+    assert "FULL_REQUIREMENTS_MARKER" not in prompt
+    assert "Repair only final response metadata" in prompt
+    assert json.loads((call / "enabled-tools.json").read_text()) == ["workspace_state"]
+    assert "workspace.edit_file" not in prompt and "workspace.checkpoint_commit" not in prompt
     mode.write_text("missing")
     client.run_workspace(request, session.path.parent, session)
     assert session_id(session, client.config.for_role("developer")) == OTHER

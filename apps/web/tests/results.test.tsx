@@ -248,7 +248,7 @@ it("보존된 변경 내용은 최신 revision부터 선택하고 Diff 상태를
   expect(changes).toHaveBeenCalledWith("r", 0, "c".repeat(40));
 });
 
-it("코드 수정 확인 후 테스트 검증 대기 사유를 미해결 상태와 함께 표시한다", async () => {
+it("코드 수정이 확인된 이슈를 검증 대기로 표시한다", async () => {
   vi.spyOn(api, "reviews").mockResolvedValue({
     status: "available",
     step_id: 2,
@@ -269,6 +269,7 @@ it("코드 수정 확인 후 테스트 검증 대기 사유를 미해결 상태�
         source_sha: "a".repeat(40),
         resolution_evidence: null,
         status_note: "코드 수정 확인, 동일 SHA·revision 테스트 통과 근거 대기",
+        verification_pending: true,
       },
     ],
     history: [],
@@ -281,7 +282,8 @@ it("코드 수정 확인 후 테스트 검증 대기 사유를 미해결 상태�
       "코드 수정 확인, 동일 SHA·revision 테스트 통과 근거 대기",
     ),
   ).toBeVisible();
-  expect(screen.getByText("미해결")).toBeVisible();
+  expect(screen.getByText("검증 대기")).toBeVisible();
+  expect(screen.queryByText("미해결")).not.toBeInTheDocument();
   expect(screen.queryByText("독립 재검증으로 해결")).not.toBeInTheDocument();
 });
 

@@ -5,6 +5,10 @@ import json
 from dev_orchestra.application.contracts import RunSummary
 from dev_orchestra.domain.models import PipelineError
 
+_COMPLETION_EVENT = (
+    "(kind='approved' OR (kind='state' AND json_extract(data,'$.state')='completed'))"
+)
+
 
 def delivery_status(run):
     result = run.get("push_result") or {}
@@ -37,14 +41,28 @@ class RunQueryService:
         return self.store.list()
 
     def summary(self, run_id):
-        run = self.get(run_id)
-        values = {k: run[k] for k in RunSummary.model_fields if k in run}
-        values.update(delivery_status(run))
-        values["current_role"] = run.get("next_role") if run.get("next_role") != "done" else None
         with self.store.connection() as db:
             row = db.execute("SELECT * FROM runs WHERE id=?", (run_id,)).fetchone()
-            values["project_name"] = self._project_name(db, row)
-            values["completed_at"] = self._completed_at(db, run_id, run["state"])
+            if row is None:
+                raise PipelineError(f"unknown run: {run_id}")
+            return self._summary(
+                row, self._project_name(db, row), self._completed_at(db, run_id, row["state"])
+            )
+
+    @staticmethod
+    def _summary(row, project_name, completed_at):
+        run = json.loads(row["data"])
+        values = {k: run[k] for k in RunSummary.model_fields if k in run}
+        values.update(delivery_status(run))
+        values.update(
+            id=row["id"],
+            state=row["state"],
+            version=row["version"],
+            control=row["control"],
+            current_role=run.get("next_role") if run.get("next_role") != "done" else None,
+            project_name=project_name,
+            completed_at=completed_at,
+        )
         return RunSummary.model_validate(values)
 
     @staticmethod
@@ -63,8 +81,7 @@ class RunQueryService:
         if state != "completed":
             return None
         row = db.execute(
-            "SELECT timestamp FROM events WHERE run_id=? AND "
-            "(kind='approved' OR (kind='state' AND json_extract(data,'$.state')='completed')) "
+            f"SELECT timestamp FROM events WHERE run_id=? AND {_COMPLETION_EVENT} "
             "ORDER BY id DESC LIMIT 1",
             (run_id,),
         ).fetchone()
@@ -126,30 +143,50 @@ class RunQueryService:
             value["plan_hash"] = binding(self.store, data)["plan_hash"]
         return value | observe(self.store, data)
 
-    def page(self, limit=50, cursor="", state=None, project_id=None):
+    def page(self, limit=50, cursor="", state=None, project_id=None, *, states=None):
         if not 1 <= limit <= 100:
             raise PipelineError("invalid page size")
+        filters, parameters = [], []
+        if state is not None:
+            filters.append("state=?")
+            parameters.append(state)
+        if project_id is not None:
+            filters.append("project_id=?")
+            parameters.append(project_id)
+        if states:
+            filters.append(f"state IN ({','.join('?' for _ in states)})")
+            parameters.extend(states)
         with self.store.connection() as db:
             # Keep the ID cursor, but compare its request time and ID together so
             # equal timestamps and multiple pages retain a deterministic order.
             requested = "coalesce(julianday(json_extract(data,'$.created_at')),0)"
-            boundary = ""
-            parameters = [state, state, project_id, project_id]
             if cursor:
+                if not db.in_transaction:
+                    db.execute("BEGIN")
                 anchor = db.execute(
                     f"SELECT {requested} AS requested FROM runs WHERE id=?", (cursor,)
                 ).fetchone()
                 if anchor is None:
                     raise PipelineError("invalid run cursor")
-                boundary = f" AND ({requested},id)<(?,?)"
+                filters.append(f"({requested},id)<(?,?)")
                 parameters.extend([anchor["requested"], cursor])
+            where = " WHERE " + " AND ".join(filters) if filters else ""
+            # Select the page before looking up related names and completion events.
             rows = db.execute(
-                "SELECT id FROM runs WHERE (? IS NULL OR state=?) "
-                "AND (? IS NULL OR project_id=?)"
-                f"{boundary} ORDER BY {requested} DESC,id DESC LIMIT ?",
+                f"WITH page AS (SELECT *, {requested} AS requested FROM runs{where} "
+                "ORDER BY requested DESC,id DESC LIMIT ?) "
+                "SELECT page.*, projects.name AS project_name, "
+                "CASE WHEN page.state='completed' THEN ("
+                f"SELECT timestamp FROM events WHERE run_id=page.id AND {_COMPLETION_EVENT} "
+                "ORDER BY id DESC LIMIT 1) END AS completed_at "
+                "FROM page LEFT JOIN projects ON projects.id=page.project_id "
+                "ORDER BY page.requested DESC,page.id DESC",
                 (*parameters, limit + 1),
             ).fetchall()
-        items = [self.summary(r["id"]).model_dump(mode="json") for r in rows[:limit]]
+        items = [
+            self._summary(row, row["project_name"], row["completed_at"]).model_dump(mode="json")
+            for row in rows[:limit]
+        ]
         return {
             "items": items,
             "has_more": len(rows) > limit,

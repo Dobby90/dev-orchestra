@@ -2,15 +2,18 @@
 
 from fnmatch import fnmatchcase
 
+from pydantic import ValidationError
+
 from dev_orchestra.application.automatic_tests import (
     AUTOMATIC_TEST_CONTRACTS,
+    CRITERION_TEST_CONTRACT,
     GRADLE_TEST_CONTRACTS,
     automatic,
     model_selection,
 )
 from dev_orchestra.application.test_changes import checksum
 from dev_orchestra.application.validation import run_test_policy, run_test_policy_hash
-from dev_orchestra.domain.models import PipelineError
+from dev_orchestra.domain.models import Coverage, PipelineError
 from dev_orchestra.infrastructure.git import Git
 
 SELECTOR_VERSION = 1
@@ -154,7 +157,37 @@ def selected_config(run, selection):
     )
 
 
-def verify_selection(run, payload):
+def verify_coverage(run, coverage, ids, test_ids, required_criterion_tests):
+    criteria = {criterion["id"] for criterion in run["criteria"]}
+    covered = {item.criterion_id: item.command_ids for item in coverage}
+    if (
+        len(coverage) != len(criteria)
+        or set(covered) != criteria
+        or any(
+            not ids.issuperset(commands) or test_ids.isdisjoint(commands)
+            for commands in covered.values()
+        )
+    ):
+        raise PipelineError(
+            "missing acceptance criterion test coverage: "
+            f"missing={sorted(criteria - set(covered))}, unexpected={sorted(set(covered) - criteria)}, "
+            f"expected={sorted(criteria)}, received={[item.criterion_id for item in coverage]}, "
+            f"allowed_commands={sorted(ids)}, received_commands={covered}; "
+            "include each criterion exactly once with at least one configured test command"
+        )
+    missing = {
+        key: sorted(test_ids.intersection(alternatives))
+        for key, alternatives in required_criterion_tests.items()
+        if set(covered[key]).isdisjoint(alternatives)
+    }
+    if missing:
+        raise PipelineError(
+            f"coverage must reference an executed mapped test per criterion: {missing}"
+        )
+
+
+def verify_selection(run, payload, *, execution_only=False):
+    """Verify host execution and the Tester coverage recorded in a stage result."""
     selection = payload.get("test_selection")
     if not selection:
         if run.get("test_selection_contract"):
@@ -171,32 +204,60 @@ def verify_selection(run, payload):
     )
     if selection != expected or payload.get("revision", 0) != run.get("revision", 0):
         raise PipelineError("test selection SHA, scope, revision or policy mismatch")
-    execution = payload.get("execution", {})
-    actual = [item.get("command_id") for item in execution.get("commands", [])]
+    commands = verify_selected_execution(run, selection, payload.get("execution", {}))
+    if not execution_only and run.get("test_selection_contract") == CRITERION_TEST_CONTRACT:
+        try:
+            coverage = [Coverage.model_validate(item) for item in payload.get("coverage", [])]
+        except (TypeError, ValidationError) as error:
+            raise PipelineError("invalid acceptance criterion test coverage") from error
+        verify_coverage(
+            run,
+            coverage,
+            set(commands),
+            {key for key, command in commands.items() if command.kind == "test"},
+            {
+                item["criterion_id"]: item["command_ids"]
+                for item in selection.get("required_criterion_test_commands", [])
+            },
+        )
+
+
+def verify_selected_execution(run, selection, execution):
+    executed = execution.get("commands", [])
+    actual = [item.get("command_id") for item in executed]
     if set(actual) != set(selection["included"]) or len(actual) != len(set(actual)):
         raise PipelineError("test execution does not cover the host required command set")
     commands = selected_config(run, selection).commands
-    for command in execution.get("commands", []):
+    for command in executed:
         policy = commands[command["command_id"]]
         if command.get("argv") != policy.argv or command.get("kind", "test") != policy.kind:
             raise PipelineError("test execution command differs from immutable policy")
+    return commands
+
+
+def read_tool_evidence(path, expected_hash):
+    import json
+
+    from dev_orchestra.infrastructure.files import digest
+
+    raw = path.read_bytes()
+    if digest(raw) != expected_hash:
+        raise PipelineError("host test tool evidence checksum mismatch")
+    return json.loads(raw)
 
 
 def verify_tool_evidence(run, step, payload):
     """Verify the tool result and its JUnit/adapter files independently at approval."""
-    import json
     from pathlib import Path
 
-    from dev_orchestra.infrastructure.files import contained, digest
+    from dev_orchestra.infrastructure.files import contained
 
     reference = payload.get("test_evidence_reference")
     if not reference:
         return
     root = Path(step["data"]["artifact"]).parent
     path = contained(root, reference["id"] + "/evidence.json")
-    if digest(path.read_bytes()) != reference["hash"]:
-        raise PipelineError("host test tool evidence checksum mismatch")
-    value = json.loads(path.read_text())
+    value = read_tool_evidence(path, reference["hash"])
 
     def normalize(execution):
         return {
@@ -214,13 +275,19 @@ def verify_tool_evidence(run, step, payload):
         or normalize(value["execution"]) != normalize(payload["execution"])
     ):
         raise PipelineError("host test tool result differs from stage evidence")
+    verify_tool_artifacts(path.parent, value)
+
+
+def verify_tool_artifacts(directory, value):
+    from pathlib import Path
+
+    from dev_orchestra.infrastructure.files import contained, digest
+    from dev_orchestra.infrastructure.test_runner import verify_junit_artifact
+
     for command in value["execution"]["commands"]:
         if command.get("junit_path"):
-            junit = contained(
-                path.parent, str(Path(command["junit_path"]).relative_to(path.parent))
-            )
-            if digest(junit.read_bytes()) != command["junit_hash"]:
-                raise PipelineError("JUnit evidence checksum mismatch")
+            junit = contained(directory, str(Path(command["junit_path"]).relative_to(directory)))
+            verify_junit_artifact(junit, command)
         for adapter in command.get("runtime_adapters", []):
             if adapter == "docker":
                 # Container metadata is already bound to the checksummed execution record.
@@ -228,6 +295,6 @@ def verify_tool_evidence(run, step, payload):
             sha = adapter.get("sha256") if isinstance(adapter, dict) else None
             if not isinstance(sha, str) or not sha:
                 raise PipelineError("invalid runtime adapter evidence")
-            files = list(path.parent.glob(sha[:16] + "-*"))
+            files = list(directory.glob(sha[:16] + "-*"))
             if not files or not any(digest(file.read_bytes()) == sha for file in files):
                 raise PipelineError("runtime adapter checksum mismatch")

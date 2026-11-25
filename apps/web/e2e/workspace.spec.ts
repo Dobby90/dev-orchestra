@@ -50,6 +50,10 @@ test("PRD와 PNG 네 장을 제출하고 작업에서 원본을 다시 연다", 
   page,
 }) => {
   const f = fixture();
+  const repo = join(dirname(f.repo), "design-repository");
+  execFileSync("git", ["clone", "--quiet", f.repo, repo]);
+  execFileSync("git", ["-C", repo, "config", "user.name", "GUI 디자인 검사"]);
+  execFileSync("git", ["-C", repo, "config", "user.email", "test@localhost"]);
   await page.goto("/");
   await page.getByLabel("일회용 로그인 코드").fill(bootstrap());
   const session = page.waitForResponse(
@@ -66,7 +70,7 @@ test("PRD와 PNG 네 장을 제출하고 작업에서 원본을 다시 연다", 
     },
     data: {
       name: "GUI 디자인 검증",
-      repository_path: f.repo,
+      repository_path: repo,
       policy: f.policy,
     },
   });
@@ -176,6 +180,7 @@ test("실제 로컬 API: 로그인 → 프로젝트 → 실행 → 재연결 →
   const audit = await new AxeBuilder({ page }).analyze();
   expect(audit.violations).toEqual([]);
   await page.getByRole("link", { name: "연결 및 환경", exact: true }).click();
+  await page.getByRole("tab", { name: "에이전트 모델" }).click();
   await page.getByRole("button", { name: "모델 목록 불러오기" }).click();
   await page
     .getByRole("combobox", { name: "공통 기본값 모델", exact: true })
@@ -204,6 +209,7 @@ test("실제 로컬 API: 로그인 → 프로젝트 → 실행 → 재연결 →
   });
   await page.setViewportSize({ width: 1440, height: 1000 });
   await page.reload();
+  await page.getByRole("tab", { name: "에이전트 모델" }).click();
   await expect(
     page.getByRole("combobox", { name: "Review 모델", exact: true }),
   ).toHaveValue("test-review");
@@ -350,6 +356,18 @@ test("실제 로컬 API: 로그인 → 프로젝트 → 실행 → 재연결 →
     path: "test-results/notifications.png",
     fullPage: true,
   });
+  await page.getByRole("button", { name: "대화상자 닫기" }).click();
+  await page.getByRole("link", { name: "프로젝트", exact: true }).click();
+  await page.getByRole("button", { name: /알림, 읽지 않음/ }).click();
+  const pausedNotification = page
+    .getByRole("dialog")
+    .getByRole("link", { name: /작업이 일시중지되었습니다/ });
+  await pausedNotification.click();
+  await expect(page).toHaveURL(
+    new URL(runUrl).origin + new URL(runUrl).pathname,
+  );
+  await page.getByRole("button", { name: /알림, 읽지 않음/ }).click();
+  await expect(pausedNotification).toHaveCount(0);
   await page.getByRole("button", { name: "모두 읽음", exact: true }).click();
   await expect(page.getByRole("dialog")).toContainText("읽지 않은 알림 0개");
   await page.getByRole("button", { name: "대화상자 닫기" }).click();
@@ -359,12 +377,6 @@ test("실제 로컬 API: 로그인 → 프로젝트 → 실행 → 재연결 →
   ).toBeVisible();
   expect(alerts.filter((message) => message.includes("일시중지"))).toHaveLength(
     0,
-  );
-  await page.getByRole("link", { name: "프로젝트", exact: true }).click();
-  await page.getByRole("button", { name: "알림, 읽지 않음 0 개" }).click();
-  await page.getByRole("dialog").getByRole("link").first().click();
-  await expect(page).toHaveURL(
-    new URL(runUrl).origin + new URL(runUrl).pathname,
   );
   writeFileSync(f.release, "");
   await page.getByRole("button", { name: "재개", exact: true }).click();
@@ -531,7 +543,7 @@ test("실제 로컬 API: 로그인 → 프로젝트 → 실행 → 재연결 →
   for (const name of ["build", ".pytest_cache"])
     rmSync(join(worktree, name), { recursive: true });
   await page
-    .getByRole("button", { name: "Worktree 정리", exact: true })
+    .getByRole("button", { name: "Worktree 정리 재시도", exact: true })
     .click();
   await page.getByRole("button", { name: "Worktree 정리 확인" }).click();
   await expect(
@@ -539,7 +551,7 @@ test("실제 로컬 API: 로그인 → 프로젝트 → 실행 → 재연결 →
   ).toBeVisible();
   await expect.poll(() => existsSync(worktree)).toBe(false);
   await expect(
-    page.getByRole("button", { name: "Worktree 정리", exact: true }),
+    page.getByRole("button", { name: /^Worktree 정리/ }),
   ).toHaveCount(0);
   await page.getByRole("tab", { name: "변경 내용", exact: true }).click();
   await expect(page.getByText("이 후보의 변경 파일이 없습니다")).toBeVisible();

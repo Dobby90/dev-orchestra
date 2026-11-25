@@ -5,6 +5,7 @@ import json
 from dev_orchestra.infrastructure.process import sanitize
 
 DIAGNOSTIC_BUDGET = 20000
+COVERAGE_BUDGET = 4000
 
 
 def execution_summary(execution):
@@ -35,6 +36,18 @@ def execution_summary(execution):
     return value
 
 
+def coverage_summary(coverage):
+    shown = []
+    remaining = COVERAGE_BUDGET - 2  # JSON list brackets.
+    for item in coverage:
+        row = {key: item[key] for key in ("criterion_id", "command_ids")}
+        remaining -= len(json.dumps(row, ensure_ascii=False).encode()) + 2
+        if remaining < 0:
+            break
+        shown.append(row)
+    return {"coverage": shown, "omitted_coverage": len(coverage) - len(shown)}
+
+
 def role_context(request):
     context = request.context
     role = request.role
@@ -43,13 +56,26 @@ def role_context(request):
         context.pop("review_result", None)
     else:
         tests = context.get("test_result")
+        if (
+            role == "reviewer"
+            and tests
+            and (
+                tests.get("sha") != request.input_sha
+                or tests.get("revision", 0) != context.get("revision", 0)
+            )
+        ):
+            context.pop("test_result")
+            tests = None
         if tests:
             context["test_result"] = {
                 "sha": tests.get("sha"),
+                "revision": tests.get("revision", 0),
                 "execution": execution_summary(tests.get("execution", {})),
                 "test_selection": tests.get("test_selection"),
                 "evidence_reference": "test-result.json",
             }
+            if role == "reviewer":
+                context["test_result"].update(coverage_summary(tests.get("coverage", [])))
         review = context.get("review_result")
         if review:
             context["review_result"] = {

@@ -29,6 +29,7 @@ web = [
 [dependency-groups]
 dev = [
     "httpx>=0.28,<1",
+    "httpx2>=2.0,<3",
     "pytest>=8,<10",
     "ruff>=0.11,<1",
 ]

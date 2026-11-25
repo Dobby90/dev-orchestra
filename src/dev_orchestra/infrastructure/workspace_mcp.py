@@ -6,13 +6,14 @@ identity come from a private host descriptor, never from tool arguments.
 
 import json
 import sys
+from typing import Annotated
 
 from pydantic import Field, ValidationError
 
 from dev_orchestra.domain.models import Model, PipelineError, TestChange, TestTarget
 from dev_orchestra.infrastructure.files import write
 from dev_orchestra.infrastructure.process import execution_scope, redact
-from dev_orchestra.infrastructure.workspace import load_session
+from dev_orchestra.infrastructure.workspace import MAX_HASH_PATHS, load_session
 
 
 class EditFile(Model):
@@ -46,6 +47,23 @@ class ReadEvidence(Model):
     limit: int = Field(default=8000, ge=1, le=8000)
 
 
+class ReadTesterEvidence(ReadEvidence):
+    command_id: str | None = Field(default=None, pattern=r"^[A-Za-z0-9_-]+$")
+
+
+class TesterWorkspaceState(Model):
+    paths: list[Annotated[str, Field(min_length=1, max_length=4096)]] | None = Field(
+        default=None, min_length=1, max_length=MAX_HASH_PATHS
+    )
+
+
+READ_EVIDENCE = (
+    ReadEvidence,
+    "Read a bounded slice of this candidate's host test evidence, including criterion coverage. "
+    "Continue with offset when truncated.",
+)
+
+
 TOOLS = {
     "prepare_environment": (
         Empty,
@@ -73,36 +91,42 @@ TEST_TOOLS = {
         "Commit pending test edits and run host-validated commands. Supply commit_message with a Korean subject naming the tested behavior and a body describing only pending test changes; never claim unexecuted tests passed. Automatic selection requires test_plan (command_id, exact files relative to command working_directory, reason); command_ids must include mandatory commands. Inspect returned evidence.",
     ),
     "read_test_evidence": (
-        ReadEvidence,
-        "Read a bounded slice of this tester attempt host evidence.",
+        ReadTesterEvidence,
+        "Read current host evidence for command_id. Returns command status and a bounded JSON slice of its error and failed tests. Omit command_id to page through the full evidence. Offsets are character positions within the selected view.",
     ),
 }
+
+
+def workspace_tools(role, metadata_only=False):
+    if role == "reviewer":
+        return {"read_test_evidence": READ_EVIDENCE}
+    if role == "planner":
+        return {}
+    tester = role == "tester"
+    catalog = {
+        **(TEST_TOOLS if tester else TOOLS),
+        "workspace_state": (
+            (
+                TesterWorkspaceState,
+                f"Batch needed paths in one call (up to {MAX_HASH_PATHS}) to get candidate SHA and requested source hashes (null for missing files). Omit paths for full state.",
+            )
+            if tester
+            else (Empty, "Read current source hashes and confirmed commits.")
+        ),
+    }
+    if metadata_only:
+        return {
+            key: value
+            for key, value in catalog.items()
+            if key in {"workspace_state", "test_policy", "read_test_evidence"}
+        }
+    return catalog
 
 
 def _dispatch(session, request):
     if session.data["role"] != "reviewer":
         session.reload()
-    catalog = (
-        {"read_test_evidence": TEST_TOOLS["read_test_evidence"]}
-        if session.data["role"] == "reviewer"
-        else TEST_TOOLS
-        if session.data["role"] == "tester"
-        else TOOLS
-    )
-    if session.data["role"] != "reviewer":
-        catalog = {
-            **catalog,
-            "workspace_state": (
-                Empty,
-                "Read current source hashes, confirmed commits and preserved test evidence; never writes files.",
-            ),
-        }
-        if session.data.get("metadata_only"):
-            catalog = {
-                key: value
-                for key, value in catalog.items()
-                if key in {"workspace_state", "test_policy", "read_test_evidence"}
-            }
+    catalog = workspace_tools(session.data["role"], session.data.get("metadata_only", False))
     method = request.get("method")
     if method == "initialize":
         return {

@@ -9,13 +9,19 @@ from test_workspace import edit
 from test_workspace import setup as setup
 
 from dev_orchestra.application.plan_approval import binding, decide
+from dev_orchestra.application.service import RunService
+from dev_orchestra.config import Tests as ConfiguredTests
 from dev_orchestra.domain.models import (
     Coverage,
+    FixIssueOutcome,
+    PipelineError,
     ReviewAssessment,
     ReviewResultV2,
+    WorkspaceFixResult,
     WorkspaceResult,
     WorkspaceTestResult,
 )
+from dev_orchestra.infrastructure.files import write
 from dev_orchestra.infrastructure.test_runner import TestRunner as HostTests
 from dev_orchestra.orchestration.runner import Runner
 
@@ -48,8 +54,6 @@ def test_scope_survives_developer_tester_reviewer_fixer_and_final_approval(setup
 
         upgrade(svc.store.path, workspace=isinstance(web, str))
         if isinstance(web, str):
-            from dev_orchestra.application.service import RunService
-
             svc = RunService(svc.config)
             rid = svc.create(
                 repo, Path(svc.store.get(rid)["directory"]) / "spec.md", test_scope=scope
@@ -111,6 +115,18 @@ def test_scope_survives_developer_tester_reviewer_fixer_and_final_approval(setup
                     else request.context["review_result"]["issues"]
                 )
             edit(session, "main.py", request.role + "\n")
+            if request.role == "fixer":
+                return WorkspaceFixResult(
+                    summary="현재 코드에서 요구사항 수정",
+                    issue_outcomes=[
+                        FixIssueOutcome(
+                            issue_id=issue_id,
+                            status="implemented",
+                            evidence="main.py의 요구사항 동작을 수정했습니다.",
+                        )
+                        for issue_id in request.context["response_contract"]["issue_ids"]
+                    ],
+                )
             if web == "fallback" and request.role == "developer":
                 edit(session, "unmapped.py", "unmapped input\n")
             return WorkspaceResult(summary="현재 코드에서 요구사항 구현")
@@ -175,6 +191,7 @@ def test_scope_survives_developer_tester_reviewer_fixer_and_final_approval(setup
     from dev_orchestra.application.measurement import measurement
 
     observed = measurement(svc.store, rid, version_label="candidate", scenario="normal")
+    assert observed["same_scope_comparison_key"]
     invocations = [
         item for stage in observed["stages"] for item in (stage["test_invocations"] or [])
     ]
@@ -182,3 +199,85 @@ def test_scope_survives_developer_tester_reviewer_fixer_and_final_approval(setup
     assert [item["status"] for item in invocations] == (
         ["failed", "passed"] if web == "test_failure" else ["passed", "passed"]
     )
+
+
+def test_mapped_tests_bind_tester_repair_and_final_approval(setup):
+    svc, initial_id, repo = setup
+    spec = Path(svc.store.get(initial_id)["directory"]) / "spec.md"
+    config = svc.config.model_copy(deep=True)
+    commands = {}
+    for key in ("unit", "integration"):
+        report = f"build/{key}.xml"
+        junit = f'<testsuite><testcase name="{key}"/></testsuite>'
+        commands[key] = {
+            "argv": [
+                sys.executable,
+                "-c",
+                f"from pathlib import Path; Path({report!r}).write_text({junit!r})",
+            ],
+            "junit_report": report,
+        }
+    config.tests = ConfiguredTests.model_validate(
+        {"commands": commands, "affected": {"criterion_commands": {"AC1": ["integration"]}}}
+    )
+    svc = RunService(config)
+    rid = svc.create(repo, spec, test_scope="affected", auto_approve_plan=True)
+    assert svc.store.get(rid)["test_selection_contract"] == 8
+
+    class Agent(FakeAgent):
+        def run_workspace(self, request, directory, session, stop):
+            if request.role == "developer":
+                edit(session, "main.py", "implemented\n")
+                return WorkspaceResult(summary="요구사항 구현")
+            self.calls.append(request.role)
+            assert session.test_policy()["required_criterion_test_commands"] == [
+                {"criterion_id": "AC1", "command_ids": ["integration"]}
+            ]
+            if request.context["workspace_resume"]["metadata_only"]:
+                assert "coverage" in session.data["response_error"]
+                value = session.read_test_payload()
+                covered = "integration"
+            else:
+                plan = [{"command_id": key, "reason": "인수 조건 검증"} for key in commands]
+                with pytest.raises(PipelineError, match="AC1.*integration"):
+                    session.run_tests(["unit"], test_plan=plan[:1])
+                assert not session.data.get("test_evidence")
+                value = session.run_tests(list(commands), test_plan=plan)
+                assert value["execution"]["status"] == "passed"
+                covered = "unit"
+            return WorkspaceTestResult(
+                summary="인수 조건별 실제 실행 확인",
+                command_ids=value["selection"]["included"],
+                test_evidence_id=value["evidence_id"],
+                coverage=[Coverage(criterion_id="AC1", command_ids=[covered])],
+            )
+
+    agent = Agent()
+    Runner(svc.store, agent, HostTests()).execute(rid)
+    run = svc.store.get(rid)
+    assert run["state"] == "waiting_approval", run.get("error")
+    assert agent.calls == ["planner", "tester", "tester", "reviewer"]
+    saved = run["test_result"]
+    assert saved["coverage"] == [{"criterion_id": "AC1", "command_ids": ["integration"]}]
+    assert len(list(Path(run["directory"]).rglob("test-*/evidence.json"))) == 1
+
+    from dev_orchestra.application.measurement import measurement
+
+    assert measurement(svc.store, rid, version_label="candidate", scenario="recovery")[
+        "same_scope_comparison_key"
+    ]
+
+    step = next(step for step in svc.store.steps(rid) if step["role"] == "tester")
+    path = Path(step["data"]["artifact"])
+    forged = saved | {"coverage": [{"criterion_id": "AC1", "command_ids": ["unit"]}]}
+    svc.store.finish_step(step["id"], saved["sha"], step["data"] | {"hash": write(path, forged)})
+    svc.store.update(rid, test_result=forged)
+    with pytest.raises(PipelineError, match="coverage.*AC1.*integration"):
+        svc.approve(rid)
+    assert svc.store.get(rid)["state"] == "waiting_approval"
+
+    assert write(path, saved) == step["data"]["hash"]
+    svc.store.finish_step(step["id"], saved["sha"], step["data"])
+    svc.store.update(rid, test_result=saved)
+    svc.approve(rid)
+    assert svc.store.get(rid)["state"] == "completed"

@@ -838,6 +838,38 @@ def test_run_list_and_detail_expose_linked_project_name(web):
     assert client.get(f"/api/runs/{rid}").json()["project_name"] == registered["name"]
 
 
+def test_run_list_accepts_repeated_states_with_legacy_and_project_filters(web):
+    client, svc, _, repo, _ = web
+    registered = project(client, svc, repo)
+    for rid, state, project_id in [
+        ("approval-c", "waiting_approval", registered["id"]),
+        ("approval-b", "waiting_plan_approval", registered["id"]),
+        ("approval-a", "waiting_approval", None),
+        ("active", "testing", registered["id"]),
+    ]:
+        svc.store.create({"id": rid, "created_at": "2026-11-25T10:00:00+09:00"})
+        with svc.store.connection() as db:
+            db.execute("UPDATE runs SET state=?,project_id=? WHERE id=?", (state, project_id, rid))
+
+    grouped = [("states", "waiting_approval"), ("states", "waiting_plan_approval")]
+    first = client.get("/api/runs", params=[*grouped, ("limit", 2)]).json()
+    assert [item["id"] for item in first["items"]] == ["approval-c", "approval-b"]
+    assert first["next_cursor"] == "approval-b"
+    second = client.get("/api/runs", params=[*grouped, ("cursor", first["next_cursor"])]).json()
+    assert [item["id"] for item in second["items"]] == ["approval-a"]
+    assert not second["has_more"]
+
+    filtered = client.get("/api/runs", params=[*grouped, ("project_id", registered["id"])]).json()
+    assert [item["id"] for item in filtered["items"]] == ["approval-c", "approval-b"]
+    assert all(item["project_name"] == registered["name"] for item in filtered["items"])
+    legacy = [("state", "waiting_approval"), ("project_id", registered["id"])]
+    for params in (legacy, [*legacy, *grouped]):
+        response = client.get("/api/runs", params=params).json()
+        assert [item["id"] for item in response["items"]] == ["approval-c"]
+    assert client.get("/api/runs", params={"state": "unknown"}).json()["items"] == []
+    assert client.get("/api/runs", params={"states": "unknown"}).status_code == 422
+
+
 def test_directory_picker_lists_only_directories_and_rejects_links(web, tmp_path):
     c, _, _, repo, _ = web
     root = tmp_path.resolve() / "browse"

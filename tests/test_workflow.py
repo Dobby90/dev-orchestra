@@ -43,7 +43,7 @@ class FakeAgent:
                         suggestion="fix value",
                     )
                 ]
-                if req.iteration < self.block
+                if req.iteration == 0 and self.block
                 else []
             )
             return ReviewResultV2(
@@ -53,7 +53,7 @@ class FakeAgent:
                     ReviewAssessment(
                         issue_id=item["issue_id"],
                         candidate_sha=req.input_sha,
-                        status="unresolved" if issues else "resolved",
+                        status="unresolved" if req.iteration < self.block else "resolved",
                         evidence="현재 후보 코드 확인",
                     )
                     for item in req.context.get("open_issues", [])
@@ -77,7 +77,12 @@ class FakeAgent:
         return AgentResult(summary="ok")
 
     def run_workspace(self, req, directory, session, stop):
-        from dev_orchestra.domain.models import WorkspaceResult, WorkspaceTestResult
+        from dev_orchestra.domain.models import (
+            FixIssueOutcome,
+            WorkspaceFixResult,
+            WorkspaceResult,
+            WorkspaceTestResult,
+        )
 
         result = self.run(req, directory, stop)
         if result.questions:
@@ -95,6 +100,19 @@ class FakeAgent:
                 test_evidence_id=value["evidence_id"],
                 command_ids=result.command_ids,
                 coverage=result.coverage,
+            )
+        if req.role == "fixer":
+            return WorkspaceFixResult(
+                summary=result.summary,
+                no_change_reason="기존 코드가 요구사항을 충족합니다",
+                issue_outcomes=[
+                    FixIssueOutcome(
+                        issue_id=issue_id,
+                        status="blocked",
+                        evidence="이 테스트의 Fixer 대역은 파일을 변경하지 않습니다.",
+                    )
+                    for issue_id in req.context["response_contract"]["issue_ids"]
+                ],
             )
         return WorkspaceResult(
             summary=result.summary, no_change_reason="기존 코드가 요구사항을 충족합니다"

@@ -221,6 +221,50 @@ def report(
     typer.echo(ctx.obj.report(run_id, detailed=detailed))
 
 
+@app.command("review-issues")
+@guarded
+def review_issues(ctx: typer.Context, run_id: str):
+    from dev_orchestra.application.results import Results
+    from dev_orchestra.application.reviews import Reviews, unresolved_groups
+
+    if not Results(ctx.obj.store).enabled():
+        raise PipelineError("run database-upgrade first")
+    run = ctx.obj.store.get(run_id)
+    issues = Reviews(ctx.obj.store).issues(run_id)
+    typer.echo(
+        json.dumps(
+            {
+                "unresolved_count": len(unresolved_groups(run, issues)),
+                "duplicates": run.get("review_issue_duplicates", {}),
+                "issues": issues,
+            },
+            ensure_ascii=False,
+            indent=2,
+        )
+    )
+
+
+@app.command("link-review-duplicate")
+@guarded
+def link_review_duplicate(
+    ctx: typer.Context,
+    run_id: str,
+    duplicate_id: str,
+    representative_id: str,
+    reason: str = typer.Option(...),
+):
+    from dev_orchestra.application.commands import Commands
+
+    run = ctx.obj.store.get(run_id)
+    operation = Commands(ctx.obj).execute(
+        run_id,
+        "link-review-duplicate",
+        run["version"],
+        {"duplicate_id": duplicate_id, "representative_id": representative_id, "reason": reason},
+    )
+    typer.echo(json.dumps(operation, ensure_ascii=False, indent=2))
+
+
 @app.command()
 @guarded
 def logs(ctx: typer.Context, run_id: str, follow: bool = False, role: str | None = None):

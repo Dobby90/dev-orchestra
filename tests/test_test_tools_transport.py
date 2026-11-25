@@ -27,20 +27,31 @@ config = {{sys.argv[i+1].split('=',1)[0]: sys.argv[i+1].split('=',1)[1]
 command = json.loads(config['mcp_servers.workspace.command'])
 args = json.loads(config['mcp_servers.workspace.args'])
 proc = subprocess.Popen([command,*args], stdin=subprocess.PIPE,stdout=subprocess.PIPE,text=True)
-def call(method,params=None):
+def call(method,params=None,denied=False):
     proc.stdin.write(json.dumps({{'jsonrpc':'2.0','id':1,'method':method,'params':params or {{}}}})+'\\n')
     proc.stdin.flush()
     response=json.loads(proc.stdout.readline())
+    if denied:
+        assert response.get('error',{{}}).get('message')=='unsupported workspace tool',response
+        return
     assert 'error' not in response,response
     return response['result']
 call('initialize')
 tools={{tool['name'] for tool in call('tools/list')['tools']}}
+assert set(json.loads(config['mcp_servers.workspace.enabled_tools']))==tools
 if {role!r} == 'tester':
     assert tools == {{'edit_file','run_tests','test_policy','read_test_evidence','workspace_state'}}
+    state=call('tools/call',{{'name':'workspace_state','arguments':{{'paths':['tests/test_main.py']}}}})
+    files=json.loads(state['content'][0]['text'])
+    assert set(files) == {{'candidate_sha','files'}} and set(files['files']) == {{'tests/test_main.py'}}
     result=call('tools/call',{{'name':'run_tests','arguments':{{'command_ids':['unit']}}}})
     assert not result.get('isError'),result
     value=json.loads(result['content'][0]['text'])
     assert value['execution']['status']=='passed'
+    result=call('tools/call',{{'name':'read_test_evidence','arguments':{{'evidence_id':value['evidence_id'],'command_id':'unit'}}}})
+    command=json.loads(result['content'][0]['text'])
+    assert command['command']['status']=='passed' and command['sha']==files['candidate_sha']
+    assert command['command']['junit_hash'] and json.loads(command['text'])['failure_details']==[]
     response={{'summary':'실제 테스트 결과 확인','questions':[],'no_change_reason':'',
                'command_ids':['unit'],'coverage':[{{'criterion_id':'AC1','command_ids':['unit']}}],
                'test_evidence_id':value['evidence_id']}}
@@ -48,7 +59,18 @@ else:
     assert tools == {{'read_test_evidence'}}
     result=call('tools/call',{{'name':'read_test_evidence','arguments':{{'evidence_id':{evidence_id!r},'limit':500}}}})
     assert not result.get('isError'),result
-    assert 'execution' in json.loads(result['content'][0]['text'])['text']
+    page=json.loads(result['content'][0]['text'])
+    text=page['text']
+    while page['truncated']:
+        result=call('tools/call',{{'name':'read_test_evidence','arguments':{{'evidence_id':{evidence_id!r},'offset':len(text)}}}})
+        assert not result.get('isError'),result
+        page=json.loads(result['content'][0]['text'])
+        text+=page['text']
+    evidence=json.loads(text)
+    assert evidence['coverage']==[{{'criterion_id':'AC1','command_ids':['unit']}}]
+    assert evidence['execution']['passed'] and evidence['revision']==0
+    for name in ('edit_file','run_tests'):
+        call('tools/call',{{'name':name,'arguments':{{}}}},denied=True)
     response={{'summary':'독립 리뷰 완료','questions':[],'issues':[]}}
 proc.stdin.close()
 assert proc.wait(timeout=10)==0
@@ -85,6 +107,7 @@ def test_reviewer_stdio_exposes_only_readonly_candidate_evidence(setup, tmp_path
         {
             "sha": value["sha"],
             "revision": 0,
+            "coverage": [{"criterion_id": "AC1", "command_ids": ["unit"]}],
             "execution": session.read_test_payload()["execution"],
             "test_selection": value["selection"],
         },

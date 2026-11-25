@@ -146,6 +146,13 @@ CLI에서 PNG를 첨부하려면 `run`에 `--image path/to/design.png`를 추가
 최종 승인 대기에 도달하면 보고서와 테스트·리뷰·Diff를 검토한 뒤 승인합니다.
 최종 보고서에는 변경 요약, 검증 결과, 승인 전 확인 항목이 표시됩니다. 웹에서는 보고서 아래의 링크로 테스트·코드 리뷰·변경 내용·요구사항을 열 수 있습니다. CLI에서 원문과 상세 근거가 필요하면 `report RUN_ID --detailed`를 사용합니다.
 
+같은 결함이 여러 이슈로 기록됐다면 `review-issues`로 ID와 상태를 확인한 뒤 `link-review-duplicate`로 연결합니다. 미해결 집계와 Fixer 입력은 대표 ID 기준으로 계산합니다. 회차별 리뷰 이력과 각 이슈의 판정은 보존합니다. 이슈 해결에는 동일 후보의 테스트 통과와 독립 재평가가 필요합니다.
+
+```sh
+.venv/bin/devorchestra --config config.yaml review-issues RUN_ID
+.venv/bin/devorchestra --config config.yaml link-review-duplicate RUN_ID DUPLICATE_ID REPRESENTATIVE_ID --reason '동일한 실패 조건과 근거 확인'
+```
+
 ```sh
 .venv/bin/devorchestra --config config.yaml report RUN_ID
 .venv/bin/devorchestra --config config.yaml approve RUN_ID
@@ -212,11 +219,17 @@ Developer/Fixer는 패키지 설정을 작성한 뒤 `workspace.prepare_environm
 
 테스트 범위의 기본값은 전체 검사(`full`)입니다. 변경 영향 범위 검사(`affected`)는 누적 변경과 인수 조건에 따라 검사를 선택하고 호스트가 검증합니다. CLI에서는 `run --test-scope affected`로 지정합니다. 범위와 정책은 작업 생성 시 고정되며 이후 설정 변경은 새 작업에 적용됩니다.
 
+새 `affected` 작업에서 `tests.affected.criterion_commands`에 인수 조건별 실제 테스트를 지정하면, 지정한 테스트 명령 중 하나 이상을 실행하고 해당 조건의 `coverage`에 기록해야 합니다. 빌드만 지정한 조건은 그 빌드와 함께 실제 동작을 검증하는 테스트를 연결합니다. 매핑이 없는 조건은 관련 테스트를 자동으로 선택합니다.
+
 새 `affected` 작업에서 Gradle 테스트는 표준 `src/test`의 Java·Kotlin·Groovy 클래스 파일을 선택할 수 있습니다. 호스트는 소문자로 시작하는 패키지의 전체 클래스 이름을 단일 Gradle `test` 태스크의 `--tests` 옵션으로 전달합니다. 이름과 디렉터리가 다른 모듈도 Gradle 설정이 확정한 프로젝트에서 태스크를 실행합니다. 빌드 검사는 변경 모듈과 커밋된 빌드 파일의 `project(...)` 의존 모듈을 포함합니다. 공통 설정과 설정이 참조하는 파일을 변경하면 빌드 검사를 확대하며, 프로젝트가 지정한 필수 회귀와 검증 의존 관계도 반영합니다.
 
 Jest는 선택한 spec 경로를 `--runTestsByPath`로 전달합니다. 자체 잠금 파일을 가진 독립 Vue CLI·Vite 앱에서는 기존 `src/views/`·`src/components/`의 화면 내부나 `tests/`만 바뀌면 관련 테스트를 선택합니다. 빌드 설정·의존성·진입점·모듈 또는 자산 참조가 바뀌거나 번들 영향이 불확실하면 앱 빌드도 선택합니다. Vue CLI 앱에 단일 명령으로 실행되는 `build:production` 스크립트가 있으면 자동 감지한 앱 빌드에 사용합니다. 하위 Docusaurus 빌드는 변경과 연결될 때 준비하고 실행합니다. 인수 조건과 프로젝트가 지정한 필수 검증·의존 관계에 따라 빌드를 추가할 수 있습니다.
 
 새 `affected` 작업은 Tester에서 대상이 확정된 뒤 선택된 명령의 실행 환경을 준비합니다. 같은 패키지 루트의 Jest와 앱 빌드는 의존성을 한 번 점검합니다. Gradle 8 이상 Wrapper를 자동 감지하면 테스트 태스크만 재실행하고 컴파일 등 선행 태스크의 증분 결과를 재사용할 수 있습니다.
+
+호스트는 같은 Gradle 빌드의 연속된 `assemble` 검사에서 실행 환경과 캐시가 호환되면 한 번의 Gradle 호출로 실행합니다. 모듈별 명령 ID와 결과를 보존하고 묶음 소요 시간은 검증 전체에 한 번만 합산합니다. 모듈별 결과를 확인할 수 없으면 개별 실행으로 돌아갑니다. 테스트 명령은 별도로 실행해 JUnit 근거를 수집합니다.
+
+`scripts/measure_run.py`로 Run의 성능을 비교할 때는 `same_scope_comparison_version`과 `same_scope_comparison_key`가 각각 일치하고 키가 `null`이 아닌 측정값을 사용합니다. 키는 검증된 Tester 단계별 명령 인자, 작업 디렉터리, 실행 순서와 선택한 테스트 파일·클래스를 반영합니다. 실행 기록이나 확정된 선택 근거로 작업량을 확인할 수 없으면 키는 `null`입니다.
 
 GUI **설정 → 에이전트 모델 설정**에서 공통·역할별 모델, 추론 강도, 속도를 지정하고 새 작업에서 해당 작업에만 적용할 값을 바꿀 수 있습니다. 패스트는 선택한 모델이 지원할 때 사용할 수 있으며, 일반 속도보다 사용량을 더 많이 소모합니다. 저장한 GUI 설정은 같은 DB를 사용하는 CLI의 새 작업에도 적용되며 YAML의 모델 설정보다 우선합니다.
 

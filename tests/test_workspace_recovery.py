@@ -11,6 +11,7 @@ from test_workspace import checkpoint, edit, start_session
 from test_workspace import setup as setup
 
 from dev_orchestra.agents.contracts import ResponseError
+from dev_orchestra.agents.prompts import prompt
 from dev_orchestra.application.backend import BackendService
 from dev_orchestra.application.plan_approval import binding, decide
 from dev_orchestra.application.web_contracts import ProjectCreate
@@ -445,6 +446,60 @@ def test_changed_requirements_do_not_reuse_partial_stage_permissions(setup, tmp_
         svc.resume(rid, answers=answer)
     assert (session.root / "main.py").read_text() == "preserved\n"
     assert svc.store.get(rid)["next_role"] == "developer"
+
+
+def test_late_question_preserves_stage_and_resumes_without_new_answers(setup, tmp_path):
+    class Asking(Agent):
+        def run_workspace(self, req, directory, session, stop):
+            if req.role != "developer":
+                return super().run_workspace(req, directory, session, stop)
+            self.calls.append(req.role)
+            if self.calls.count("developer") == 1:
+                assert "before the first edit" in prompt(req)
+                edit(session, "main.py", "committed work\n")
+                self.committed = checkpoint(session, "unit", ["main.py"])["sha"]
+                edit(session, "pending.py", "preserved work\n")
+                self.step_id = session.data["step_id"]
+                return WorkspaceResult(summary="추가 요구 확인", questions=["계약을 바꿀까요?"])
+            state = req.context["workspace_resume"]
+            assert state["continuing"] and state["has_edits"] and not state["metadata_only"]
+            assert session.data["step_id"] == self.step_id
+            assert session.git.sha() == self.committed
+            assert (session.root / "pending.py").read_text() == "preserved work\n"
+            return WorkspaceResult(summary="같은 요구사항으로 보존한 작업을 완료")
+
+    svc, rid, _ = setup
+    agent = Asking()
+    runner = planned(setup, agent, FakeTests())
+    runner.execute(rid)
+    blocked = svc.store.get(rid)
+    assert blocked["state"] == "needs_input" and not blocked.get("questions")
+    assert "Resume without answers" in blocked["error"] and "new Run" in blocked["error"]
+    assert blocked["workspace_checkpoint"]["step_id"] == agent.step_id
+    session, _ = inspect_workspace(svc.store, blocked)
+    assert session.data.get("response") is None
+    attempts = session.data.get("repair_calls", 0)
+    answer = tmp_path / "answer.txt"
+    answer.write_text("요구사항을 변경합니다")
+    with pytest.raises(PipelineError, match="new Run"):
+        svc.resume(rid, answers=answer)
+    svc.resume(rid)
+    resumed, _ = inspect_workspace(svc.store, svc.store.get(rid))
+    assert resumed.data.get("repair_calls", 0) == attempts
+    runner.execute(rid)
+    run = svc.store.get(rid)
+    assert run["state"] == "waiting_approval", run.get("error")
+    assert (run["revision"], run["iteration"]) == (blocked["revision"], blocked["iteration"])
+    (step,) = [s for s in svc.store.steps(rid) if s["role"] == "developer"]
+    assert step["id"] == agent.step_id and step["status"] == "completed"
+
+
+def test_metadata_repair_cannot_return_questions(setup):
+    session, _ = start_session(setup)
+    session.data["metadata_only"] = True
+    session.save()
+    with pytest.raises(ResponseError, match="empty questions"):
+        session.finish(WorkspaceResult(summary="보완", questions=["재기획할까요?"]))
 
 
 def test_confirmed_environment_failure_can_retry_with_a_new_tester_attempt(setup):

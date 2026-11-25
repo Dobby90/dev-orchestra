@@ -202,10 +202,7 @@ class GitDeliveryService:
             return self.view(pid)
 
     def registered_run(self, rid):
-        run = self.backend.registered_run(rid)
-        with self.store.connection() as db:
-            project_id = db.execute("SELECT project_id FROM runs WHERE id=?", (rid,)).fetchone()[0]
-        return {**run, "project_id": project_id}
+        return self.backend.registered_run(rid)
 
     def preview(self, rid):
         run = self.registered_run(rid)

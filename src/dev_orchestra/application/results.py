@@ -76,9 +76,10 @@ class Results:
         try:
             root = Path(run["directory"])
             path = contained(root, str(Path(step["data"]["artifact"]).relative_to(root)))
-            if digest(path.read_bytes()) != step["data"]["hash"]:
+            raw = path.read_bytes()
+            if digest(raw) != step["data"]["hash"]:
                 raise PipelineError("result evidence modified")
-            value = json.loads(path.read_text())
+            value = json.loads(raw)
             if value["sha"] != step["output_sha"]:
                 raise PipelineError("result SHA mismatch")
             return sanitize(value)
@@ -162,6 +163,12 @@ class Results:
         return base
 
     def reviews(self, run_id, step_id=None):
+        from dev_orchestra.application.reviews import (
+            VERIFICATION_PENDING_NOTE,
+            Reviews,
+            verification_pending,
+        )
+
         run, step, history = self.selected(run_id, "reviewer", step_id)
         base = {
             "status": "not_run",
@@ -199,10 +206,32 @@ class Results:
             ]
         if step_id is None and payload.get("schema_version") == 2:
             issues = self.current_review_issues(run_id, issues)
+        selectable = (
+            Reviews(self.store).selectable_issue_ids(run)
+            if step_id is None
+            and payload.get("schema_version") == 2
+            and step["output_sha"] == run.get("current_sha")
+            and step["revision"] == run.get("revision", 0)
+            else set()
+        )
+        presented = []
+        for issue in issues:
+            pending = verification_pending(issue, step["output_sha"], step["id"])
+            note = issue.get("status_note")
+            if note == VERIFICATION_PENDING_NOTE and not pending:
+                note = None
+            presented.append(
+                issue
+                | {
+                    "verification_pending": pending,
+                    "status_note": note,
+                    "can_request_fix": issue["issue_id"] in selectable,
+                }
+            )
         base.update(
             status="available",
             summary=payload.get("summary", ""),
-            issues=issues,
+            issues=presented,
             legacy_incomplete=payload.get("schema_version") != 2,
         )
         return base

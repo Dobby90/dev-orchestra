@@ -6,6 +6,7 @@ from test_workflow import FakeAgent, FakeTests
 from test_workflow import WorkerRunner as Runner
 from test_workflow import service as service
 
+from dev_orchestra.agents.prompts import prompt
 from dev_orchestra.application.commands import Commands
 from dev_orchestra.application.plan_approval import binding, decide
 from dev_orchestra.domain.models import AgentResult, PipelineError, ReviewResultV2
@@ -17,7 +18,15 @@ def planned(service, monkeypatch):
     svc, old, repo = service
     monkeypatch.undo()
     rid = svc.create(repo, Path(svc.store.get(old)["directory"]) / "spec.md")
-    agent = FakeAgent()
+
+    class Planner(FakeAgent):
+        def run(self, req, directory, stop):
+            result = super().run(req, directory, stop)
+            if req.role == "planner":
+                result.plan = "1. 기능 구현\n2. 예외 입력의 오류 처리 검증"
+            return result
+
+    agent = Planner()
     runner = Runner(svc.store, agent, FakeTests())
     runner.execute(rid)
     assert agent.calls == ["planner"], svc.store.get(rid).get("error")
@@ -67,6 +76,17 @@ def test_automatic_approval_uses_current_plan(service, monkeypatch, tmp_path, re
             answers = tmp_path / "answers.md"
             answers.write_text("추가 인수 조건을 기획에 반영")
         svc.resume(rid, answers)
+        if resume == "new_instructions":
+            original = agent.run
+
+            def check_previous_plan(request, *args):
+                if request.role == "planner":
+                    previous = request.context["previous_plan"]
+                    assert previous["revision"] == 0 and previous["plan"] and previous["criteria"]
+                    assert "추가 인수 조건을 기획에 반영" in prompt(request)
+                return original(request, *args)
+
+            monkeypatch.setattr(agent, "run", check_previous_plan)
 
     runner._execute(rid)
 
@@ -110,11 +130,30 @@ def test_automatic_approval_waits_for_answers(service, monkeypatch):
     assert run.get("plan_approval") is None
 
 
-@pytest.mark.parametrize("upgrade_database", [False, True])
-def test_revision_requires_new_approval(planned, upgrade_database):
+def test_revision_requires_new_approval(planned, monkeypatch):
     svc, rid, agent, runner = planned
-    old = binding(svc.store, svc.store.get(rid))["plan_hash"]
-    decide(svc, rid, old, False, "예외 처리 계획 보완")
+    prior = svc.store.get(rid)
+    old = binding(svc.store, prior)["plan_hash"]
+    reason = "기존 2단계의 예외 처리 계획을 보완"
+    decide(svc, rid, old, False, reason)
+    original = agent.run
+
+    def revise(request, *args):
+        result = original(request, *args)
+        if request.role == "planner":
+            assert request.context["plan"] is None and request.context["criteria"] == []
+            assert request.context["previous_plan"] == {
+                "plan": prior["plan"],
+                "criteria": prior["criteria"],
+                "plan_hash": old,
+                "revision": 0,
+            }
+            rendered = prompt(request)
+            assert reason in rendered and "2. 예외 입력의 오류 처리 검증" in rendered
+            result.plan += "\n   - 빈 입력과 잘못된 값의 오류를 각각 확인"
+        return result
+
+    monkeypatch.setattr(agent, "run", revise)
     runner.execute(rid)
     assert agent.calls == ["planner", "planner"]
     assert svc.store.get(rid)["state"] == "waiting_plan_approval"
@@ -122,10 +161,18 @@ def test_revision_requires_new_approval(planned, upgrade_database):
         decide(svc, rid, old, True)
     assert svc.store.get(rid)["iteration"] == 0
     new = binding(svc.store, svc.store.get(rid))["plan_hash"]
-    if upgrade_database:
-        upgrade(svc.store.path)
+    assert new != old
     assert binding(svc.store, svc.store.get(rid))["plan_hash"] == new
     decide(svc, rid, new, True)
+    decisions = [
+        json.loads(event["data"])
+        for event in svc.store.events(rid)
+        if event["kind"] == "plan.decided"
+    ]
+    assert [(item["plan_hash"], item["approved"]) for item in decisions] == [
+        (old, False),
+        (new, True),
+    ]
     runner.execute(rid)
     assert svc.store.get(rid)["state"] == "waiting_approval"
     assert agent.calls.count("developer") == 1
@@ -157,7 +204,8 @@ def test_commands_are_atomic_and_idempotent(planned):
     result = commands.execute(rid, "approve-plan", run["version"], body, "approve-once")
     assert commands.execute(rid, "approve-plan", run["version"], body, "approve-once") == result
     with svc.store.connection() as db:
-        assert db.execute("SELECT count(*) FROM jobs WHERE run_id=?", (rid,)).fetchone()[0] == 1
+        jobs = db.execute("SELECT kind, state FROM jobs WHERE run_id=? ORDER BY rowid", (rid,))
+        assert [tuple(job) for job in jobs] == [("execute", "finished"), ("resume", "queued")]
 
 
 def test_missing_approval_cannot_be_bypassed(planned):

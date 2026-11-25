@@ -149,7 +149,7 @@ def test_runs_overlap_and_preserve_isolated_results(service, tmp_path, same_repo
             # Cleanup of A cannot remove B's worktree or release B's capacity record.
             if web_schema != "workspace":
                 svc.cancel(ids[0])
-            with pytest.raises(PipelineError, match="worktree|dirty"):
+            with pytest.raises(PipelineError, match="(?i)worktree|dirty"):
                 svc.cleanup(ids[0])
         else:
             release.set()  # Both candidates must commit and validate independently.

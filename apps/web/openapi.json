@@ -1172,6 +1172,28 @@
               ],
               "title": "Project Id"
             }
+          },
+          {
+            "name": "states",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/State"
+                  },
+                  "maxItems": 15
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Repeat to match any listed state. Other filters also apply.",
+              "title": "States"
+            },
+            "description": "Repeat to match any listed state. Other filters also apply."
           }
         ],
         "responses": {
@@ -3391,8 +3413,15 @@
           "instructions": {
             "type": "string",
             "maxLength": 65536,
-            "minLength": 1,
-            "title": "Instructions"
+            "title": "Instructions",
+            "default": ""
+          },
+          "issue_ids": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Issue Ids"
           },
           "new_max_fix_attempts": {
             "anyOf": [
@@ -3411,8 +3440,7 @@
         "additionalProperties": false,
         "type": "object",
         "required": [
-          "expected_sha",
-          "instructions"
+          "expected_sha"
         ],
         "title": "ChangeInput"
       },
@@ -5629,6 +5657,28 @@
               }
             ],
             "title": "Status Note"
+          },
+          "verification_pending": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Verification Pending"
+          },
+          "can_request_fix": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Can Request Fix"
           },
           "assessed_sha": {
             "anyOf": [

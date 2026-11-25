@@ -113,6 +113,27 @@ class WorkspaceResult(Model):
     no_change_reason: str = ""
 
 
+class FixIssueOutcome(Model):
+    issue_id: str = Field(min_length=1)
+    status: Literal["implemented", "partial", "blocked"]
+    evidence: str = Field(min_length=1)
+
+    @field_validator("evidence")
+    @classmethod
+    def nonblank_evidence(cls, evidence):
+        if not evidence.strip():
+            raise ValueError("fixer issue outcome requires evidence")
+        return evidence
+
+
+class WorkspaceFixResult(WorkspaceResult):
+    issue_outcomes: list[FixIssueOutcome] = Field(default_factory=list)
+
+
+class FixerResult(AgentResult):
+    issue_outcomes: list[FixIssueOutcome]
+
+
 class WorkspaceTestResult(WorkspaceResult):
     command_ids: list[str] = Field(default_factory=list)
     coverage: list[Coverage] = Field(default_factory=list)
@@ -134,6 +155,13 @@ class ReviewAssessment(Model):
     evidence: str = Field(min_length=1)
 
 
+class ReviewIssueDistinction(Model):
+    finding_id: str
+    existing_issue_id: str
+    reason: str = Field(min_length=1)
+
+
 class ReviewResultV2(AgentResult):
     schema_version: Literal[2] = 2
     assessments: list[ReviewAssessment] = Field(default_factory=list)
+    issue_distinctions: list[ReviewIssueDistinction] = Field(default_factory=list)

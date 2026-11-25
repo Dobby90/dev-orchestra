@@ -1,12 +1,193 @@
 """Host issue identity and explicit, SHA-bound independent reassessment."""
 
 import json
+import re
 import uuid
+from collections import Counter
+from difflib import SequenceMatcher
 
+from dev_orchestra.agents.contracts import ResponseError
 from dev_orchestra.domain.models import PipelineError
 from dev_orchestra.infrastructure.files import digest
-from dev_orchestra.infrastructure.process import sanitize
+from dev_orchestra.infrastructure.process import redact, sanitize
 from dev_orchestra.infrastructure.store import now
+
+SEVERITY_ORDER = {"low": 0, "medium": 1, "high": 2, "critical": 3}
+VERIFICATION_PENDING_NOTE = "코드 수정 확인, 동일 SHA·revision 테스트 통과 근거 대기"
+CODE_SPAN = re.compile(r"`([^`\r\n]+)`")
+
+
+def verification_pending(issue, candidate_sha, review_step_id):
+    return (
+        issue["status"] == "unresolved"
+        and issue.get("status_note") == VERIFICATION_PENDING_NOTE
+        and issue.get("assessed_sha") == candidate_sha
+        and issue.get("assessed_step_id") == review_step_id
+    )
+
+
+def cited_case(text, name):
+    return bool(name and re.search(r"(?<![\w./-])" + re.escape(name) + r"(?![\w/-]|\.\w)", text))
+
+
+def linked_test_failures(evidence, tests):
+    commands = (tests or {}).get("execution", {}).get("commands", [])
+    executed = {command.get("command_id") for command in commands}
+    cited = executed.intersection(CODE_SPAN.findall(evidence))
+    case_evidence = CODE_SPAN.sub(lambda match: " " if match[1] in cited else match[0], evidence)
+    linked = []
+    for command in commands:
+        command_id = command.get("command_id")
+        if (
+            not command_id
+            or command.get("passed") is not False
+            or (cited and command_id not in cited)
+        ):
+            continue
+        details = command.get("failure_details") or [
+            {"name": name} for name in command.get("failures", [])
+        ]
+        cases = [
+            {"name": case["name"], "message": (case.get("message") or "")[:500]}
+            for case in details
+            if case.get("name")
+            and any(
+                cited_case(case_evidence, case.get(key)) for key in ("name", "file", "classname")
+            )
+        ]
+        if cases or command_id in cited:
+            linked.append(
+                {
+                    "command_id": command_id,
+                    "status": command.get("status"),
+                    "cases": cases[:10],
+                    "omitted_cases": max(0, len(cases) - 10),
+                    "error": (command.get("error") or "")[:500],
+                }
+            )
+    if not cited and len(linked) > 1:
+        return [], sorted(item["command_id"] for item in linked)
+    return linked, []
+
+
+def unresolved_groups(run, issues):
+    links = run.get("review_issue_duplicates", {})
+    groups = {}
+    for index, issue in enumerate(issues):
+        if issue.get("status", "unresolved") == "unresolved":
+            issue_id = issue.get("issue_id", index)
+            groups.setdefault(links.get(issue_id, issue_id), []).append(issue)
+    return groups
+
+
+def group_severity(group, blocking):
+    return max(
+        (issue["severity"] for issue in group),
+        key=lambda severity: (severity in blocking, SEVERITY_ORDER[severity]),
+    )
+
+
+def _normalized_statement(text):
+    return " ".join(text.split()).rstrip(".!?。")
+
+
+def validate_review_findings(result, open_issues, candidate_sha):
+    """Ask for a retry on overlapping claims while preserving independent findings."""
+    existing_ids = {issue["issue_id"] for issue in open_issues}
+    finding_ids = Counter(finding.id for finding in result.issues)
+    distinctions = set()
+    for item in result.issue_distinctions:
+        pair = (item.finding_id, item.existing_issue_id)
+        if (
+            finding_ids[item.finding_id] != 1
+            or item.existing_issue_id not in existing_ids
+            or not item.reason.strip()
+            or pair in distinctions
+        ):
+            raise ResponseError(
+                "issue_distinctions must link a new finding and an open issue once with a concrete reason"
+            )
+        distinctions.add(pair)
+
+    reassessments = {
+        item.issue_id: _normalized_statement(redact(item.evidence))
+        for item in result.assessments
+        if item.candidate_sha == candidate_sha
+    }
+    overlaps = []
+    for finding in result.issues:
+        raw_description = redact(finding.description)
+        description = _normalized_statement(raw_description)
+        evidence = _normalized_statement(redact(finding.evidence))
+        file = redact(finding.file)
+        for issue in open_issues:
+            issue_id = issue["issue_id"]
+            same_file = file == issue["file"]
+            existing_description = _normalized_statement(issue["description"])
+            same_evidence = bool(evidence) and evidence in {
+                _normalized_statement(issue["evidence"]),
+                reassessments.get(issue_id),
+            }
+            if (same_file and raw_description == issue["description"]) or (
+                description == existing_description and same_evidence
+            ):
+                overlaps.append(
+                    f"{finding.id!r} repeats {issue_id!r}; use assessments for this ID or describe the independent behavior with distinct evidence"
+                )
+            elif (
+                same_file
+                and (
+                    same_evidence
+                    or description == existing_description
+                    or (
+                        min(len(description), len(existing_description)) >= 16
+                        and SequenceMatcher(
+                            None, description[:512], existing_description[:512]
+                        ).ratio()
+                        >= 0.88
+                    )
+                )
+                and (finding.id, issue_id) not in distinctions
+            ):
+                overlaps.append(
+                    f"{finding.id!r} overlaps {issue_id!r}; use assessments for this ID or give the independent failure and evidence in issue_distinctions"
+                )
+    if overlaps:
+        raise ResponseError("overlapping review findings: " + "; ".join(overlaps))
+
+
+def validate_assessment_ids(assessment_ids, known_ids):
+    invalid = [
+        issue_id
+        for issue_id, count in Counter(assessment_ids).items()
+        if issue_id not in known_ids or count > 1
+    ]
+    if invalid:
+        raise ResponseError(
+            "unknown or duplicate review assessment. Copy each issue_id exactly from "
+            f"open_issues and assess it once. Invalid or repeated IDs: {invalid!r}"
+        )
+
+
+def validate_review_assessments(assessments, required_ids, candidate_sha):
+    received = [item["issue_id"] for item in assessments]
+    validate_assessment_ids(received, required_ids)
+    missing = sorted(set(required_ids) - set(received))
+    if missing:
+        raise ResponseError(
+            "missing review assessments for response_contract.required_assessment_ids: "
+            f"{missing!r}. Assess every open issue exactly once."
+        )
+    invalid = [
+        item["issue_id"]
+        for item in assessments
+        if item["candidate_sha"] != candidate_sha or not item["evidence"].strip()
+    ]
+    if invalid:
+        raise ResponseError(
+            f"review assessments must use current candidate_sha {candidate_sha} and nonempty "
+            f"evidence. Invalid IDs: {invalid!r}"
+        )
 
 
 class Reviews:
@@ -27,16 +208,241 @@ class Reviews:
     def open(self, run_id):
         return [i for i in self.issues(run_id) if i["status"] == "unresolved"]
 
+    def selectable_issue_ids(self, run):
+        if run["state"] != "waiting_approval" or run.get("review_contract") != 2:
+            return set()
+        blocking = run["config"]["review"]["blocking_severities"]
+        return {
+            issue["issue_id"]
+            for group in unresolved_groups(run, self.open(run["id"])).values()
+            if (severity := group_severity(group, blocking)) in {"medium", "low"}
+            and severity not in blocking
+            for issue in group
+        }
+
+    def link_duplicate(self, db, run, duplicate_id, representative_id, reason):
+        if not reason.strip():
+            raise PipelineError("review duplicate link requires a reason")
+        if duplicate_id == representative_id:
+            raise PipelineError("a review issue cannot be linked to itself")
+        ids = {issue["issue_id"] for issue in self.issues(run["id"])}
+        if not {duplicate_id, representative_id} <= ids:
+            raise PipelineError("both review issue IDs must belong to this run")
+        links = run.get("review_issue_duplicates", {})
+        if representative_id in links:
+            raise PipelineError("choose an existing representative ID as the target")
+        if links.get(duplicate_id) == representative_id:
+            return
+        if duplicate_id in links:
+            raise PipelineError("review issue is already linked to a different representative")
+        # Joining two groups keeps each member linked directly to the chosen representative.
+        updated = {
+            issue_id: representative_id if target == duplicate_id else target
+            for issue_id, target in links.items()
+        } | {duplicate_id: representative_id}
+        self.store.update(
+            run["id"], expected_version=run["version"], review_issue_duplicates=updated
+        )
+        self.store._event(
+            db,
+            run["id"],
+            "issue.duplicate_linked",
+            {
+                "duplicate_id": duplicate_id,
+                "representative_id": representative_id,
+                "reason": sanitize(reason),
+            },
+        )
+
+    def fixer_issues(self, run):
+        candidate_sha = run.get("current_sha") or run["base_sha"]
+        return self.fixer_context(run, candidate_sha)["open_issues"]
+
+    def fixer_context(self, run, candidate_sha):
+        from dev_orchestra.application.results import Results
+
+        issues = self.open(run["id"])
+        request = run.get("review_fix_request") or {}
+        selected = (
+            request["issue_ids"]
+            if request.get("revision") == run.get("revision", 0)
+            and request.get("iteration") == run.get("iteration", 0)
+            else []
+        )
+        if selected:
+            links = run.get("review_issue_duplicates", {})
+            targets = {links.get(issue_id, issue_id) for issue_id in selected}
+            groups = unresolved_groups(run, issues)
+            if targets - groups.keys():
+                raise PipelineError("requested review issues changed before Fixer execution")
+            issues = [
+                issue for target, group in groups.items() if target in targets for issue in group
+            ]
+        steps = self.store.steps(run["id"])
+        results = Results(self.store)
+        revision = run.get("revision", 0)
+        current_steps = {
+            step["role"]: step
+            for step in steps
+            if step["role"] in {"tester", "reviewer"}
+            and step["status"] == "completed"
+            and step["output_sha"] == candidate_sha
+            and step["revision"] == revision
+        }
+        tests = self._fixer_test_result(results, run, current_steps.get("tester"))
+        self._include_latest_assessments(results, run, steps, issues)
+        review_step = current_steps.get("reviewer", {})
+        for issue in issues:
+            latest = issue.get("latest_assessment", {})
+            pending = latest.get("reviewer_status") == "resolved" and verification_pending(
+                issue, candidate_sha, review_step.get("id")
+            )
+            issue["verification_pending"] = pending
+            if not pending:
+                if issue.get("status_note") == VERIFICATION_PENDING_NOTE:
+                    issue["status_note"] = None
+                remaining = (
+                    latest["evidence"]
+                    if latest.get("reviewer_status") == "unresolved"
+                    else issue["evidence"]
+                )
+                issue["remaining_failure"] = remaining
+                links, ambiguous = linked_test_failures(remaining, tests)
+                issue["test_failures"] = links
+                if ambiguous:
+                    issue["ambiguous_test_failure_command_ids"] = ambiguous
+
+        blocking = run["config"]["review"]["blocking_severities"]
+        groups = unresolved_groups(run, issues)
+        previous = self._previous_fixer_outcomes(results, run, steps, groups)
+        result = []
+        for representative, group in groups.items():
+            focus = max(
+                group,
+                key=lambda issue: (
+                    not issue["verification_pending"],
+                    issue["assessed_step_id"] if issue.get("latest_assessment") else -1,
+                    issue["issue_id"] == representative,
+                ),
+            )
+            item = dict(focus)
+            if len(group) != 1 or focus["issue_id"] != representative:
+                item.update(
+                    {
+                        "issue_id": representative,
+                        "severity": group_severity(group, blocking),
+                        "evidence_issue_id": focus["issue_id"],
+                        "related_unresolved_issues": [
+                            issue for issue in group if issue is not focus
+                        ],
+                    }
+                )
+            if not item["verification_pending"] and representative in previous:
+                item["previous_fix"] = previous[representative]
+            result.append(item)
+        context = {"open_issues": result, "test_result": tests}
+        if selected:
+            context["requested_issue_ids"] = selected
+        return context
+
+    @staticmethod
+    def _fixer_test_result(results, run, step):
+        from dev_orchestra.application.test_selection import verify_selection, verify_tool_evidence
+
+        if not step:
+            return None
+        try:
+            payload = results.payload(run, step)
+            if payload.get("revision", 0) != step["revision"]:
+                return None
+            verify_tool_evidence(run, step, payload)
+            verify_selection(run, payload)
+            return payload
+        except (PipelineError, KeyError, OSError, ValueError):
+            return None
+
+    @staticmethod
+    def _previous_fixer_outcomes(results, run, steps, groups):
+        previous = {}
+        links = run.get("review_issue_duplicates", {})
+        pending = set(groups)
+        for step in reversed(steps):
+            if not pending:
+                break
+            if step["role"] != "fixer" or step["status"] != "completed":
+                continue
+            try:
+                payload = results.payload(run, step)
+            except PipelineError:
+                continue
+            if payload.get("revision", 0) != step["revision"]:
+                continue
+            # A current representative takes precedence over an alias in the same result.
+            outcomes = {
+                outcome["issue_id"]: outcome for outcome in payload.get("issue_outcomes", [])
+            }
+            for issue_id in sorted(outcomes, key=lambda key: key in links):
+                representative = links.get(issue_id, issue_id)
+                if representative not in pending:
+                    continue
+                previous[representative] = outcomes[issue_id] | {
+                    "candidate_sha": step["output_sha"],
+                    "revision": step["revision"],
+                }
+                pending.remove(representative)
+        return previous
+
+    @staticmethod
+    def _include_latest_assessments(results, run, steps, issues):
+        assessed_steps = {i["assessed_step_id"] for i in issues if "assessed_step_id" in i}
+        if not assessed_steps:
+            return
+
+        assessments = {}
+        for step in steps:
+            if (
+                step["id"] not in assessed_steps
+                or step["role"] != "reviewer"
+                or step["status"] != "completed"
+            ):
+                continue
+            try:
+                payload = results.payload(run, step)
+            except PipelineError:
+                continue
+            if payload.get("revision", 0) != step["revision"]:
+                continue
+            for assessment in payload.get("assessments", []):
+                if (
+                    assessment["candidate_sha"] == step["output_sha"]
+                    and assessment["evidence"].strip()
+                ):
+                    assessments[step["id"], assessment["issue_id"]] = {
+                        "candidate_sha": step["output_sha"],
+                        "revision": step["revision"],
+                        "reviewer_status": assessment["status"],
+                        "evidence": assessment["evidence"],
+                    }
+        for issue in issues:
+            latest = assessments.get((issue.get("assessed_step_id"), issue["issue_id"]))
+            if latest and latest["candidate_sha"] == issue.get("assessed_sha"):
+                issue["latest_assessment"] = latest
+
     def apply(self, run, step_id, payload):
         sha = payload["sha"]
         existing = {i["issue_id"]: i for i in self.issues(run["id"])}
-        seen = set()
+        assessments = payload.get("assessments", [])
+        if run.get("review_contract") == 2:
+            open_ids = {key for key, item in existing.items() if item["status"] == "unresolved"}
+            if set(payload.get("required_assessment_ids", open_ids)) != open_ids:
+                raise PipelineError("open review issues changed during assessment")
+            validate_review_assessments(assessments, open_ids, sha)
+        else:
+            # Historical review imports retain their original assessment contract.
+            validate_assessment_ids((item["issue_id"] for item in assessments), existing)
         with self.store.connection() as db:
-            for assessment in payload.get("assessments", []):
+            for assessment in assessments:
                 key = assessment["issue_id"]
-                if key not in existing or key in seen:
-                    raise PipelineError("unknown or duplicate review assessment")
-                seen.add(key)
                 valid = assessment["candidate_sha"] == sha and bool(assessment["evidence"].strip())
                 tests = run.get("test_result") or {}
                 resolved = (
@@ -55,7 +461,7 @@ class Reviews:
                 data = existing[key] | {
                     "resolution_evidence": evidence if resolved else None,
                     "status_note": (
-                        "코드 수정 확인, 동일 SHA·revision 테스트 통과 근거 대기"
+                        VERIFICATION_PENDING_NOTE
                         if valid and assessment["status"] == "resolved" and not resolved
                         else None
                     ),
@@ -66,7 +472,6 @@ class Reviews:
                     "UPDATE review_issues SET status=?,data=? WHERE id=?",
                     (state, json.dumps(data), key),
                 )
-            severity_order = {"low": 0, "medium": 1, "high": 2, "critical": 3}
             for finding in payload["issues"]:
                 fingerprint = digest(
                     json.dumps(
@@ -80,7 +485,7 @@ class Reviews:
                 key = old["id"] if old else "issue-" + uuid.uuid4().hex
                 severity = max(
                     [finding["severity"], old["severity"] if old else finding["severity"]],
-                    key=severity_order.get,
+                    key=SEVERITY_ORDER.get,
                 )
                 data = sanitize(finding) | {
                     "source_sha": sha,

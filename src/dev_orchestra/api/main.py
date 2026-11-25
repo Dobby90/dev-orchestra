@@ -89,7 +89,7 @@ from dev_orchestra.application.web_contracts import (
 )
 from dev_orchestra.application.webhooks import WebhookService
 from dev_orchestra.config import load_config
-from dev_orchestra.domain.models import MAX_DESIGN_IMAGE_BYTES, DesignImage, PipelineError
+from dev_orchestra.domain.models import MAX_DESIGN_IMAGE_BYTES, DesignImage, PipelineError, State
 from dev_orchestra.infrastructure.design_images import read_verified_image, run_image_path
 from dev_orchestra.infrastructure.locking import lock
 from dev_orchestra.infrastructure.migrations import upgrade
@@ -485,8 +485,15 @@ def create_app(config=None, allowed_roots=None, port=8000, static_directory=None
         cursor: str = "",
         state: str | None = None,
         project_id: str | None = None,
+        states: Annotated[
+            list[State] | None,
+            Query(
+                max_length=len(State),
+                description="Repeat to match any listed state. Other filters also apply.",
+            ),
+        ] = None,
     ):
-        return runs.queries.page(limit, cursor, state, project_id)
+        return runs.queries.page(limit, cursor, state, project_id, states=states)
 
     @app.get("/api/notifications", response_model=NotificationPage)
     def notification_list(

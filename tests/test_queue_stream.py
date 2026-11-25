@@ -362,7 +362,7 @@ def test_log_file_db_gap_and_rotation(prepared, monkeypatch):
         index.index(rid)
     monkeypatch.setattr(svc.store, "transaction", original)
     index.index(rid)
-    p.unlink()
+    p.rename(root / "worker.log.old")
     p.write_text("다음\n")
     index.index(rid)
     with svc.store.connection() as db:
@@ -373,6 +373,9 @@ def test_log_file_db_gap_and_rotation(prepared, monkeypatch):
     page = svc.events.stream_page(rid)
     texts = [e["data"]["text"] for e in page["items"] if e["kind"] == "log.appended"]
     assert texts == ["처음\n", "다음\n"]
+    window = svc.events.log_window(rid)
+    assert [e["data"]["text"] for e in window["items"]] == texts
+    assert [e["data"]["generation"] for e in window["items"]] == [1, 2]
 
 
 def test_finished_history_skips_log_io_and_claims_before_scan(
@@ -924,7 +927,7 @@ def test_log_window_is_bounded_paginated_and_resumes_without_gap(prepared):
     state = svc.store.get(rid)
     window = svc.events.log_window(rid)
     assert window["has_more"]
-    assert len(json.dumps(window["items"], ensure_ascii=False).encode()) < 66000
+    assert sum(len(json.dumps(e, ensure_ascii=False).encode()) for e in window["items"]) <= 65536
     assert "CANARY" not in json.dumps(window)
     assert "[REDACTED]" in json.dumps(window)
     ids = [e["id"] for e in window["items"]]
@@ -938,10 +941,14 @@ def test_log_window_is_bounded_paginated_and_resumes_without_gap(prepared):
         ids = [e["id"] for e in window["items"]] + ids
     assert len(ids) == len(set(ids)) == 80
     assert svc.store.get(rid) == state
+    with svc.store.connection() as db:
+        svc.store._event(db, rid, "preparation.progress", {})
+    live_cursor = svc.events.log_window(rid)["latest_cursor"]
+    assert live_cursor > ids[-1]
     with path.open("a") as handle:
         handle.write("새 로그\n")
     index.index(rid)
-    resumed = svc.events.stream_page(rid, ids[-1])
+    resumed = svc.events.stream_page(rid, live_cursor)
     assert [e["data"]["text"] for e in resumed["items"]] == ["새 로그\n"]
 
 
@@ -959,5 +966,96 @@ def test_log_window_step_filter_and_integrity(prepared):
     assert [e["data"]["text"] for e in page["items"]] == ["단계 로그\n"]
     assert not svc.events.log_window(rid, step_id=step + 1)["items"]
     view = root / "log-views" / (page["items"][0]["data"]["log_id"] + ".log")
-    view.write_text("변조\n")
+    view.write_text("조작 로그\n")
     assert svc.events.log_window(rid, step_id=step)["items"][0]["kind"] == "log.unavailable"
+    view.unlink()
+    assert svc.events.log_window(rid, step_id=step)["items"] == [
+        {
+            **page["items"][0],
+            "kind": "log.unavailable",
+            "data": {"reason": "log view missing or modified"},
+        }
+    ]
+
+
+def test_log_window_reuses_connections_and_files_within_each_page(prepared, monkeypatch):
+    svc, _, create, _, _ = prepared
+    rid = create()
+    root = Path(svc.store.get(rid)["directory"])
+    path = root / "worker.log"
+    path.write_text("처음\n" * 10)
+    index = LogIndexer(svc.store)
+    index.index(rid)
+    path.rename(root / "worker.log.old")
+    path.write_text("다음\n" * 10)
+    (root / "workflow.log").write_text("별도\n" * 10)
+    index.index(rid)
+    connections = []
+    opened = []
+    original_connection = svc.store.connection
+    original_open = Path.open
+
+    def connection():
+        connections.append(None)
+        return original_connection()
+
+    def opened_path(path, *args, **kwargs):
+        handle = original_open(path, *args, **kwargs)
+        if path.parent.name == "log-views":
+            opened.append((path, handle))
+        return handle
+
+    monkeypatch.setattr(svc.store, "connection", connection)
+    monkeypatch.setattr(Path, "open", opened_path)
+    page = svc.events.log_window(rid, limit=1)
+    assert len(page["items"]) == 1
+    connection_count = len(connections)
+    assert connection_count <= 2
+    assert len(opened) == 1
+    assert opened[0][1].closed
+    connections.clear()
+    opened.clear()
+    page = svc.events.log_window(rid)
+    assert [e["data"]["text"] for e in page["items"]] == (
+        ["처음\n"] * 10 + ["다음\n"] * 10 + ["별도\n"] * 10
+    )
+    assert len(connections) == connection_count
+    assert len(opened) == len({path for path, _ in opened}) == 3
+    assert all(handle.closed for _, handle in opened)
+
+
+def test_log_window_checks_span_ranges_and_ownership(prepared):
+    svc, _, create, _, _ = prepared
+    rid = create()
+    foreign_rid = create()
+    root = Path(svc.store.get(rid)["directory"])
+    step, _ = svc.store.start_step(rid, "developer", 0, "a" * 40)
+    foreign_step, _ = svc.store.start_step(foreign_rid, "developer", 0, "a" * 40)
+    path = root / "iterations" / "0" / "developer" / "attempt-1" / "process.log"
+    path.parent.mkdir(parents=True)
+    path.write_text("첫째\n둘째\n셋째\n")
+    LogIndexer(svc.store).index(rid)
+    first, second, third = svc.events.log_window(rid, step_id=step)["items"]
+    log_id = first["data"]["log_id"]
+    with svc.store.connection() as db:
+        db.execute("UPDATE log_spans SET offset=-1 WHERE event_id=?", (first["id"],))
+        db.execute("UPDATE log_spans SET end_offset=end_offset+1 WHERE event_id=?", (third["id"],))
+    items = svc.events.log_window(rid, step_id=step)["items"]
+    assert items[1] == second
+    assert [e["kind"] for e in items] == [
+        "log.unavailable",
+        "log.appended",
+        "log.unavailable",
+    ]
+    with svc.store.connection() as db:
+        db.execute("UPDATE log_sources SET step_id=? WHERE id=?", (foreign_step, log_id))
+    assert [e["kind"] for e in svc.events.log_window(rid, step_id=foreign_step)["items"]] == [
+        "log.unavailable"
+    ] * 3
+    with svc.store.connection() as db:
+        db.execute(
+            "UPDATE log_sources SET run_id=?,step_id=? WHERE id=?", (foreign_rid, step, log_id)
+        )
+    assert [e["kind"] for e in svc.events.log_window(rid, step_id=step)["items"]] == [
+        "log.unavailable"
+    ] * 3

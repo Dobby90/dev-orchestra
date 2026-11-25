@@ -8,11 +8,12 @@ from contextlib import nullcontext
 from pathlib import Path
 from time import monotonic
 
-from dev_orchestra.agents.contracts import ResponseError, validate_role
+from dev_orchestra.agents.contracts import ResponseError, validate_fixer_outcomes, validate_role
 from dev_orchestra.application.automatic_tests import (
     AUTOMATIC_TEST_CONTRACTS,
     automatic,
     command_dependencies,
+    criterion_test_commands,
     deferred_builds,
     prepare_selected_only,
 )
@@ -20,6 +21,13 @@ from dev_orchestra.application.errors import ApplicationError
 from dev_orchestra.application.handoff import repository_identity, same_repository
 from dev_orchestra.application.projects import ProjectService, verify_registered_directory
 from dev_orchestra.application.results import test_case_counts
+from dev_orchestra.application.reviews import (
+    Reviews,
+    group_severity,
+    unresolved_groups,
+    validate_review_assessments,
+    validate_review_findings,
+)
 from dev_orchestra.application.test_changes import TestChangeService
 from dev_orchestra.application.validation import (
     is_test_source,
@@ -29,7 +37,7 @@ from dev_orchestra.application.validation import (
 from dev_orchestra.application.workspace_recovery import WorkspaceBlocked
 from dev_orchestra.config import Config
 from dev_orchestra.domain.execution import execution_contract, writes_workspace
-from dev_orchestra.domain.models import AgentRequest, PipelineError, StopRequested
+from dev_orchestra.domain.models import AgentRequest, PipelineError, ReviewResultV2, StopRequested
 from dev_orchestra.infrastructure.design_images import design_image_binding, verified_run_images
 from dev_orchestra.infrastructure.evidence import checkpoints, verified_candidate
 from dev_orchestra.infrastructure.files import contained, digest, write
@@ -66,10 +74,12 @@ def transition_summary(run, target):
         issues = review.get("issue_states")
         if issues is None:
             issues = review.get("issues", [])
+        blocking = run.get("config", {}).get("review", {}).get("blocking_severities", [])
         return {
             "review_issues": dict(
                 Counter(
-                    i["severity"] for i in issues if i.get("status", "unresolved") == "unresolved"
+                    group_severity(group, blocking)
+                    for group in unresolved_groups(run, issues).values()
                 )
             ),
             "test_failed": execution.get("passed") is False,
@@ -327,9 +337,10 @@ class Runner:
                 if step["output_sha"] != sha:
                     raise PipelineError("completed checkpoint SHA changed")
                 artifact = Path(step["data"]["artifact"])
-                if not artifact.exists() or digest(artifact.read_bytes()) != step["data"]["hash"]:
+                raw = artifact.read_bytes() if artifact.exists() else b""
+                if not raw or digest(raw) != step["data"]["hash"]:
                     raise PipelineError("checkpoint artifact checksum mismatch")
-                payload = json.loads(artifact.read_text())
+                payload = json.loads(raw)
             else:
                 if (
                     role == "developer"
@@ -432,14 +443,21 @@ class Runner:
                         directory / "preflight" / "tools", lambda: self.store.get(run_id)["control"]
                     )
                 if role == "planner":
+                    from dev_orchestra.application.plan_approval import previous_plan
+
                     context["planning_draft"] = run.get("planning_draft")
+                    if reference := previous_plan(self.store, run):
+                        context["previous_plan"] = reference
+                required_assessment_ids = None
                 if role == "reviewer":
                     context["diff"] = git.diff(run["base_sha"], sha)
                     context["candidate_sha"] = sha
+                    context["revision"] = run.get("revision", 0)
                     if run.get("review_contract") == 2:
-                        from dev_orchestra.application.reviews import Reviews
-
                         context["open_issues"] = Reviews(self.store).open(run_id)
+                        required_assessment_ids = tuple(
+                            issue["issue_id"] for issue in context["open_issues"]
+                        )
                 image_paths = verified_run_images(run) if role != "tester" else ()
                 if image_paths:
                     context["design_images"] = [image["name"] for image in run["design_images"]]
@@ -452,19 +470,8 @@ class Runner:
                     context=context,
                     design_image_paths=image_paths,
                 )
-                from dev_orchestra.application.test_selection import select_tests
-
-                selection = (
-                    select_tests(run, worktree, git.sha())
-                    if role == "tester" and run.get("test_selection_contract")
-                    else None
-                )
-                if selection:
-                    request.context["test_selection"] = selection
                 if role == "fixer" and run.get("review_contract") == 2:
-                    from dev_orchestra.application.reviews import Reviews
-
-                    request.context["open_issues"] = Reviews(self.store).open(run_id)
+                    request.context.update(Reviews(self.store).fixer_context(run, sha))
                 from dev_orchestra.agents.context import role_context
 
                 role_context(request)
@@ -492,14 +499,19 @@ class Runner:
                     "criterion_ids": [c["id"] for c in run.get("criteria", [])],
                     "command_ids": list(config.tests.commands),
                 }
+                if required_assessment_ids is not None:
+                    request.context["response_contract"]["required_assessment_ids"] = list(
+                        required_assessment_ids
+                    )
+                if role == "fixer":
+                    request.context["response_contract"]["issue_ids"] = [
+                        issue["issue_id"] for issue in request.context.get("open_issues", [])
+                    ]
                 if workspace:
                     request.context["response_contract"]["edit_tool"] = "workspace.edit_file"
                     if role == "tester":
                         request.context["response_contract"]["run_tests_tool"] = (
                             "workspace.run_tests"
-                        )
-                        request.context["response_contract"]["command_ids"] = (
-                            selection["included"] if selection else list(config.tests.commands)
                         )
                     else:
                         request.context["response_contract"]["checkpoint_tool"] = (
@@ -511,6 +523,7 @@ class Runner:
                         config.tests.commands
                     )
                 result = None
+                selection = None
                 try:
                     if workspace:
                         result, workspace_sha, workspace_commits, workspace_execution = (
@@ -523,11 +536,7 @@ class Runner:
                         )
                         if workspace_execution:
                             selection = workspace_execution["selection"]
-                    elif (
-                        role == "reviewer"
-                        and run.get("test_selection_contract")
-                        and hasattr(self.agent, "run_readonly")
-                    ):
+                    elif role == "reviewer" and hasattr(self.agent, "run_readonly"):
                         from dev_orchestra.infrastructure.workspace import ReviewEvidenceSession
 
                         readonly = ReviewEvidenceSession.create(self.store, run, step_id, step_dir)
@@ -545,6 +554,17 @@ class Runner:
                     if not workspace and (git.sha() != sha or git.dirty()):
                         raise PipelineError("read-only agent changed the worktree")
                     validate_role(role, result)
+                    if required_assessment_ids is not None and not result.questions:
+                        if not isinstance(result, ReviewResultV2):
+                            raise ResponseError("reviewer must return contract V2")
+                        validate_review_assessments(
+                            [item.model_dump() for item in result.assessments],
+                            required_assessment_ids,
+                            sha,
+                        )
+                        validate_review_findings(
+                            result, request.context.get("open_issues", []), sha
+                        )
                 except ResponseError as error:
                     if workspace:
                         raise PipelineError(
@@ -718,12 +738,8 @@ class Runner:
                     )
                 )
                 with self.store.transaction() if atomic_result else nullcontext() as db:
-                    if role == "reviewer" and run.get("review_contract") == 2:
-                        from dev_orchestra.application.reviews import Reviews
-                        from dev_orchestra.domain.models import ReviewResultV2
-
-                        if not isinstance(result, ReviewResultV2):
-                            raise PipelineError("reviewer must return contract V2")
+                    if required_assessment_ids is not None:
+                        payload["required_assessment_ids"] = list(required_assessment_ids)
                         payload["issue_states"] = Reviews(self.store).apply(run, step_id, payload)
                     if role == "tester" and results.enabled():
                         for command in payload["execution"].get("commands", []):
@@ -771,9 +787,7 @@ class Runner:
             data = session.data
             missing_development_tests = False
             try:
-                if data.get("response") is not None:
-                    response = session.saved_response()
-                else:
+                if data.get("response") is None:
                     if data.get("repair_pending"):
                         if data.get("repair_calls", 0) >= config.workflow.response_retries:
                             raise WorkspaceBlocked(
@@ -781,14 +795,17 @@ class Runner:
                             )
                         data["repair_calls"] = data.get("repair_calls", 0) + 1
                         session.save()
+                    test_evidence = None
                     if request.role == "tester":
-                        request.context["test_selection"] = session.test_policy()
-                        policy = request.context["test_selection"]
+                        policy, test_evidence = session.test_policy_and_evidence()
+                        data = session.data
+                        request.context["test_selection"] = policy
                         if (
                             policy.get("selection_hash")
                             or policy.get("selector_version") not in AUTOMATIC_TEST_CONTRACTS
                         ):
                             request.context["response_contract"]["command_ids"] = policy["included"]
+                            request.context["response_contract"].pop("available_command_ids", None)
                         else:
                             request.context["response_contract"].pop("command_ids", None)
                             request.context["response_contract"]["available_command_ids"] = list(
@@ -797,7 +814,8 @@ class Runner:
                     request.context["workspace_resume"] = {
                         "continuing": data.get("continuing", False),
                         "metadata_only": data.get("metadata_only", False),
-                        "candidate_sha": session.git.sha(),
+                        "has_edits": session.has_edits(),
+                        "candidate_sha": data["current_sha"],
                         "completed_units": [c["summary"][:1000] for c in data["commits"][-5:]],
                         "preserved_files": {
                             name: value
@@ -808,7 +826,7 @@ class Runner:
                             "response_error",
                             "Continue only the unfinished work on the preserved files.",
                         ),
-                        "test_evidence": data.get("test_evidence"),
+                        "test_evidence": test_evidence,
                     }
                     response = self.agent.run_workspace(
                         request,
@@ -817,6 +835,11 @@ class Runner:
                         lambda: self.store.get(request.run_id)["control"],
                     )
                     session.capture_response(response)
+                response = session.saved_response()
+                if request.role == "fixer" and not response.questions:
+                    validate_fixer_outcomes(
+                        response.issue_outcomes, request.context["response_contract"]["issue_ids"]
+                    )
                 if (
                     request.role in {"developer", "fixer"}
                     and request.context["validation_policy"]["resolve_after_development"]
@@ -846,12 +869,13 @@ class Runner:
                 session.data.update(
                     response=None,
                     metadata_only=(
-                        not missing_development_tests
+                        session.data.get("metadata_only", False)
+                        or not missing_development_tests
                         and (
                             request.role != "tester"
                             or bool(session.data.get("test_evidence"))
                             and not session.changed_files()
-                            and session.read_test_payload()["sha"] == session.git.sha()
+                            and session.read_test_payload()["sha"] == session.data["current_sha"]
                         )
                     ),
                     repair_pending=True,
@@ -873,6 +897,8 @@ class Runner:
 
     @staticmethod
     def validate_test_result(run, result, config, selection=None):
+        from dev_orchestra.application.test_selection import verify_coverage
+
         if run.get("test_selection_contract") == 2 and not (selection or {}).get("selection_hash"):
             plan_ids = {item.command_id for item in result.test_plan}
             if (
@@ -895,21 +921,13 @@ class Runner:
             raise ResponseError(
                 f"tester command_ids mismatch: expected={sorted(reported_ids)}, received={result.command_ids}"
             )
-        criteria = {c["id"] for c in run["criteria"]}
         test_ids = {k for k, v in config.tests.commands.items() if v.kind == "test" and k in ids}
-        coverage = {c.criterion_id: c.command_ids for c in result.coverage}
-        if (
-            len(result.coverage) != len(criteria)
-            or set(coverage) != criteria
-            or any(not v or not set(v) <= ids or not set(v) & test_ids for v in coverage.values())
-        ):
-            raise ResponseError(
-                "missing acceptance criterion test coverage: "
-                f"missing={sorted(criteria - set(coverage))}, unexpected={sorted(set(coverage) - criteria)}, "
-                f"expected={sorted(criteria)}, received={[c.criterion_id for c in result.coverage]}, "
-                f"allowed_commands={sorted(ids)}, received_commands={coverage}; "
-                "include each criterion exactly once with at least one configured test command"
+        try:
+            verify_coverage(
+                run, result.coverage, ids, test_ids, criterion_test_commands(run, config.tests)
             )
+        except PipelineError as error:
+            raise ResponseError(str(error)) from error
         if (
             selection
             and selection.get("selector_version") == 1
@@ -917,8 +935,8 @@ class Runner:
         ):
             mapping = config.tests.affected.criterion_commands
             if any(
-                not set(commands) & set(mapping[key]) & test_ids
-                for key, commands in coverage.items()
+                not set(item.command_ids) & set(mapping[item.criterion_id]) & test_ids
+                for item in result.coverage
             ):
                 raise ResponseError("coverage must reference the host criterion-to-test mapping")
 
@@ -932,6 +950,7 @@ class Runner:
                 "plan": payload["plan"],
                 "criteria": payload["criteria"],
                 "planning_draft": None,
+                "previous_plan_binding": None,
                 "questions": [],
             }
             if run.get("auto_approve_plan") is True:

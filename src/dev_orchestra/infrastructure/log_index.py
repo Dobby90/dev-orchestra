@@ -6,6 +6,7 @@ import os
 import re
 import time
 import uuid
+from contextlib import ExitStack
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -14,6 +15,16 @@ from dev_orchestra.infrastructure.files import contained, write
 from dev_orchestra.infrastructure.locking import lock
 from dev_orchestra.infrastructure.process import redact
 from dev_orchestra.infrastructure.store import now
+
+REPLAY_ROWS = """
+    SELECT e.id,e.timestamp,e.kind,e.data,p.log_id,p.offset,p.end_offset,p.sha256,p.level,
+           s.run_id AS source_run_id,s.relative_path,s.generation,s.view_offset,s.role,s.step_id,
+           t.run_id AS step_run_id
+    FROM events e
+    JOIN log_spans p ON p.event_id=e.id
+    JOIN log_sources s ON s.id=p.log_id
+    LEFT JOIN steps t ON t.id=s.step_id
+"""
 
 
 def digest(data):
@@ -40,6 +51,60 @@ class IndexBudget:
             return False
         self.files -= 1
         return True
+
+
+class LogViewReader:
+    def __init__(self, run_id, root, files):
+        self.run_id = run_id
+        self.root = root
+        self.files = files
+        self.handles = {}
+
+    def replay(self, row):
+        if row["source_run_id"] != self.run_id or (
+            row["step_id"] is not None and row["step_run_id"] != self.run_id
+        ):
+            raise PipelineError("log event unavailable")
+        start, end = row["offset"], row["end_offset"]
+        if not 0 <= start < end <= row["view_offset"]:
+            raise PipelineError("log view span outside indexed range")
+        handle = self._handle(row["log_id"], row["generation"])
+        try:
+            handle.seek(start)
+            data = handle.read(end - start)
+        except OSError as error:
+            raise PipelineError("log view unavailable") from error
+        if len(data) != end - start or digest(data) != row["sha256"]:
+            raise PipelineError("log view integrity error")
+        try:
+            text = data.decode("utf-8")
+        except UnicodeDecodeError as error:
+            raise PipelineError("log view invalid UTF-8") from error
+        return {
+            "log_id": row["log_id"],
+            "generation": row["generation"],
+            "offset": start,
+            "end_offset": end,
+            "text": text,
+            "level": row["level"],
+            "role": row["role"],
+            "step_id": row["step_id"],
+            "source": row["relative_path"],
+        }
+
+    def _handle(self, log_id, generation):
+        key = (log_id, generation)
+        if key not in self.handles:
+            try:
+                path = contained(self.root, "log-views/" + log_id + ".log")
+                self.handles[key] = self.files.enter_context(path.open("rb", buffering=0))
+            except (OSError, PipelineError) as error:
+                self.handles[key] = None
+                raise PipelineError("log view unavailable") from error
+        handle = self.handles[key]
+        if handle is None:
+            raise PipelineError("log view unavailable")
+        return handle
 
 
 class LogIndexer:
@@ -232,29 +297,27 @@ class LogIndexer:
     def replay(self, run_id, event_id):
         with self.store.connection() as db:
             row = db.execute(
-                "SELECT s.*,p.offset,p.end_offset,p.sha256,p.level FROM log_sources s JOIN log_spans p ON p.log_id=s.id WHERE p.event_id=? AND s.run_id=?",
-                (event_id, run_id),
+                REPLAY_ROWS + "WHERE e.run_id=? AND e.id=?",
+                (run_id, event_id),
             ).fetchone()
         if not row:
             raise PipelineError("log event unavailable")
         root = Path(self.store.get(run_id)["directory"])
-        path = contained(root, "log-views/" + row["id"] + ".log")
-        try:
-            with path.open("rb") as handle:
-                handle.seek(row["offset"])
-                data = handle.read(row["end_offset"] - row["offset"])
-        except OSError as error:
-            raise PipelineError("log view unavailable") from error
-        if digest(data) != row["sha256"]:
-            raise PipelineError("log view integrity error")
-        return {
-            "log_id": row["id"],
-            "generation": row["generation"],
-            "offset": row["offset"],
-            "end_offset": row["end_offset"],
-            "text": data.decode("utf-8"),
-            "level": row["level"],
-            "role": row["role"],
-            "step_id": row["step_id"],
-            "source": row["relative_path"],
-        }
+        with ExitStack() as files:
+            return LogViewReader(run_id, root, files).replay(row)
+
+    def window_rows(self, run_id, before, limit, step_id):
+        with self.store.connection() as db:
+            # Read the high-water mark and the page from the same snapshot.
+            if not db.in_transaction:
+                db.execute("BEGIN")
+            latest = db.execute(
+                "SELECT coalesce(max(id),0) FROM events WHERE run_id=?", (run_id,)
+            ).fetchone()[0]
+            boundary = latest + 1 if before is None else min(before, latest + 1)
+            rows = db.execute(
+                REPLAY_ROWS + "WHERE e.run_id=? AND e.id<? AND (? IS NULL OR s.step_id=?) "
+                "ORDER BY e.id DESC LIMIT ?",
+                (run_id, boundary, step_id, step_id, limit + 1),
+            ).fetchall()
+        return rows, latest, boundary

@@ -66,6 +66,7 @@ class Commands:
             "request-changes",
             "cleanup",
             "issue-disposition",
+            "link-review-duplicate",
             "reconcile",
             "approve-test-changes",
             "reject-test-changes",
@@ -180,8 +181,26 @@ class Commands:
                 )
             if kind == "request-changes":
                 instructions = body.get("instructions", "")
-                if not instructions.strip() or len(instructions.encode()) > 65536:
-                    raise PipelineError("change instructions required within 64 KiB")
+                issue_ids = body.get("issue_ids", [])
+                if (
+                    not isinstance(issue_ids, list)
+                    or any(not isinstance(issue_id, str) for issue_id in issue_ids)
+                    or len(issue_ids) != len(set(issue_ids))
+                ):
+                    raise PipelineError("review issue IDs must be unique")
+                if len(instructions.encode()) > 65536 or (
+                    not instructions.strip() and not issue_ids
+                ):
+                    raise PipelineError(
+                        "select review issues or give change instructions within 64 KiB"
+                    )
+                if issue_ids:
+                    if set(issue_ids) - Reviews(self.store).selectable_issue_ids(run):
+                        raise PipelineError(
+                            "only current unresolved nonblocking medium or low review issues can be selected"
+                        )
+                    selection_text = "수정 요청 리뷰 이슈: " + ", ".join(issue_ids)
+                    instructions = "\n\n".join(filter(None, (instructions.strip(), selection_text)))
                 limit = (
                     body.get("new_max_fix_attempts")
                     or run["config"]["workflow"]["max_fix_attempts"]
@@ -216,6 +235,15 @@ class Commands:
                     "error": None,
                     "questions": [],
                 }
+                changes["review_fix_request"] = (
+                    {
+                        "revision": changes["revision"],
+                        "iteration": changes["iteration"],
+                        "issue_ids": issue_ids,
+                    }
+                    if issue_ids
+                    else None
+                )
             if kind in {"defer", "issue-disposition"} and run["state"] != "waiting_approval":
                 raise PipelineError("command requires waiting approval")
             if kind == "defer" and not body.get("reason", "").strip():
@@ -288,7 +316,11 @@ class Commands:
                         db,
                         run_id,
                         "changes.requested",
-                        {"revision": changes["revision"], "iteration": changes["iteration"]},
+                        {
+                            "revision": changes["revision"],
+                            "iteration": changes["iteration"],
+                            "issue_ids": issue_ids,
+                        },
                     )
                 elif kind == "defer":
                     self.store.update(
@@ -315,6 +347,11 @@ class Commands:
                         run, body["issue_id"], body["status"], body["reason"]
                     )
                     self.store.update(run_id, expected_version=expected_version)
+                elif kind == "link-review-duplicate":
+                    Reviews(self.store).link_duplicate(
+                        db, run, body["duplicate_id"], body["representative_id"], body["reason"]
+                    )
+                    result = {key: body[key] for key in ("duplicate_id", "representative_id")}
                 elif kind == "cleanup":
                     self.store.update(
                         run_id, expected_version=expected_version, cleanup_requested=True

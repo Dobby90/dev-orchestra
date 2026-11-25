@@ -4,6 +4,8 @@ from test_backend_api import project
 from test_backend_api import web as web
 from test_workflow import service as service
 
+from dev_orchestra.application.automatic_tests import AUTOMATIC_TEST_CONTRACT
+
 
 def test_scope_changes_invalidate_preview_and_idempotency_and_persist(web, monkeypatch):
     monkeypatch.undo()
@@ -31,9 +33,10 @@ def test_scope_changes_invalidate_preview_and_idempotency_and_persist(web, monke
     submitted = client.post("/api/runs", json=command, headers={"Idempotency-Key": "scope"})
     assert submitted.status_code == 202, submitted.text
     rid = submitted.json()["run_id"]
-    assert svc.store.get(rid)["test_scope"] == "affected"
-    assert svc.store.get(rid)["test_selection_contract"] == 7
-    assert svc.store.get(rid)["execution_contract"] == "workspace-v2"
+    run = svc.store.get(rid)
+    assert run["test_scope"] == "affected"
+    assert run["test_selection_contract"] == AUTOMATIC_TEST_CONTRACT
+    assert run["execution_contract"] == "workspace-v2"
     assert svc.store.get(original_id)["execution_contract"] == "workspace-v2"
     assert client.get("/api/runs/" + rid).json()["test_scope"] == "affected"
     assert (

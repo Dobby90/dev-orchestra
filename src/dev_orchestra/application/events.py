@@ -1,8 +1,63 @@
 """Transport-independent events application service."""
 
+import json
+from contextlib import ExitStack
 from pathlib import Path
 
 from dev_orchestra.domain.models import PipelineError
+from dev_orchestra.infrastructure.log_index import LogIndexer, LogViewReader
+from dev_orchestra.infrastructure.process import sanitize
+
+PAGE_BUDGET = 65536
+EVENT_ALIASES = {
+    "state": "state.changed",
+    "control_requested": "control.requested",
+    "step_started": "step.started",
+    "step_completed": "step.completed",
+    "approved": "approval.recorded",
+}
+
+
+def _bounded_events(run_id, rows, replay, budget):
+    items = []
+    size = 0
+    for row in rows:
+        kind = EVENT_ALIASES.get(row["kind"], row["kind"])
+        if kind == "log.appended":
+            try:
+                data = replay(row)
+            except PipelineError:
+                kind = "log.unavailable"
+                data = {"reason": "log view missing or modified"}
+        else:
+            data = sanitize(
+                {
+                    k: v
+                    for k, v in json.loads(row["data"]).items()
+                    if k not in {"artifact", "claim_token", "token"}
+                }
+            )
+        event = {
+            "schema_version": 1,
+            "id": row["id"],
+            "run_id": run_id,
+            "kind": kind,
+            "occurred_at": row["timestamp"],
+            "data": data,
+        }
+        length = len(json.dumps(event, ensure_ascii=False).encode())
+        if length > budget:
+            event = {
+                **event,
+                "kind": "event.unavailable",
+                "data": {"reason": "event exceeds page budget"},
+            }
+            length = len(json.dumps(event).encode())
+        if size + length > budget:
+            break
+        items.append(event)
+        size += length
+    return items
 
 
 class EventService:
@@ -79,55 +134,12 @@ class EventService:
                 cursor[key] = offset + len(data)
         return {"schema_version": 1, "chunks": chunks, "cursor": cursor}
 
-    def stream_page(self, run_id, after=0, limit=200, budget=65536):
-        import json
-
-        from dev_orchestra.infrastructure.log_index import LogIndexer
-        from dev_orchestra.infrastructure.process import sanitize
-
+    def stream_page(self, run_id, after=0, limit=200, budget=PAGE_BUDGET):
         page = self.history(run_id, after, limit)
-        items = []
-        size = 0
-        aliases = {
-            "state": "state.changed",
-            "control_requested": "control.requested",
-            "step_started": "step.started",
-            "step_completed": "step.completed",
-            "approved": "approval.recorded",
-        }
-        for row in page["items"]:
-            kind = aliases.get(row["kind"], row["kind"])
-            data = json.loads(row["data"])
-            if kind == "log.appended":
-                try:
-                    data = LogIndexer(self.store).replay(run_id, row["id"])
-                except PipelineError:
-                    kind = "log.unavailable"
-                    data = {"reason": "log view missing or modified"}
-            else:
-                data = sanitize(
-                    {k: v for k, v in data.items() if k not in {"artifact", "claim_token", "token"}}
-                )
-            event = {
-                "schema_version": 1,
-                "id": row["id"],
-                "run_id": run_id,
-                "kind": kind,
-                "occurred_at": row["timestamp"],
-                "data": data,
-            }
-            length = len(json.dumps(event, ensure_ascii=False).encode())
-            if length > budget:
-                event = {
-                    **event,
-                    "kind": "event.unavailable",
-                    "data": {"reason": "event exceeds page budget"},
-                }
-                length = len(json.dumps(event).encode())
-            if size + length > budget:
-                break
-            items.append(event)
-            size += length
+        index = LogIndexer(self.store)
+        items = _bounded_events(
+            run_id, page["items"], lambda row: index.replay(run_id, row["id"]), budget
+        )
         return {
             "items": items,
             "next_cursor": items[-1]["id"] if items else after,
@@ -136,36 +148,17 @@ class EventService:
 
     def log_window(self, run_id, before=None, limit=200, step_id=None):
         """Read a bounded newest-first window, then return display order and live cursor."""
-        import json
-
-        self.store.get(run_id)
+        root = Path(self.store.get(run_id)["directory"])
         if before is not None and (type(before) is not int or before < 0):
             raise PipelineError("invalid log cursor")
         if type(limit) is not int or not 1 <= limit <= 200:
             raise PipelineError("invalid log limit")
         if step_id is not None and (type(step_id) is not int or step_id < 1):
             raise PipelineError("invalid step filter")
-        with self.store.connection() as db:
-            latest = db.execute(
-                "SELECT coalesce(max(id),0) FROM events WHERE run_id=?", (run_id,)
-            ).fetchone()[0]
-            boundary = latest + 1 if before is None else min(before, latest + 1)
-            rows = db.execute(
-                "SELECT e.id FROM events e JOIN log_spans p ON p.event_id=e.id "
-                "JOIN log_sources s ON s.id=p.log_id "
-                "WHERE e.run_id=? AND e.id<? AND (? IS NULL OR s.step_id=?) "
-                "ORDER BY e.id DESC LIMIT ?",
-                (run_id, boundary, step_id, step_id, limit + 1),
-            ).fetchall()
-        items = []
-        size = 0
-        for row in rows[:limit]:
-            event = self.stream_page(run_id, row[0] - 1, 1)["items"][0]
-            length = len(json.dumps(event, ensure_ascii=False).encode())
-            if size + length > 65536:
-                break
-            items.append(event)
-            size += length
+        rows, latest, boundary = LogIndexer(self.store).window_rows(run_id, before, limit, step_id)
+        with ExitStack() as files:
+            reader = LogViewReader(run_id, root, files)
+            items = _bounded_events(run_id, rows[:limit], reader.replay, PAGE_BUDGET)
         return {
             "items": list(reversed(items)),
             "latest_cursor": latest,
