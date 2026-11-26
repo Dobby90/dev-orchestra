@@ -30,41 +30,78 @@ def cited_case(text, name):
     return bool(name and re.search(r"(?<![\w./-])" + re.escape(name) + r"(?![\w/-]|\.\w)", text))
 
 
+def cited_test_failures(evidence, details):
+    by_name = {}
+    for command_id, case in details:
+        if case.get("name"):
+            by_name.setdefault(case["name"], []).append((command_id, case))
+
+    named = {name for name in by_name if cited_case(evidence, name)}
+    confirmed, candidates = {}, {}
+    for name, entries in by_name.items():
+        if named and name not in named:
+            continue
+        files = {case.get("file") for _, case in entries if cited_case(evidence, case.get("file"))}
+        classes = {
+            case.get("classname")
+            for _, case in entries
+            if cited_case(evidence, case.get("classname"))
+        }
+        if not (named or files or classes):
+            continue
+        matches = [
+            (command_id, case)
+            for command_id, case in entries
+            if (not files or case.get("file") in files)
+            and (not classes or case.get("classname") in classes)
+        ]
+        # Conflicting qualifiers cannot establish a match. Keep the possible failures visible.
+        counts = Counter(command_id for command_id, _ in matches)
+        for command_id, case in matches or entries:
+            target = confirmed if counts[command_id] == 1 else candidates
+            detail = {"name": name, "message": (case.get("message") or "")[:500]}
+            detail.update({key: case[key] for key in ("classname", "file") if case.get(key)})
+            target.setdefault(command_id, []).append(detail)
+    return confirmed, candidates
+
+
 def linked_test_failures(evidence, tests):
     commands = (tests or {}).get("execution", {}).get("commands", [])
     executed = {command.get("command_id") for command in commands}
     cited = executed.intersection(CODE_SPAN.findall(evidence))
     case_evidence = CODE_SPAN.sub(lambda match: " " if match[1] in cited else match[0], evidence)
+    failed = [
+        command
+        for command in commands
+        if command.get("command_id")
+        and command.get("passed") is False
+        and (not cited or command["command_id"] in cited)
+    ]
+    details = [
+        (command["command_id"], case)
+        for command in failed
+        for case in command.get("failure_details")
+        or [{"name": name} for name in command.get("failures", [])]
+    ]
+    confirmed, candidates = cited_test_failures(case_evidence, details)
     linked = []
-    for command in commands:
-        command_id = command.get("command_id")
-        if (
-            not command_id
-            or command.get("passed") is not False
-            or (cited and command_id not in cited)
-        ):
+    for command in failed:
+        command_id = command["command_id"]
+        cases = confirmed.get(command_id, [])
+        possible = candidates.get(command_id, [])
+        if not (cases or possible or command_id in cited):
             continue
-        details = command.get("failure_details") or [
-            {"name": name} for name in command.get("failures", [])
-        ]
-        cases = [
-            {"name": case["name"], "message": (case.get("message") or "")[:500]}
-            for case in details
-            if case.get("name")
-            and any(
-                cited_case(case_evidence, case.get(key)) for key in ("name", "file", "classname")
-            )
-        ]
-        if cases or command_id in cited:
-            linked.append(
-                {
-                    "command_id": command_id,
-                    "status": command.get("status"),
-                    "cases": cases[:10],
-                    "omitted_cases": max(0, len(cases) - 10),
-                    "error": (command.get("error") or "")[:500],
-                }
-            )
+        item = {
+            "command_id": command_id,
+            "status": command.get("status"),
+            "cases": cases[:10],
+            "omitted_cases": max(0, len(cases) - 10),
+            "error": (command.get("error") or "")[:500],
+        }
+        if possible:
+            item["candidate_cases"] = possible[:10]
+            item["omitted_candidate_cases"] = max(0, len(possible) - 10)
+        linked.append(item)
     if not cited and len(linked) > 1:
         return [], sorted(item["command_id"] for item in linked)
     return linked, []

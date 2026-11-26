@@ -173,8 +173,14 @@ def test_linking_groups_keeps_direct_links_and_rejects_invalid_ids(service):
             [],
         ),
         ("`restores focus` 실패", [], ["chromium", "webkit"]),
+        (
+            "`restores focus` (`tests/chromium.spec.ts`) 실패",
+            [("chromium", ["restores focus"])],
+            [],
+        ),
         ("`tests/chromium.spec.ts` 실패", [("chromium", ["restores focus"])], []),
         ("`firefox`의 `restores focus` 실패", [], []),
+        ("`legacy`의 `legacy failure` 실패", [("legacy", ["legacy failure"])], []),
     ],
 )
 def test_test_failure_links_prefer_cited_commands(citation, expected, ambiguous):
@@ -190,7 +196,10 @@ def test_test_failure_links_prefer_cited_commands(citation, expected, ambiguous)
                 }
                 for browser in ("chromium", "webkit")
             ]
-            + [{"command_id": "firefox", "passed": True}]
+            + [
+                {"command_id": "firefox", "passed": True},
+                {"command_id": "legacy", "passed": False, "failures": ["legacy failure"]},
+            ]
         }
     }
     linked, candidates = linked_test_failures(citation, tests)
@@ -200,7 +209,41 @@ def test_test_failure_links_prefer_cited_commands(citation, expected, ambiguous)
     assert candidates == ambiguous
 
 
-def test_fixer_distinguishes_pending_code_fix_and_links_verified_failure(service):
+@pytest.mark.parametrize(
+    "citation,confirmed,candidates",
+    [
+        ("`unit`의 `restores focus` 실패", [], [0, 1, 2]),
+        ("`unit`의 `restores focus` (`pkg.Search`) 실패", [], [0, 1]),
+        ("`unit`의 `restores focus` (`pkg.Export`) 실패", [2], []),
+        ("`unit`의 `restores focus` (`tests/extra.py`) 실패", [1], []),
+        ("`unit`의 `restores focus` (`pkg.Search`, `tests/main.py`) 실패", [0], []),
+        ("`unit`의 `restores focus` (`pkg.Export`, `tests/extra.py`) 실패", [], [0, 1, 2]),
+        ("`unit`의 `tests/extra.py` 실패", [1], []),
+    ],
+)
+def test_test_failure_links_distinguish_same_named_cases(citation, confirmed, candidates):
+    details = [
+        {"name": "restores focus", "classname": cls, "file": file, "message": "focus lost"}
+        for cls, file in [
+            ("pkg.Search", "tests/main.py"),
+            ("pkg.Search", "tests/extra.py"),
+            ("pkg.Export", "tests/main.py"),
+        ]
+    ]
+    tests = {
+        "execution": {
+            "commands": [{"command_id": "unit", "passed": False, "failure_details": details}]
+        }
+    }
+    (link,), ambiguous_commands = linked_test_failures(citation, tests)
+    assert not ambiguous_commands
+    assert link["cases"] == [details[i] for i in confirmed]
+    assert link.get("candidate_cases", []) == [details[i] for i in candidates]
+    assert link.get("omitted_candidate_cases", 0) == 0
+
+
+@pytest.mark.parametrize("qualify", [True, False])
+def test_fixer_distinguishes_pending_code_fix_and_links_verified_failure(service, qualify):
     svc, rid, _ = service
     run = svc.store.get(rid)
     root = Path(run["directory"])
@@ -222,6 +265,13 @@ def test_fixer_distinguishes_pending_code_fix_and_links_verified_failure(service
         "evidence": "호스트가 공유 파일 편집을 차단했습니다.",
     }
     save_stage("fixer", {"sha": sha, "revision": 0, "issue_outcomes": [blocked]})
+    focused = {
+        "name": "restores focus",
+        "classname": "ui.PopupTest",
+        "file": "tests/popup.py",
+        "message": "expected button focus",
+    }
+    other = focused | {"classname": "ui.MenuTest", "file": "tests/menu.py"}
     tests = {
         "sha": sha,
         "revision": 0,
@@ -233,8 +283,9 @@ def test_fixer_distinguishes_pending_code_fix_and_links_verified_failure(service
                     "passed": False,
                     "status": "failed",
                     "failure_details": [
-                        {"name": "restores focus", "message": "expected button focus"},
-                        {"name": "unrelated failure", "message": "different case"},
+                        focused,
+                        other,
+                        focused | {"name": "unrelated failure", "message": "different case"},
                     ],
                 },
                 {"command_id": "unit-other", "passed": False, "failures": ["restores focus"]},
@@ -244,6 +295,8 @@ def test_fixer_distinguishes_pending_code_fix_and_links_verified_failure(service
     tester_artifact = save_stage("tester", tests)
     svc.store.update(rid, test_result=tests)
     remaining = "팝업을 닫으면 포커스가 사라집니다. `unit-ui`의 `restores focus` 실패."
+    if qualify:
+        remaining += " `tests/popup.py`에서 재현."
     review_step, _ = save_review(
         svc,
         rid,
@@ -261,7 +314,12 @@ def test_fixer_distinguishes_pending_code_fix_and_links_verified_failure(service
     assert not unresolved["verification_pending"] and unresolved["remaining_failure"] == remaining
     (failure,) = unresolved["test_failures"]
     assert failure["command_id"] == "unit-ui"
-    assert failure["cases"] == [{"name": "restores focus", "message": "expected button focus"}]
+    if qualify:
+        assert failure["cases"] == [focused]
+        assert "candidate_cases" not in failure
+    else:
+        assert failure["cases"] == []
+        assert failure["candidate_cases"] == [focused, other]
     assert unresolved["previous_fix"] == blocked | {"candidate_sha": sha, "revision": 0}
     assert context["test_result"] == tests
 
