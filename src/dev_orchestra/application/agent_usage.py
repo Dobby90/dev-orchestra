@@ -39,6 +39,14 @@ def usage_view(store, run_id):
                 **telemetry.model_dump(),
             }
         )
+    return {
+        "agents": {role: config.for_role(role).model_dump() for role in ROLES},
+        "attempts": attempts,
+        **summarize_usage(attempts),
+    }
+
+
+def summarize_usage(attempts):
     measured = [a for a in attempts if a["usage"] is not None]
     total = (
         {key: sum(a["usage"][key] for a in measured) for key in TokenUsage.model_fields}
@@ -46,8 +54,6 @@ def usage_view(store, run_id):
         else None
     )
     return {
-        "agents": {role: config.for_role(role).model_dump() for role in ROLES},
-        "attempts": attempts,
         "usage": total,
         "usage_status": (
             "reported"

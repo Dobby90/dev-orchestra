@@ -1,8 +1,10 @@
+import json
 import re
 from types import SimpleNamespace
 
 import pytest
 
+from dev_orchestra.agents.context import role_context
 from dev_orchestra.agents.contracts import response_fields
 from dev_orchestra.agents.prompts import continuation_prompt, prompt
 from dev_orchestra.domain.models import AgentRequest, PipelineError
@@ -19,6 +21,23 @@ def role_request(role, **context):
         input_sha="a" * 40,
         context=context,
     )
+
+
+def test_prompt_keeps_shared_task_prefix_and_round_trips_run_metadata():
+    first = role_request("reviewer", prd="기존 호출 순서", criteria=[{"id": "AC1"}])
+    other = first.model_copy(update={"run_id": "other-run", "worktree": "/tmp/other"})
+    rendered = [prompt(r).split("\nUNTRUSTED TASK DATA:\n")[1] for r in (first, other)]
+    assert rendered[0].split('"run_id"')[0] == rendered[1].split('"run_id"')[0]
+    assert '"criteria"' in rendered[0].split('"run_id"')[0]
+    assert [json.loads(text) for text in rendered] == [r.model_dump() for r in (first, other)]
+
+
+@pytest.mark.parametrize("role", ["planner", "developer", "tester", "reviewer", "fixer"])
+def test_review_scope_is_sent_to_roles_assessing_or_fixing_issues(role):
+    req = role_request(role, prd="Preserve input order")
+    role_context(req)
+    assert ("review_scope" in req.context) == (role in {"reviewer", "fixer"})
+    assert req.context["prd"] == "Preserve input order"
 
 
 @pytest.mark.parametrize(
@@ -128,17 +147,24 @@ def test_prompt_matches_role_tools_permissions_and_response_fields(role, mode, t
 
 @pytest.mark.parametrize("role", ["developer", "fixer"])
 def test_workspace_prompts_request_summary_and_path_hashes(role):
-    req = role_request(role)
+    candidate = "b" * 40
+    req = role_request(role, workspace_resume={"candidate_sha": candidate})
     for render in (prompt, continuation_prompt):
-        instructions = render(req).split("\nUNTRUSTED ", 1)[0]
+        instructions, data = render(req).split("\nUNTRUSTED ", 1)
         assert "workspace.workspace_state(summary_only=true)" in instructions
-        assert "batch only the needed repo-relative paths" in instructions
+        if role == "developer":
+            assert "candidate_sha" in instructions and candidate in data
+            assert "sha in its successful receipt" in instructions
+            assert "same read-only shell call" in instructions
+        else:
+            assert "batch only the needed repo-relative paths" in instructions
         assert "workspace.workspace_state(paths=[...])" in instructions
         metadata = render(role_request(role, workspace_resume={"metadata_only": True})).split(
             "\nUNTRUSTED ", 1
         )[0]
         assert "workspace.workspace_state(summary_only=true)" in metadata
         assert "workspace.workspace_state(paths=[...])" not in metadata
+        assert "successful receipt" not in metadata
 
 
 def test_developer_and_tester_prompts_agree_on_handoff():
@@ -164,6 +190,10 @@ def test_tester_uses_summary_before_fetching_evidence(metadata_only):
     request = role_request("tester", workspace_resume={"metadata_only": metadata_only})
     instructions = prompt(request).split("\nUNTRUSTED ", 1)[0]
     assert "Use the summary alone for passed command status" in instructions
+    assert (
+        "verified test_cases and ambiguous_test_cases in each command summary first" in instructions
+    )
+    assert "test_selection in this request" in instructions
     assert "when you need exact JUnit names or qualifiers" in instructions
     assert "for a command omitted from the summary or for a failure" in instructions
     assert "default page size and continue by offset only as needed" in instructions

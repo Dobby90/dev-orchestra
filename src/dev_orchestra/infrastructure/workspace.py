@@ -693,10 +693,8 @@ class WorkspaceSession:
         if self.data.get("test_evidence") and not self.changed_files():
             value = self.read_test_payload()
             if value["sha"] == candidate:
-                self._validate_test_payload(value, run, changed=[])
-                evidence = self.data["test_evidence"] | {
-                    "execution": self.test_summary(value)["execution"]
-                }
+                summary = self._validated_test_summary(value, run, changed=[])
+                evidence = self.data["test_evidence"] | {"execution": summary["execution"]}
                 return value["selection"], evidence
         return select_tests(run, self.root, candidate), None
 
@@ -749,13 +747,12 @@ class WorkspaceSession:
         if self.data.get("test_evidence"):
             previous = self.read_test_payload()
             if previous["selection"] == selection:
-                self._validate_test_payload(
+                return self._validated_test_summary(
                     previous,
                     run,
                     changed=self.changed_files() if pending else pending,
                     selection=selection,
                 )
-                return self.test_summary(previous)
         import uuid
 
         evidence_id = "test-" + uuid.uuid4().hex
@@ -824,8 +821,7 @@ class WorkspaceSession:
         self.data["test_evidence"] = {"id": evidence_id, "hash": evidence_hash}
         self.save()
         value = self.read_test_payload()
-        self._validate_test_payload(value, run, changed=self.changed_files())
-        return self.test_summary(value)
+        return self._validated_test_summary(value, run, changed=self.changed_files())
 
     def read_test_payload(self):
         from dev_orchestra.application.test_selection import read_tool_evidence
@@ -837,7 +833,15 @@ class WorkspaceSession:
         return read_tool_evidence(path, evidence["hash"])
 
     def _validate_test_payload(
-        self, value, run, *, changed, selection=None, coverage=(), cases_for=None
+        self,
+        value,
+        run,
+        *,
+        changed,
+        selection=None,
+        coverage=(),
+        cases_for=None,
+        case_previews=None,
     ):
         from dev_orchestra.application.automatic_tests import automatic
         from dev_orchestra.application.test_selection import (
@@ -863,8 +867,23 @@ class WorkspaceSession:
         verify_selected_execution(run, selection, value["execution"])
         directory = contained(self.path.parent, self.data["test_evidence"]["id"])
         return verify_tool_artifacts(
-            directory, value, testcase_references(coverage), cases_for=cases_for
+            directory,
+            value,
+            testcase_references(coverage),
+            cases_for=cases_for,
+            case_previews=case_previews,
         )
+
+    def _validated_test_summary(self, value, run, *, changed, selection=None):
+        # Collect small case lists from the same verified trees; never reopen a report for display.
+        previews = {}
+        self._validate_test_payload(
+            value, run, changed=changed, selection=selection, case_previews=previews
+        )
+        summary = self.test_summary(value)
+        for command in summary["execution"]["commands"]:
+            command.update(previews.get(command["command_id"], {}))
+        return summary
 
     def load_test_result(self, response):
         self.reload()

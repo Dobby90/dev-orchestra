@@ -1,5 +1,6 @@
 """Deterministic, snapshotted command selection; model output cannot shrink policy."""
 
+import json
 from fnmatch import fnmatchcase
 
 from pydantic import ValidationError
@@ -315,32 +316,54 @@ def verify_case_references(executed, references, *, allow_legacy_names):
 
 
 def verify_tool_artifacts(
-    directory, value, references=None, *, cases_for=None, allow_legacy_names=False
+    directory,
+    value,
+    references=None,
+    *,
+    cases_for=None,
+    case_previews=None,
+    allow_legacy_names=False,
 ):
     from pathlib import Path
 
     from dev_orchestra.infrastructure.files import contained, digest
+    from dev_orchestra.infrastructure.process import sanitize
     from dev_orchestra.infrastructure.test_runner import (
         executed_testcases,
+        testcase_evidence_view,
         verify_junit_artifact,
     )
 
     missing = dict(references or {})
     cases = None
-    for command in value["execution"]["commands"]:
+    preview_budget = 2048
+    for index, command in enumerate(value["execution"]["commands"]):
         if command.get("junit_path"):
             junit = contained(directory, str(Path(command["junit_path"]).relative_to(directory)))
             tree = verify_junit_artifact(junit, command)
             command_id = command.get("command_id")
             command_references = missing.pop(command_id, ())
             collect_cases = cases_for is not None and command_id == cases_for
-            if command_references or collect_cases:
+            preview = (
+                case_previews is not None
+                and index < 8
+                and command.get("kind") == "test"
+                and command["passed"]
+                and command["total"] <= 16
+            )
+            if command_references or collect_cases or preview:
                 executed = executed_testcases(tree)
                 verify_case_references(
                     executed, command_references, allow_legacy_names=allow_legacy_names
                 )
                 if collect_cases:
                     cases = executed
+                if preview:
+                    view = testcase_evidence_view(executed)
+                    size = len(json.dumps(view, ensure_ascii=False).encode())
+                    if size <= preview_budget and sanitize(view) == view:
+                        case_previews[command_id] = view
+                        preview_budget -= size
         for adapter in command.get("runtime_adapters", []):
             if adapter == "docker":
                 # Container metadata is already bound to the checksummed execution record.

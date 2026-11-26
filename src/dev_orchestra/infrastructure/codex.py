@@ -29,6 +29,28 @@ def strict_schema(value):
     return value
 
 
+def prune_unused_definitions(schema):
+    """Keep the transitive closure of the role's local Pydantic schema references."""
+    definitions = schema.pop("$defs", {})
+    if not definitions:
+        return
+    kept = {}
+    pending = [schema]
+    while pending:
+        node = pending.pop()
+        if isinstance(node, list):
+            pending.extend(node)
+        elif isinstance(node, dict):
+            pending.extend(node.values())
+            if "$ref" in node:
+                name = node["$ref"].removeprefix("#/$defs/")
+                if name not in kept:
+                    kept[name] = definitions[name]
+                    pending.append(kept[name])
+    if kept:
+        schema["$defs"] = {name: definitions[name] for name in definitions if name in kept}
+
+
 class CodexClient:
     def __init__(self, config):
         self.config = config
@@ -208,6 +230,7 @@ class CodexClient:
         }
         if "no_change_reason" in fields:
             wire_schema["properties"]["no_change_reason"] = {"type": "string"}
+        prune_unused_definitions(wire_schema)
         write(schema, strict_schema(wire_schema))
         argv = [
             self.config.command,
@@ -226,6 +249,13 @@ class CodexClient:
             # Do not inherit project/user servers in any role.
             "-c",
             "mcp_servers={}",
+            # These external catalogs are outside the pipeline roles' tool contract.
+            "-c",
+            "features.apps=false",
+            "-c",
+            "features.plugins=false",
+            "-c",
+            'web_search="disabled"',
         ]
         if _workspace is not None:
             from dev_orchestra.infrastructure.workspace_mcp import workspace_tools

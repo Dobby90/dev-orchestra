@@ -1,0 +1,55 @@
+[
+  {
+    "id": "legacy-order",
+    "args": {
+      "text": " QA,qa, QA ,  "
+    },
+    "expected": [
+      "QA",
+      "qa",
+      "QA"
+    ]
+  },
+  {
+    "id": "explicit-default",
+    "args": {
+      "text": "Blue, blue",
+      "unique": false
+    },
+    "expected": [
+      "Blue",
+      "blue"
+    ]
+  },
+  {
+    "id": "first-spelling",
+    "args": {
+      "text": " Z, api, z,API,Beta,z ",
+      "unique": true
+    },
+    "expected": [
+      "Z",
+      "api",
+      "Beta"
+    ]
+  },
+  {
+    "id": "unicode-casefold",
+    "args": {
+      "text": " Straße, STRASSE,Σ,ς ",
+      "unique": true
+    },
+    "expected": [
+      "Straße",
+      "Σ"
+    ]
+  },
+  {
+    "id": "empty-unique",
+    "args": {
+      "text": " ,  , ",
+      "unique": true
+    },
+    "expected": []
+  }
+]

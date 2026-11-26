@@ -1,10 +1,11 @@
 """Read-only observations for reproducible offline comparisons."""
 
 import json
+import math
 from datetime import datetime
 from pathlib import Path, PurePosixPath
 
-from dev_orchestra.application.agent_usage import usage_view
+from dev_orchestra.application.agent_usage import summarize_usage, usage_view
 from dev_orchestra.application.automatic_tests import AUTOMATIC_TEST_CONTRACTS, automatic
 from dev_orchestra.application.results import Results
 from dev_orchestra.application.test_changes import checksum
@@ -32,6 +33,41 @@ def _elapsed(start, finish):
         return value if value >= 0 else None
     except (ValueError, TypeError):
         return None
+
+
+def _total_seconds(values):
+    # A missing duration is different from a measured zero, including on failed attempts.
+    if values and all(type(v) in (int, float) and math.isfinite(v) and v >= 0 for v in values):
+        return sum(values)
+    return None
+
+
+def _role_summary(stages, usage):
+    rows = []
+    for role in usage["agents"]:
+        attempts = [a for a in usage["attempts"] if a["role"] == role]
+        if not attempts:
+            continue
+        steps = [s for s in stages if s["role"] == role]
+        durations = [call["duration_seconds"] for s in steps for call in s["calls"]]
+        cli_seconds = _total_seconds(durations) if all(s["calls"] for s in steps) else None
+        summary = summarize_usage(attempts)
+        tokens = summary["usage"]
+        rows.append(
+            {
+                "role": role,
+                "wall_seconds": _total_seconds([s["wall_seconds"] for s in steps]),
+                "cli_seconds": cli_seconds,
+                **summary,
+                "uncached_input_tokens": tokens["input_tokens"] - tokens["cached_input_tokens"]
+                if tokens is not None
+                else None,
+                "total_tokens": tokens["input_tokens"] + tokens["output_tokens"]
+                if tokens is not None
+                else None,
+            }
+        )
+    return rows
 
 
 def _command_signature(command):
@@ -275,5 +311,6 @@ def measurement(store, run_id, *, version_label, scenario):
         ),
         "usage_status": usage["usage_status"],
         "observed_role_calls": sum(len(stage["calls"]) for stage in stages),
+        "role_summary": _role_summary(stages, usage),
         "stages": stages,
     }

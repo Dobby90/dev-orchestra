@@ -2,6 +2,8 @@
 
 import json
 import sqlite3
+import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -168,6 +170,62 @@ def test_measurement_preserves_unknown_and_counts_failed_calls_without_contents(
         "step_resumed",
         "step_completed",
     ]
+
+
+def test_role_table_combines_retries_without_counting_parent_telemetry_twice(setup):
+    svc, rid, _ = setup
+    run = svc.store.get(rid)
+    for role, seconds, status in [
+        ("tester", [1, 2], "reported"),
+        ("tester", [3], "partial"),
+        ("reviewer", [], "unknown"),
+    ]:
+        step, attempt = svc.store.start_step(rid, role, 0, run["base_sha"])
+        directory = Path(run["directory"]) / f"iterations/000/{role}/attempt-{attempt:03}"
+        if seconds:
+            write(
+                directory / "telemetry.json",
+                {
+                    "duration_seconds": sum(seconds),
+                    "usage_status": status,
+                    "usage": {"input_tokens": 300, "cached_input_tokens": 200, "output_tokens": 30},
+                },
+            )
+            for index, duration in enumerate(seconds, 1):
+                write(
+                    directory / f"calls/call-{index:03}/telemetry.json",
+                    {"duration_seconds": duration},
+                )
+        svc.store.finish_step(
+            step, run["base_sha"], {}, status="failed" if attempt == 1 else "completed"
+        )
+    script = Path(__file__).resolve().parents[1] / "scripts/measure_run.py"
+    cmd = [
+        sys.executable,
+        script,
+        "--database",
+        svc.store.path,
+        "--run-id",
+        rid,
+        "--version-label",
+        "fixture",
+        "--scenario",
+        "recovery",
+    ]
+    report = json.loads(subprocess.check_output(cmd, text=True))
+    tester, reviewer = report["role_summary"]
+    assert tester["role"] == "tester" and tester["total_attempts"] == 2
+    assert tester["wall_seconds"] == sum(
+        s["wall_seconds"] for s in report["stages"] if s["role"] == "tester"
+    )
+    assert tester["cli_seconds"] == 6 and tester["usage_status"] == "partial"
+    assert tester["uncached_input_tokens"] == 200 and tester["total_tokens"] == 660
+    assert reviewer["role"] == "reviewer" and reviewer["usage_status"] == "unknown"
+    assert reviewer["cli_seconds"] is None and reviewer["total_tokens"] is None
+    lines = subprocess.check_output([*cmd, "--format", "table"], text=True).splitlines()
+    assert len(lines) == 3
+    assert lines[1].split()[3:] == ["6.00", "600", "400", "200", "60", "660", "partial"]
+    assert lines[2].split()[-2:] == ["—", "unknown"]
 
 
 def save_measured_tests(svc, run, step, attempt, selection, *, runtime_prefix=""):

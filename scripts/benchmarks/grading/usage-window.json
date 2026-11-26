@@ -1,0 +1,102 @@
+[
+  {
+    "id": "ordinary",
+    "args": {
+      "events": [
+        {
+          "at": "2024-06-01T11:15Z",
+          "bytes": 6
+        }
+      ],
+      "start": "2024-06-01T11:00Z",
+      "end": "2024-06-01T12:00Z"
+    },
+    "expected": 6
+  },
+  {
+    "id": "end-exclusive",
+    "args": {
+      "events": [
+        {
+          "at": "2024-06-01T12:00Z",
+          "bytes": 7
+        }
+      ],
+      "start": "2024-06-01T11:00Z",
+      "end": "2024-06-01T12:00Z"
+    },
+    "expected": 0
+  },
+  {
+    "id": "start-inclusive-duplicates",
+    "args": {
+      "events": [
+        {
+          "at": "2024-06-01T12:12Z",
+          "bytes": 5
+        },
+        {
+          "at": "2024-06-01T12:00Z",
+          "bytes": 4
+        },
+        {
+          "at": "2024-06-01T12:00Z",
+          "bytes": 3
+        }
+      ],
+      "start": "2024-06-01T12:00Z",
+      "end": "2024-06-01T13:00Z"
+    },
+    "expected": 12
+  },
+  {
+    "id": "previous-date-offset",
+    "args": {
+      "events": [
+        {
+          "at": "2024-06-01T20:00-04:00",
+          "bytes": 13
+        },
+        {
+          "at": "2024-06-02T00:15+02:00",
+          "bytes": 19
+        }
+      ],
+      "start": "2024-06-02T00:00Z",
+      "end": "2024-06-02T00:30Z"
+    },
+    "expected": 13
+  },
+  {
+    "id": "mixed-bound-offsets",
+    "args": {
+      "events": [
+        {
+          "at": "2024-06-02T00:10Z",
+          "bytes": 8
+        },
+        {
+          "at": "2024-06-02T00:30Z",
+          "bytes": 9
+        }
+      ],
+      "start": "2024-06-01T20:00-04:00",
+      "end": "2024-06-02T09:30+09:00"
+    },
+    "expected": 8
+  },
+  {
+    "id": "empty-window",
+    "args": {
+      "events": [
+        {
+          "at": "2024-06-02T00:00Z",
+          "bytes": 4
+        }
+      ],
+      "start": "2024-06-02T00:00Z",
+      "end": "2024-06-02T00:00Z"
+    },
+    "expected": 0
+  }
+]

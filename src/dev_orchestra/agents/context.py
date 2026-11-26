@@ -127,10 +127,11 @@ def role_context(request):
         ]
     if context.get("open_issues") is not None:
         context.pop("review_result", None)
-    context["review_scope"] = (
-        "Review the cumulative Run changes and directly affected code. Read surrounding functions, "
-        "callers, dependencies, contracts and tests as needed to judge regressions and requirements. "
-        "Do not audit unrelated project code. Every prior unresolved host issue still requires an "
-        "independent assessment; the last Fixer diff alone is insufficient. For affected tests, "
-        "consider included/excluded commands and expansion reasons; never treat them as full-suite coverage."
-    )
+    if role in {"reviewer", "fixer"}:
+        context["review_scope"] = (
+            "Review the cumulative Run changes and directly affected code. Read surrounding functions, "
+            "callers, dependencies, contracts and tests as needed to judge regressions and requirements. "
+            "Do not audit unrelated project code. Every prior unresolved host issue still requires an "
+            "independent assessment; the last Fixer diff alone is insufficient. For affected tests, "
+            "consider included/excluded commands and expansion reasons; never treat them as full-suite coverage."
+        )

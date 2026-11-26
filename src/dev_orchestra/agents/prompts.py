@@ -147,8 +147,9 @@ TEST_REPORT = (
     " Return test_evidence_id, actual executed command_ids and coverage of each criterion by executed "
     "kind=test commands. Honor required_criterion_test_commands when present. "
     "In each coverage row, include up to eight relevant test_cases with command_id and exact JUnit name. "
+    "Use the verified test_cases and ambiguous_test_cases in each command summary first. "
     "Use workspace.read_test_evidence with command_id and view=test_cases when you need exact JUnit "
-    "names or qualifiers. Reuse names already verified for this evidence. For an ambiguous name, "
+    "names or qualifiers missing from the summary. For an ambiguous name, "
     "copy classname, file, or both from the report to identify a unique case. Use diagnostics only "
     "for a command omitted from the summary or for a failure or incomplete result whose summary "
     "lacks relevant detail. Start with the default page size and continue by offset only as needed. "
@@ -156,8 +157,13 @@ TEST_REPORT = (
     "Missing JUnit, timeout and unavailable environments cannot establish success. "
 )
 
+TEST_SELECTION_SOURCE = (
+    " Use the host's test_selection in this request. Read workspace.test_policy only if "
+    "the selection is missing or needs refreshing. "
+)
+
 AUTOMATIC_TEST_EXECUTION = (
-    " Read workspace.test_policy first. Analyze the cumulative diff, callers, dependencies and prior "
+    " Analyze the cumulative diff, callers, dependencies and prior "
     "failures. Choose focused tests for changed behavior and every criterion. Trace each additional "
     "regression to an affected behavior; broaden with a reason when impact is uncertain. "
     "Use available_commands, mandatory_command_ids, dependencies and required_criterion_test_commands "
@@ -167,9 +173,7 @@ AUTOMATIC_TEST_EXECUTION = (
     "If the host reports a different required set, use the reported IDs to submit the plan again. "
 )
 
-FIXED_TEST_EXECUTION = (
-    " Read workspace.test_policy and pass exactly its included command_ids to workspace.run_tests. "
-)
+FIXED_TEST_EXECUTION = " Pass exactly its included command_ids to workspace.run_tests. "
 
 LOOKUP_HASHES = (
     " Before editing, batch only the needed repo-relative paths in workspace.workspace_state(paths=[...]) "
@@ -178,11 +182,27 @@ LOOKUP_HASHES = (
 
 WORKSPACE_SUMMARY = " Use workspace.workspace_state(summary_only=true) for the candidate SHA and checkpoint metadata. "
 
+DEVELOPER_STATE = (
+    " Start from candidate_sha in the host's workspace_resume (recovery on continuation). "
+    "Read the files you need and compute SHA256 of their current bytes in the same read-only "
+    "shell call. Use workspace.workspace_state(paths=[...]) for missing hashes. For each new "
+    "checkpoint use the current candidate SHA; advance it to the sha in its successful receipt. "
+    "That receipt also confirms completion. Use workspace.workspace_state(summary_only=true) "
+    "only if the current HEAD or acknowledged work is uncertain. "
+    "Add behavior assertions that distinguish plausible regressions in the changed contract, "
+    "including stated return types and compatibility. For invariants, exercise inputs from "
+    "different decision branches and check the expected result. "
+)
+
 EDIT_WORKSPACE = (
     " Use workspace.edit_file for authorized UTF-8 edits. Supply the current SHA256, or null "
     "for a new file. Leave the original checkout, "
     "other Runs, evidence, Git metadata, file modes, symlinks and binary files untouched. "
 )
+
+
+def edit_state_guidance(role):
+    return DEVELOPER_STATE if role == "developer" else WORKSPACE_SUMMARY + LOOKUP_HASHES
 
 
 def validation_guidance(request):
@@ -254,8 +274,7 @@ TESTER_HANDOFF = (
 def tester_instructions(request, state):
     if state.get("metadata_only"):
         return (
-            WORKSPACE_SUMMARY
-            + " Read workspace.test_policy for the recorded selection. Reuse the test_evidence ID "
+            WORKSPACE_SUMMARY + TEST_SELECTION_SOURCE + " Reuse the test_evidence ID "
             "in recovery without rerunning tests. " + TEST_REPORT
         )
     execution = (
@@ -270,12 +289,19 @@ def tester_instructions(request, state):
             "invalidate that evidence. " + execution
         )
     return (
-        " Edit only test_paths to add missing behavior coverage. Production code and validation policy "
-        "are read-only. "
+        " Check the assertions against each observable requirement, including return types and "
+        "compatibility promises. For an invariance requirement, choose distinguishable inputs "
+        "from different decision branches and check the expected result under the transformation. "
+        "For order independence, interleave contributing and noncontributing inputs when applicable; "
+        "reversing equivalent inputs alone cannot expose an early exit. For uncovered behavior add "
+        "a check that would fail a plausible regression. Edit only test_paths to add missing "
+        "behavior coverage. Production code and validation policy are read-only. "
         + (TESTER_HANDOFF if request.context.get("development_handoff") else "")
-        + LOOKUP_HASHES
+        + " When reading an existing test you plan to edit, get its current SHA256 in the same "
+        "read-only shell call. For other needed hashes use workspace.workspace_state(paths=[...]). "
         + EDIT_WORKSPACE
         + TEST_PROTECTION
+        + TEST_SELECTION_SOURCE
         + execution
         + " The host commits pending test edits and runs allowlisted commands. Supply the test "
         "commit description in workspace.run_tests.commit_message. " + COMMIT_MESSAGES + TEST_REPORT
@@ -302,8 +328,7 @@ def workspace_instructions(request, state):
             return tester_instructions(request, state) + questions + validation_guidance(request)
         instructions = (
             "Implement the approved requirements and plan. "
-            + WORKSPACE_SUMMARY
-            + LOOKUP_HASHES
+            + edit_state_guidance(request.role)
             + EDIT_WORKSPACE
             + TEST_PROTECTION
             + questions
@@ -323,6 +348,13 @@ def workspace_instructions(request, state):
     return instructions
 
 
+def task_json(request):
+    # Keep requirements and role guidance ahead of the run-specific ID and worktree.
+    fields = request.model_dump()
+    data = {"role": fields.pop("role"), "context": fields.pop("context"), **fields}
+    return json.dumps(data, ensure_ascii=False, separators=(",", ":"))
+
+
 def prompt(request: AgentRequest, *, reviewer_evidence=None):
     if writes_workspace(request):
         state = request.context.get("workspace_resume", {})
@@ -332,7 +364,7 @@ def prompt(request: AgentRequest, *, reviewer_evidence=None):
             TASK_BOUNDARY
             + workspace_instructions(request, state)
             + "\nUNTRUSTED TASK DATA:\n"
-            + json.dumps(request.model_dump(), ensure_ascii=False)
+            + task_json(request)
         )
     if request.role == "planner":
         instructions = (
@@ -350,21 +382,21 @@ def prompt(request: AgentRequest, *, reviewer_evidence=None):
             reviewer_evidence = bool(request.context.get("test_evidence_id"))
         if reviewer_evidence:
             instructions += (
-                " For truncated diagnostics, read the affected command through "
-                "workspace.read_test_evidence with test_evidence_id and command_id. "
-                "Use view=test_cases to check executed names and use ambiguous_test_cases to match "
-                "classname or file for shared names. For omitted or unmapped criteria, "
-                "omitted commands, selection reasons or exact selected files, read the full evidence "
-                "by omitting command_id. "
-                "Follow offset until the relevant data is complete. A testcase name alone does not "
-                "prove criterion coverage. Verify the test assertions against the changed behavior. "
+                " Read the cumulative diff and affected callers together where practical. Compare "
+                "the actual test assertions against each criterion. Start with test_result for "
+                "candidate-bound command outcomes, selection and cited cases. Fetch additional "
+                "evidence when a relevant detail is missing, truncated, ambiguous or conflicts "
+                "with the diff. Use workspace.read_test_evidence with test_evidence_id and "
+                "command_id for diagnostics, or view=test_cases for executed names and qualifiers. "
+                "Omit command_id for missing selection or coverage details. Page until the question "
+                "is resolved. A passing command or a testcase name alone cannot establish coverage. "
             )
     return (
         TASK_BOUNDARY
         + instructions
         + design_guidance(request)
         + "\nUNTRUSTED TASK DATA:\n"
-        + json.dumps(request.model_dump(), ensure_ascii=False)
+        + task_json(request)
     )
 
 
@@ -378,12 +410,12 @@ def continuation_prompt(request, *, metadata_only=None):
     if state.get("metadata_only"):
         response_contract = {k: v for k, v in response_contract.items() if not k.endswith("_tool")}
     task = {
-        "run_id": request.run_id,
         "role": request.role,
-        "input_sha": request.input_sha,
-        "recovery": state,
-        "response_contract": response_contract,
         "criteria": request.context.get("criteria"),
+        "response_contract": response_contract,
+        "recovery": state,
+        "input_sha": request.input_sha,
+        "run_id": request.run_id,
     }
     if request.role == "tester":
         task["test_selection"] = request.context.get("test_selection")
@@ -401,8 +433,7 @@ def continuation_prompt(request, *, metadata_only=None):
         instructions = workspace_instructions(request, state)
     else:
         instructions = (
-            WORKSPACE_SUMMARY
-            + LOOKUP_HASHES
+            edit_state_guidance(request.role)
             + EDIT_WORKSPACE
             + "Use workspace.checkpoint_commit with current SHA and selected file hashes for "
             "remaining approved work, and "
@@ -418,5 +449,5 @@ def continuation_prompt(request, *, metadata_only=None):
         TASK_BOUNDARY
         + instructions
         + "\nUNTRUSTED CONTINUATION DATA:\n"
-        + json.dumps(task, ensure_ascii=False)
+        + json.dumps(task, ensure_ascii=False, separators=(",", ":"))
     )

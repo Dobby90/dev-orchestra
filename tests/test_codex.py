@@ -5,7 +5,7 @@ import pytest
 
 from dev_orchestra.config import Codex
 from dev_orchestra.domain.models import AgentRequest, AgentResult, PipelineError
-from dev_orchestra.infrastructure.codex import CodexClient, strict_schema
+from dev_orchestra.infrastructure.codex import CodexClient, prune_unused_definitions, strict_schema
 
 
 def test_strict_model_schema_has_no_open_dicts():
@@ -13,6 +13,19 @@ def test_strict_model_schema_has_no_open_dicts():
     assert schema["additionalProperties"] is False
     assert set(schema["required"]) == set(schema["properties"])
     assert schema["properties"]["coverage"]["type"] == "array"
+
+
+def test_role_schema_keeps_nested_and_recursive_refs():
+    def ref(name):
+        return {"$ref": "#/$defs/" + name}
+
+    schema = {
+        "properties": {"result": {"anyOf": [ref("Row"), {"type": "null"}]}},
+        "$defs": {"Row": {"items": ref("Item")}, "Item": {"items": ref("Row")}, "Unused": {}},
+    }
+    prune_unused_definitions(schema)
+    assert set(schema["$defs"]) == {"Row", "Item"}
+    assert schema["$defs"]["Row"]["items"] == ref("Item")
 
 
 @pytest.mark.parametrize("valid", [True, False])
@@ -27,6 +40,8 @@ if '--help' in sys.argv:
 else:
     assert '--sandbox' in sys.argv and 'read-only' in sys.argv
     assert '--ephemeral' in sys.argv and 'resume' not in sys.argv
+    assert 'features.apps=false' in sys.argv and 'features.plugins=false' in sys.argv
+    assert 'web_search="disabled"' in sys.argv
     assert 'UNTRUSTED TASK DATA' in sys.stdin.read()
     Path(sys.argv[sys.argv.index('--output-last-message')+1]).write_text({response!r})
     print('{{"type":"turn.completed"}}')
@@ -47,6 +62,8 @@ else:
     else:
         with pytest.raises(PipelineError, match="schema"):
             client.run(req, tmp_path / "attempt")
+    schema = json.loads((tmp_path / "attempt" / "schema.json").read_text())
+    assert set(schema["$defs"]) == {"Issue"}
 
 
 @pytest.mark.parametrize("contract2", [True, False])
@@ -78,3 +95,5 @@ Path(sys.argv[sys.argv.index('--output-last-message')+1]).write_text({response!r
     else:
         with pytest.raises(PipelineError, match="schema"):
             client.run(request, tmp_path / "result")
+    schema = json.loads((tmp_path / "result" / "schema.json").read_text())
+    assert set(schema["$defs"]) == {"Issue", "ReviewAssessment", "ReviewIssueDistinction"}

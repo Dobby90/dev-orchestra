@@ -330,6 +330,7 @@ def test_tester_revalidates_evidence_at_each_boundary_with_single_reads(setup, m
     expected = {"evidence.json": 1, "unit.junit.xml": 1}
     value = session.run_tests(["unit"])
     assert reads == expected
+    assert value["execution"]["commands"][0]["test_cases"] == ["one"]
     reads.clear()
     selection, recovery_evidence = session.test_policy_and_evidence()
     assert selection == value["selection"]
@@ -406,6 +407,8 @@ def test_tester_references_same_named_junit_cases_by_class_and_file(setup):
     session._test_runner = Tests()
     value = session.run_tests(["unit"])
     page = session.read_test_evidence(value["evidence_id"], command_id="unit", view="test_cases")
+    row = value["execution"]["commands"][0]
+    assert {k: row[k] for k in ("test_cases", "ambiguous_test_cases")} == json.loads(page["text"])
     assert json.loads(page["text"]) == {
         "test_cases": ["shared"],
         "ambiguous_test_cases": [
@@ -442,6 +445,47 @@ def test_tester_references_same_named_junit_cases_by_class_and_file(setup):
         ]
         with pytest.raises(PipelineError, match=error):
             session.load_test_result(response)
+
+
+def test_verified_case_previews_observe_shared_byte_and_suite_limits(tmp_path):
+    from xml.etree import ElementTree as ET
+
+    from dev_orchestra.application.test_selection import verify_tool_artifacts
+
+    commands = []
+    for key, names in {
+        "large_suite": [f"case_{i}" for i in range(17)],
+        "long": ["가" * 450],
+        "over_remaining": ["나" * 450],
+        "sensitive": ["case[password=fixture]"],
+        "small": ["short"],
+    }.items():
+        suite = ET.Element("testsuite")
+        for name in names:
+            ET.SubElement(suite, "testcase", name=name)
+        content = ET.tostring(suite, encoding="utf-8")
+        path = tmp_path / f"{key}.xml"
+        path.write_bytes(content)
+        commands.append(
+            dict(
+                command_id=key,
+                kind="test",
+                status="passed",
+                passed=True,
+                exit_code=0,
+                total=len(names),
+                failed=0,
+                skipped=0,
+                junit_path=str(path),
+                junit_hash=digest(content),
+            )
+        )
+    value = {"execution": {"commands": commands}}
+    previews = {}
+    verify_tool_artifacts(tmp_path, value, case_previews=previews)
+    assert previews == {"long": {"test_cases": ["가" * 450]}, "small": {"test_cases": ["short"]}}
+    cases = verify_tool_artifacts(tmp_path, value, cases_for="large_suite")
+    assert len(cases) == 17
 
 
 @pytest.mark.parametrize("kind", ["passed", "failed", "parse_error", "timeout"])
