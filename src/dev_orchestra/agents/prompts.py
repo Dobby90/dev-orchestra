@@ -142,12 +142,16 @@ ENVIRONMENT_TOOL = (
 )
 
 TEST_REPORT = (
+    " Use the host execution summary for command status and counts, including saved test_evidence "
+    "during recovery. Use the summary alone for passed command status. "
     " Return test_evidence_id, actual executed command_ids and coverage of each criterion by executed "
-    "kind=test commands. Honor required_criterion_test_commands when present. Page diagnostics via "
-    "workspace.read_test_evidence(evidence_id, command_id, offset). Check recorded status and JUnit. "
+    "kind=test commands. Honor required_criterion_test_commands when present. "
     "In each coverage row, include up to eight relevant test_cases with command_id and exact JUnit name. "
-    "Use view=test_cases with command_id to check names and ambiguous_test_cases. For an ambiguous name, "
-    "copy classname, file, or both from the report to identify a unique case. "
+    "Use workspace.read_test_evidence with command_id and view=test_cases when you need exact JUnit "
+    "names or qualifiers. Reuse names already verified for this evidence. For an ambiguous name, "
+    "copy classname, file, or both from the report to identify a unique case. Use diagnostics only "
+    "for a command omitted from the summary or for a failure or incomplete result whose summary "
+    "lacks relevant detail. Start with the default page size and continue by offset only as needed. "
     "Leave test_cases empty when only command-level evidence is available. "
     "Missing JUnit, timeout and unavailable environments cannot establish success. "
 )

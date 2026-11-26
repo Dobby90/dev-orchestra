@@ -694,7 +694,10 @@ class WorkspaceSession:
             value = self.read_test_payload()
             if value["sha"] == candidate:
                 self._validate_test_payload(value, run, changed=[])
-                return value["selection"], self.data["test_evidence"]
+                evidence = self.data["test_evidence"] | {
+                    "execution": self.test_summary(value)["execution"]
+                }
+                return value["selection"], evidence
         return select_tests(run, self.root, candidate), None
 
     def run_tests(self, command_ids, test_plan=None, commit_message=""):

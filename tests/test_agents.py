@@ -159,6 +159,19 @@ def test_developer_and_tester_prompts_agree_on_handoff():
         assert "development_handoff" not in render(request)
 
 
+@pytest.mark.parametrize("metadata_only", [False, True])
+def test_tester_uses_summary_before_fetching_evidence(metadata_only):
+    request = role_request("tester", workspace_resume={"metadata_only": metadata_only})
+    instructions = prompt(request).split("\nUNTRUSTED ", 1)[0]
+    assert "Use the summary alone for passed command status" in instructions
+    assert "when you need exact JUnit names or qualifiers" in instructions
+    assert "for a command omitted from the summary or for a failure" in instructions
+    assert "default page size and continue by offset only as needed" in instructions
+    tester = workspace_tools("tester", metadata_only)
+    assert "For passed commands use the execution summary" in tester["read_test_evidence"][1]
+    assert "Omit command_id" in workspace_tools("reviewer")["read_test_evidence"][1]
+
+
 def test_validation_guidance_only_uses_known_stack_or_keeps_fallbacks():
     def guidance(argv):
         req = role_request("developer", test_commands={"unit": {"argv": argv}})

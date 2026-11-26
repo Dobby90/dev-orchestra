@@ -331,6 +331,12 @@ def test_tester_revalidates_evidence_at_each_boundary_with_single_reads(setup, m
     value = session.run_tests(["unit"])
     assert reads == expected
     reads.clear()
+    selection, recovery_evidence = session.test_policy_and_evidence()
+    assert selection == value["selection"]
+    assert recovery_evidence["id"] == value["evidence_id"]
+    assert recovery_evidence["execution"] == value["execution"]
+    assert reads == expected
+    reads.clear()
     response = WorkspaceTestResult(
         summary="실행 근거 확인",
         command_ids=["unit"],
@@ -360,6 +366,8 @@ def test_tester_revalidates_evidence_at_each_boundary_with_single_reads(setup, m
     junit = directory / "unit.junit.xml"
     raw = junit.read_bytes()
     junit.write_bytes(raw.replace(b"one", b"two"))
+    with pytest.raises(PipelineError, match="JUnit evidence checksum mismatch"):
+        session.test_policy_and_evidence()
     with pytest.raises(PipelineError, match="JUnit evidence checksum mismatch"):
         session.load_test_result(response)
     junit.write_bytes(raw)

@@ -95,9 +95,15 @@ TEST_TOOLS = {
     ),
     "run_tests": (
         RunTests,
-        "Commit pending test edits and run host-validated commands. Supply commit_message with a Korean subject naming the tested behavior and a body describing only pending test changes; never claim unexecuted tests passed. Automatic selection requires test_plan (command_id, exact files relative to command working_directory, reason); command_ids must include mandatory commands. Inspect returned evidence.",
+        "Commit pending test edits and run host-validated commands. Supply commit_message with a Korean subject naming the tested behavior and a body describing only pending test changes; never claim unexecuted tests passed. Automatic selection requires test_plan (command_id, exact files relative to command working_directory, reason); command_ids must include mandatory commands. Use the returned execution summary for passed command status and counts.",
     ),
-    "read_test_evidence": READ_EVIDENCE,
+    "read_test_evidence": (
+        ReadCommandEvidence,
+        "Read details missing from the execution summary. Pass command_id and view=test_cases for needed "
+        "JUnit names and ambiguous_test_cases. Use command-scoped diagnostics for omitted commands or "
+        "insufficient failure or incomplete-result details. For passed commands use the execution summary. "
+        "Use the default page size and continue with offset only if needed.",
+    ),
 }
 
 
