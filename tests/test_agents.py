@@ -141,6 +141,24 @@ def test_workspace_prompts_request_summary_and_path_hashes(role):
         assert "workspace.workspace_state(paths=[...])" not in metadata
 
 
+def test_developer_and_tester_prompts_agree_on_handoff():
+    for render in (prompt, continuation_prompt):
+        assert "Use summary to hand off to Tester" in render(role_request("developer"))
+        request = role_request(
+            "tester",
+            development_handoff={
+                "developer_summary": "Verify stale selections",
+                "changed_files": ["log.vue"],
+            },
+        )
+        instructions, data = render(request).split("\nUNTRUSTED ", 1)
+        assert "Check them against the actual candidate diff" in instructions
+        assert "Only actual host test results establish verification" in instructions
+        assert "Verify stale selections" in data and "log.vue" in data
+        request.context["workspace_resume"] = {"metadata_only": True}
+        assert "development_handoff" not in render(request)
+
+
 def test_validation_guidance_only_uses_known_stack_or_keeps_fallbacks():
     def guidance(argv):
         req = role_request("developer", test_commands={"unit": {"argv": argv}})

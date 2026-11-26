@@ -332,9 +332,10 @@ class Runner:
             self.store.update(
                 run_id, state, next_role=role, transition_summary=transition_summary(run, state)
             )
+            steps = self.store.steps(run_id)
             completed = [
                 s
-                for s in self.store.steps(run_id)
+                for s in steps
                 if s["role"] == role
                 and s["iteration"] == iteration
                 and s.get("revision", 0) == run.get("revision", 0)
@@ -389,7 +390,7 @@ class Runner:
                         "fixer",
                         "tester",
                     }:
-                        for previous in self.store.steps(run_id):
+                        for previous in steps:
                             if (
                                 previous["role"] == role
                                 and previous["iteration"] == iteration
@@ -446,6 +447,9 @@ class Runner:
                 }
                 for key in ["plan", "criteria", "test_result", "review_result"]:
                     context[key] = run.get(key)
+                if role == "tester" and sha == run.get("current_sha"):
+                    if handoff := self.development_handoff(run, steps, git, sha):
+                        context["development_handoff"] = handoff
                 if hasattr(self.tests, "host_tools"):
                     context["host_tools"] = self.tests.host_tools(
                         directory / "preflight" / "tools", lambda: self.store.get(run_id)["control"]
@@ -728,6 +732,8 @@ class Runner:
                 )
                 if workspace:
                     payload["workspace_commits"] = workspace_commits
+                if role == "developer":
+                    payload["changed_files"] = patched_paths
                 if approval:
                     payload["test_change_approval"] = approval
                 if record:
@@ -805,6 +811,46 @@ class Runner:
             self.advance(run_id, role, payload, config)
             if self.store.get(run_id)["state"] in {"needs_input", "waiting_plan_approval"}:
                 return
+
+    def development_handoff(self, run, steps, git, candidate_sha):
+        from dev_orchestra.agents.context import bounded_rows
+        from dev_orchestra.application.results import Results
+
+        revision = run.get("revision", 0)
+        step = next(
+            (
+                step
+                for step in reversed(steps)
+                if step["role"] == "developer"
+                and step["status"] == "completed"
+                and step["iteration"] == run["iteration"]
+                and step.get("revision", 0) == revision
+                and step["output_sha"] == candidate_sha
+            ),
+            None,
+        )
+        if step is None:
+            return None
+        result = Results(self.store).payload(run, step)
+        if result.get("revision", 0) != revision:
+            return None
+        files = result.get("changed_files")
+        if files is None:
+            # Older results predate the host's changed-file inventory.
+            files = git.call(
+                "diff", "--name-only", "--no-ext-diff", "-z", step["input_sha"], candidate_sha, "--"
+            ).split("\0")
+            files = [path for path in files if path]
+        paths = bounded_rows(files, 1500)
+        summary = result["summary"].strip().encode()
+        return {
+            "candidate_sha": candidate_sha,
+            "revision": revision,
+            "changed_files": paths,
+            "omitted_files": len(files) - len(paths),
+            "developer_summary": summary[:1000].decode(errors="ignore"),
+            "summary_truncated": len(summary) > 1000,
+        }
 
     def run_workspace_stage(self, request, directory, session, config):
         from dev_orchestra.agents.contracts import ResponseError

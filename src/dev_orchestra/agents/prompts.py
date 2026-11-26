@@ -86,7 +86,8 @@ REVIEW_ASSESSMENTS = (
 )
 
 FIXER_REVIEW_GUIDANCE = (
-    " Use the top-level open_issues as defects, with related_unresolved_issues as supporting evidence. "
+    " Summarize actual changes and risks. Use the top-level open_issues as defects, with "
+    "related_unresolved_issues as supporting evidence. "
     "Check candidate_sha and revision on latest_assessment, previous_fix and test_result. Preserve "
     "verification_pending code fixes unless current evidence shows a remaining defect. Inspect "
     "remaining_failure and linked test_failures. Use the recorded classname and file to distinguish "
@@ -232,6 +233,20 @@ def design_guidance(request):
     )
 
 
+DEVELOPER_HANDOFF = (
+    " Use summary to hand off to Tester: one sentence on the implemented behavior, then up to three "
+    "specific remaining risks or edge cases worth testing. Name affected functions or observable "
+    "behavior. Keep it short and omit speculative risks. The host records the actual changed files. "
+)
+
+TESTER_HANDOFF = (
+    " Start with the changed_files and developer_summary in development_handoff. Treat the risks "
+    "and edge cases as leads. Check them against the actual candidate diff, affected callers and "
+    "acceptance criteria, and cover missing behavior. Use the cumulative diff if files were omitted. "
+    "Only actual host test results establish verification. "
+)
+
+
 def tester_instructions(request, state):
     if state.get("metadata_only"):
         return (
@@ -253,6 +268,7 @@ def tester_instructions(request, state):
     return (
         " Edit only test_paths to add missing behavior coverage. Production code and validation policy "
         "are read-only. "
+        + (TESTER_HANDOFF if request.context.get("development_handoff") else "")
         + LOOKUP_HASHES
         + EDIT_WORKSPACE
         + TEST_PROTECTION
@@ -291,7 +307,6 @@ def workspace_instructions(request, state):
             "expected_sha, and selected file paths mapped to their current hashes. Reuse hashes "
             "returned by edit_file for edited files. Retry identical arguments after a lost response. "
             "Use no_change_reason if no cumulative change is needed. "
-            "Summarize actual changes and risks. "
             + COMMIT_MESSAGES
             + validation_guidance(request)
             + ENVIRONMENT_TOOL
@@ -299,6 +314,8 @@ def workspace_instructions(request, state):
         )
     if request.role == "fixer":
         instructions += FIXER_REVIEW_GUIDANCE
+    elif request.role == "developer":
+        instructions += DEVELOPER_HANDOFF
     return instructions
 
 
@@ -366,6 +383,8 @@ def continuation_prompt(request, *, metadata_only=None):
     }
     if request.role == "tester":
         task["test_selection"] = request.context.get("test_selection")
+        if not state.get("metadata_only") and request.context.get("development_handoff"):
+            task["development_handoff"] = request.context["development_handoff"]
     if request.context.get("design_images") and not state.get("metadata_only"):
         task["design_images"] = request.context["design_images"]
     if request.role == "fixer":
@@ -389,6 +408,8 @@ def continuation_prompt(request, *, metadata_only=None):
         )
         if request.role == "fixer":
             instructions += FIXER_REVIEW_GUIDANCE
+        elif request.role == "developer":
+            instructions += DEVELOPER_HANDOFF
     return (
         TASK_BOUNDARY
         + instructions
