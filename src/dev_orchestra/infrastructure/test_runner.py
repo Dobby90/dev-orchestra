@@ -190,12 +190,28 @@ def verify_junit_artifact(path, command):
     return tree
 
 
-def executed_testcase_names(tree):
-    return dict.fromkeys(
-        case.attrib["name"]
-        for case in tree.iter("testcase")
-        if case.get("name") and case.find("skipped") is None
-    ).keys()
+def executed_testcases(tree):
+    cases = {}
+    for case in tree.iter("testcase"):
+        if case.get("name") and case.find("skipped") is None:
+            identity = (case.get("classname") or None, case.get("file") or None)
+            cases.setdefault(case.attrib["name"], {})[identity] = None
+    return cases
+
+
+def testcase_evidence_view(cases):
+    if cases is None:
+        return {"test_cases": None}
+    result = {"test_cases": list(cases)}
+    ambiguous = [
+        {"name": name, "classname": classname, "file": file}
+        for name, identities in cases.items()
+        if len(identities) > 1
+        for classname, file in identities
+    ]
+    if ambiguous:
+        result["ambiguous_test_cases"] = ambiguous
+    return result
 
 
 def junit_paths(worktree, pattern, outputs):

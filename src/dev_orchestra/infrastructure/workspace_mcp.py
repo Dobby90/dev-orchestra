@@ -65,7 +65,8 @@ class WorkspaceState(Model):
 READ_EVIDENCE = (
     ReadCommandEvidence,
     "Read current candidate evidence. Pass command_id for one command's status and diagnostics. "
-    "Use view=test_cases with command_id for executed names from verified JUnit. Omit command_id "
+    "Use view=test_cases with command_id for executed names and ambiguous_test_cases from verified JUnit. "
+    "Omit command_id "
     "for full coverage and test selection. Continue with offset when truncated.",
 )
 

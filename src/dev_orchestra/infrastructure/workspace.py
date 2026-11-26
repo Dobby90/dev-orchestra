@@ -101,7 +101,7 @@ def dependency_path(name):
     return bool(set(Path(name).parts) & DEPENDENCIES)
 
 
-def evidence_page(value, evidence_id, offset, limit, command_id, view, case_names):
+def evidence_page(value, evidence_id, offset, limit, command_id, view, read_cases):
     result = {"evidence_id": evidence_id}
     if command_id is None:
         if view != "diagnostics":
@@ -136,7 +136,9 @@ def evidence_page(value, evidence_id, offset, limit, command_id, view, case_name
             },
         )
         if view == "test_cases":
-            value = {"test_cases": case_names(command)}
+            from dev_orchestra.infrastructure.test_runner import testcase_evidence_view
+
+            value = testcase_evidence_view(read_cases(command))
         else:
             value = {key: command.get(key) for key in ("error", "failures", "failure_details")}
     text = json.dumps(sanitize(value), ensure_ascii=False)
@@ -832,7 +834,7 @@ class WorkspaceSession:
         return read_tool_evidence(path, evidence["hash"])
 
     def _validate_test_payload(
-        self, value, run, *, changed, selection=None, coverage=(), names_for=None
+        self, value, run, *, changed, selection=None, coverage=(), cases_for=None
     ):
         from dev_orchestra.application.automatic_tests import automatic
         from dev_orchestra.application.test_selection import (
@@ -858,7 +860,7 @@ class WorkspaceSession:
         verify_selected_execution(run, selection, value["execution"])
         directory = contained(self.path.parent, self.data["test_evidence"]["id"])
         return verify_tool_artifacts(
-            directory, value, testcase_references(coverage), names_for=names_for
+            directory, value, testcase_references(coverage), cases_for=cases_for
         )
 
     def load_test_result(self, response):
@@ -902,11 +904,11 @@ class WorkspaceSession:
         value = self.read_test_payload()
         if value["evidence_id"] != evidence_id:
             raise PipelineError("test evidence identity mismatch")
-        names = self._validate_test_payload(
+        cases = self._validate_test_payload(
             value,
             run,
             changed=self.changed_files(),
-            names_for=command_id if view == "test_cases" else None,
+            cases_for=command_id if view == "test_cases" else None,
         )
         return evidence_page(
             value,
@@ -915,7 +917,7 @@ class WorkspaceSession:
             limit,
             command_id,
             view,
-            lambda _: names,
+            lambda _: cases,
         )
 
     def finish(self, response):
@@ -1087,14 +1089,14 @@ class ReviewEvidenceSession:
                 return contained(root, str(Path(report).relative_to(root)))
             return None
 
-        def case_names(command):
+        def read_cases(command):
             from dev_orchestra.infrastructure.test_runner import (
-                executed_testcase_names,
+                executed_testcases,
                 verify_junit_artifact,
             )
 
             if path := junit_path(command):
-                return list(executed_testcase_names(verify_junit_artifact(path, command)))
+                return executed_testcases(verify_junit_artifact(path, command))
             return None
 
-        return evidence_page(value, evidence_id, offset, limit, command_id, view, case_names)
+        return evidence_page(value, evidence_id, offset, limit, command_id, view, read_cases)

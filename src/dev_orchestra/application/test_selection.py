@@ -284,43 +284,63 @@ def verify_tool_evidence(run, step, payload):
             for item in payload.get("coverage", [])
             if item.get("test_cases")
         ),
+        # Recorded artifacts may predate qualified references.
+        allow_legacy_names=True,
     )
 
 
 def testcase_references(coverage):
-    names = {}
+    references = {}
     for row in coverage:
         for case in row.test_cases:
             if case.command_id not in row.command_ids:
                 raise ResponseError("testcase must reference a command for its criterion")
-            names.setdefault(case.command_id, set()).add(case.name)
-    return names
+            references.setdefault(case.command_id, set()).add(
+                (case.name, case.classname, case.file)
+            )
+    return references
 
 
-def verify_tool_artifacts(directory, value, references=None, *, names_for=None):
+def verify_case_references(executed, references, *, allow_legacy_names):
+    for name, classname, file in references:
+        matches = sum(
+            (classname is None or classname == actual_class)
+            and (file is None or file == actual_file)
+            for actual_class, actual_file in executed.get(name, ())
+        )
+        if not matches:
+            raise ResponseError("coverage references must identify executed JUnit testcases")
+        if matches > 1 and not (allow_legacy_names and classname is None and file is None):
+            raise ResponseError("ambiguous JUnit testcase reference requires classname or file")
+
+
+def verify_tool_artifacts(
+    directory, value, references=None, *, cases_for=None, allow_legacy_names=False
+):
     from pathlib import Path
 
     from dev_orchestra.infrastructure.files import contained, digest
     from dev_orchestra.infrastructure.test_runner import (
-        executed_testcase_names,
+        executed_testcases,
         verify_junit_artifact,
     )
 
     missing = dict(references or {})
-    case_names = None
+    cases = None
     for command in value["execution"]["commands"]:
         if command.get("junit_path"):
             junit = contained(directory, str(Path(command["junit_path"]).relative_to(directory)))
             tree = verify_junit_artifact(junit, command)
             command_id = command.get("command_id")
-            names = missing.pop(command_id, None)
-            collect_names = names_for is not None and command_id == names_for
-            if names or collect_names:
-                executed = executed_testcase_names(tree)
-                if names and not names <= executed:
-                    raise ResponseError("coverage names must reference executed JUnit testcases")
-                if collect_names:
-                    case_names = list(executed)
+            command_references = missing.pop(command_id, ())
+            collect_cases = cases_for is not None and command_id == cases_for
+            if command_references or collect_cases:
+                executed = executed_testcases(tree)
+                verify_case_references(
+                    executed, command_references, allow_legacy_names=allow_legacy_names
+                )
+                if collect_cases:
+                    cases = executed
         for adapter in command.get("runtime_adapters", []):
             if adapter == "docker":
                 # Container metadata is already bound to the checksummed execution record.
@@ -333,4 +353,4 @@ def verify_tool_artifacts(directory, value, references=None, *, names_for=None):
                 raise PipelineError("runtime adapter checksum mismatch")
     if missing:
         raise ResponseError("coverage testcase names require JUnit for the cited command")
-    return case_names
+    return cases

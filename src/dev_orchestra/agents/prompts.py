@@ -142,8 +142,9 @@ TEST_REPORT = (
     " Return test_evidence_id, actual executed command_ids and coverage of each criterion by executed "
     "kind=test commands. Honor required_criterion_test_commands when present. Page diagnostics via "
     "workspace.read_test_evidence(evidence_id, command_id, offset). Check recorded status and JUnit. "
-    "In each coverage row, include up to eight directly relevant test_cases as command_id and "
-    "exact executed JUnit name pairs. Use view=test_cases and command_id to verify names when needed. "
+    "In each coverage row, include up to eight relevant test_cases with command_id and exact JUnit name. "
+    "Use view=test_cases with command_id to check names and ambiguous_test_cases. For an ambiguous name, "
+    "copy classname, file, or both from the report to identify a unique case. "
     "Leave test_cases empty when only command-level evidence is available. "
     "Missing JUnit, timeout and unavailable environments cannot establish success. "
 )
@@ -328,7 +329,8 @@ def prompt(request: AgentRequest, *, reviewer_evidence=None):
             instructions += (
                 " For truncated diagnostics, read the affected command through "
                 "workspace.read_test_evidence with test_evidence_id and command_id. "
-                "Use view=test_cases to check executed names. For omitted or unmapped criteria, "
+                "Use view=test_cases to check executed names and use ambiguous_test_cases to match "
+                "classname or file for shared names. For omitted or unmapped criteria, "
                 "omitted commands, selection reasons or exact selected files, read the full evidence "
                 "by omitting command_id. "
                 "Follow offset until the relevant data is complete. A testcase name alone does not "

@@ -124,11 +124,15 @@ def test_tool_evidence_validates_junit_and_runtime_adapter_files(tmp_path, conta
     evidence = tmp_path / "test-evidence"
     evidence.mkdir()
     junit = evidence / "unit.junit.xml"
-    junit.write_text('<testsuite><testcase name="one"/></testsuite>')
+    junit.write_text(
+        '<testsuite><testcase name="one" classname="One"/>'
+        '<testcase name="one" classname="Two"/></testsuite>'
+    )
     command = {
+        "command_id": "unit",
         "junit_path": str(junit),
         "junit_hash": digest(junit.read_bytes()),
-        "total": 1,
+        "total": 2,
         "failed": 0,
         "skipped": 0,
         "exit_code": 0,
@@ -156,9 +160,23 @@ def test_tool_evidence_validates_junit_and_runtime_adapter_files(tmp_path, conta
         "test_selection": value["selection"],
         "execution": value["execution"],
         "test_evidence_reference": {"id": evidence.name, "hash": digest(raw)},
+        "coverage": [
+            {
+                "criterion_id": "AC1",
+                "command_ids": ["unit"],
+                "test_cases": [{"command_id": "unit", "name": "one"}],
+            },
+        ],
     }
 
     verify_tool_evidence({}, step, payload)
+    reference = payload["coverage"][0]["test_cases"][0]
+    reference["classname"] = "Two"
+    verify_tool_evidence({}, step, payload)
+    reference["classname"] = "Missing"
+    with pytest.raises(PipelineError, match="executed JUnit testcases"):
+        verify_tool_evidence({}, step, payload)
+    del reference["classname"]
 
     checked_file.write_text("changed after execution")
     with pytest.raises(PipelineError, match=error):
@@ -356,6 +374,68 @@ def test_tester_revalidates_evidence_at_each_boundary_with_single_reads(setup, m
         session.load_test_result(response)
 
 
+def test_tester_references_same_named_junit_cases_by_class_and_file(setup):
+    from test_workflow import FakeTests
+
+    from dev_orchestra.infrastructure.files import write
+
+    class Tests(FakeTests):
+        def run(self, worktree, config, directory, stop):
+            value = super().run(worktree, config, directory, stop)
+            report = directory / "unit.junit.xml"
+            raw = (
+                b'<testsuite><testcase name="shared" classname="Input"/>'
+                b'<testcase name="shared" classname="Output" file="tests/a.py"/>'
+                b'<testcase name="shared" classname="Output" file="tests/b.py"/>'
+                b'<testcase name="shared" classname="Skipped"><skipped/></testcase></testsuite>'
+            )
+            value["commands"][0].update(
+                junit_path=str(report), junit_hash=write(report, raw), total=4, failed=0, skipped=1
+            )
+            return value
+
+    session, _ = start_session(setup, "tester")
+    session._test_runner = Tests()
+    value = session.run_tests(["unit"])
+    page = session.read_test_evidence(value["evidence_id"], command_id="unit", view="test_cases")
+    assert json.loads(page["text"]) == {
+        "test_cases": ["shared"],
+        "ambiguous_test_cases": [
+            {"name": "shared", "classname": "Input", "file": None},
+            {"name": "shared", "classname": "Output", "file": "tests/a.py"},
+            {"name": "shared", "classname": "Output", "file": "tests/b.py"},
+        ],
+    }
+    references = [
+        CaseReference(command_id="unit", name="shared", classname="Input"),
+        CaseReference(command_id="unit", name="shared", file="tests/a.py"),
+        CaseReference(command_id="unit", name="shared", classname="Output", file="tests/b.py"),
+    ]
+    response = WorkspaceTestResult(
+        summary="실행 근거 확인",
+        command_ids=["unit"],
+        test_evidence_id=value["evidence_id"],
+        coverage=[Coverage(criterion_id="AC1", command_ids=["unit"], test_cases=references)],
+    )
+    result, _, _ = session.finish(response)
+    assert result.model_dump()["coverage"][0]["test_cases"] == [
+        {"command_id": "unit", "name": "shared", "classname": "Input"},
+        {"command_id": "unit", "name": "shared", "file": "tests/a.py"},
+        {"command_id": "unit", "name": "shared", "classname": "Output", "file": "tests/b.py"},
+    ]
+    for qualifiers, error in [
+        ({}, "ambiguous JUnit testcase"),
+        ({"classname": "Output"}, "ambiguous JUnit testcase"),
+        ({"classname": "Input", "file": "tests/a.py"}, "executed JUnit testcases"),
+        ({"classname": "Skipped"}, "executed JUnit testcases"),
+    ]:
+        response.coverage[0].test_cases = [
+            CaseReference(command_id="unit", name="shared", **qualifiers)
+        ]
+        with pytest.raises(PipelineError, match=error):
+            session.load_test_result(response)
+
+
 @pytest.mark.parametrize("kind", ["passed", "failed", "parse_error", "timeout"])
 def test_tester_observes_real_host_outcomes_and_reuses_same_candidate(setup, kind):
     svc, rid, _ = setup
@@ -504,10 +584,14 @@ def test_readonly_review_evidence_keeps_unresolved_issues_and_diagnostics(setup)
     class Tests(FakeTests):
         def run(self, worktree, config, directory, stop):
             value = super().run(worktree, config, directory, stop)
-            raw = b'<testsuite><testcase name="executed"/><testcase name="skipped"><skipped/></testcase></testsuite>'
+            raw = (
+                b'<testsuite><testcase name="executed" classname="One"/>'
+                b'<testcase name="executed" classname="Two"/>'
+                b'<testcase name="skipped"><skipped/></testcase></testsuite>'
+            )
             report = directory / "unit.junit.xml"
             value["commands"][0].update(
-                junit_path=str(report), junit_hash=write(report, raw), total=2, failed=0, skipped=1
+                junit_path=str(report), junit_hash=write(report, raw), total=3, failed=0, skipped=1
             )
             return value
 
@@ -591,7 +675,13 @@ def test_readonly_review_evidence_keeps_unresolved_issues_and_diagnostics(setup)
     assert single["command"]["command_id"] == "unit"
     assert "coverage" not in json.loads(single["text"])
     named = reviewer.read_test_evidence(evidence_id, command_id="unit", view="test_cases")
-    assert json.loads(named["text"]) == {"test_cases": ["executed"]}
+    assert json.loads(named["text"]) == {
+        "test_cases": ["executed"],
+        "ambiguous_test_cases": [
+            {"name": "executed", "classname": "One", "file": None},
+            {"name": "executed", "classname": "Two", "file": None},
+        ],
+    }
     xml = junit.read_bytes()
     junit.write_bytes(xml.replace(b"executed", b"modified"))
     with pytest.raises(PipelineError, match="artifact missing or modified"):

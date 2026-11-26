@@ -50,6 +50,12 @@ class Issue(Model):
 class CaseReference(Model):
     command_id: str
     name: str = Field(min_length=1, max_length=512)
+    classname: str | None = Field(default=None, min_length=1)
+    file: str | None = Field(default=None, min_length=1)
+
+    @model_serializer(mode="wrap")
+    def serialize(self, handler):
+        return {key: value for key, value in handler(self).items() if value is not None}
 
 
 class Coverage(Model):
